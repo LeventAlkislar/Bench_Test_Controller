@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
     QCheckBox, QFrame, QSizePolicy
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor
+from PyQt6.QtGui import QColor, QFont
 
 from bench_test.valve.multiport import ValveController
 from bench_test.valve.injector import InjectorValveController
@@ -22,6 +22,24 @@ from bench_test.recipe.models import Recipe, RecipeStep, StepLoop
 from bench_test.recipe.runner import RecipeRunner, DROPVIEW_ACTIONS, DROPVIEW_LABELS, DROPVIEW_ZERO_DURATION_OK
 from bench_test.utils.paths import open_file, save_file, get_last, remember
 
+from bench_test.ui.widgets import _btn, _lbl
+
+_DV_COMBO_LABELS = [
+    "None",
+    "Start DropView",
+    "Start Measure",
+    "Stop Measure",
+    "Exit DropView",
+]
+_DV_IDX_TO_KEY = {
+    0: "none",
+    1: "start_dropview",
+    2: "start_measure",
+    3: "stop_measure",
+    4: "exit_dropview",
+}
+VALVE_B_LABELS   = {0: "-", 1: "Load", 2: "Inject"}
+COL_STEP, COL_VA, COL_VB, COL_DUR, COL_DESC, COL_DV, COL_SCR, COL_LOOP = range(8)
 
 class StepLoopDialog(QDialog):
     def __init__(self, parent, total_steps, existing_loops, selected_steps=None):

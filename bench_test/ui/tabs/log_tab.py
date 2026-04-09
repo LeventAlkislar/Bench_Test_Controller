@@ -9,11 +9,7 @@ from PyQt6.QtCore import pyqtSignal
 
 from bench_test.utils.paths import save_file
 
-
-def _btn(label, slot):
-    b = QPushButton(label)
-    b.clicked.connect(slot)
-    return b
+from bench_test.ui.widgets import _btn, _lbl
 
 
 class LogTab(QWidget):

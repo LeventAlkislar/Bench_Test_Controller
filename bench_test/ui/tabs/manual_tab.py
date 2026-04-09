@@ -1,14 +1,17 @@
 # bench_test/ui/tabs/manual_tab.py
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
-    QLabel, QPushButton, QComboBox, QSpinBox,
-    QDoubleSpinBox, QGroupBox, QMessageBox
+    QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGridLayout,
+    QLabel, QPushButton, QComboBox, QSpinBox, QSplitter,
+    QDoubleSpinBox, QGroupBox, QMessageBox, QFrame, QSizePolicy,
+    QTextEdit, QScrollArea, QAbstractItemView
 )
-from PyQt6.QtCore import pyqtSignal
-
+from PyQt6.QtCore import pyqtSignal, Qt, QTimer
+from PyQt6.QtGui import QFont, QColor
 from bench_test.valve.multiport import ValveController
 from bench_test.valve.injector import InjectorValveController
 from bench_test.dropview.controller import DropViewController
+
+from bench_test.ui.widgets import _btn, _lbl
 
 class ManualControlTab(QWidget):
     log_signal = pyqtSignal(str)

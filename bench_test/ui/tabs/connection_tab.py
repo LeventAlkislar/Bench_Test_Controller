@@ -2,200 +2,316 @@
 import serial.tools.list_ports
 
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
-    QLabel, QLineEdit, QPushButton, QComboBox,
-    QGroupBox, QMessageBox
+    QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGridLayout,
+    QLabel, QLineEdit, QPushButton, QComboBox, QSpinBox,
+    QDoubleSpinBox, QGroupBox, QMessageBox, QScrollArea,
+    QFrame, QSizePolicy, QTextEdit
 )
-from PyQt6.QtCore import pyqtSignal, QTimer
-from PyQt6.QtGui import QColor
+
+from PyQt6.QtCore import pyqtSignal, Qt, QTimer, pyqtSlot
+from PyQt6.QtGui import QColor, QFont
 
 from bench_test.valve.multiport import ValveController
 from bench_test.valve.injector import InjectorValveController
 from bench_test.dropview.controller import DropViewController
 from bench_test.utils.paths import get_last, remember
 
-
-def _btn(label, slot):
-    b = QPushButton(label)
-    b.clicked.connect(slot)
-    return b
+from bench_test.ui.widgets import _btn, _lbl, _status_lbl
 
 
-class ConnectionTab(QWidget):
+class ConnectionTab(QWidget):  # TODO: bench_test/ui/tabs/connection_tab.py'ye taşındı, ileride silinecek
     log_signal = pyqtSignal(str)
 
-    def __init__(self, ctrl_a: ValveController,
-                 ctrl_b: InjectorValveController,
+    def __init__(self, ctrl_a: ValveController, ctrl_b: InjectorValveController,
                  dv_ctrl: DropViewController):
         super().__init__()
-        self.ctrl_a  = ctrl_a
-        self.ctrl_b  = ctrl_b
-        self.dv_ctrl = dv_ctrl
-        self._build_ui()
-        self._connect_signals()
-        self.refresh_ports()
+        self.ctrl_a = ctrl_a; self.ctrl_b = ctrl_b; self.dv_ctrl = dv_ctrl
+        self._build()
+        self._refresh_ports()
+        dv_ctrl.status_changed.connect(self._on_dv_status)
+        dv_ctrl.status_changed.connect(self._on_dv_status_summary)
+        dv_ctrl.action_done.connect(self._on_dv_action_done)
+        dv_ctrl.log_message.connect(self.log_signal)
 
-    def _build_ui(self):
-        layout = QVBoxLayout(self)
+    def _build(self):
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(scroll)
+
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setSpacing(10)
+        scroll.setWidget(container)
 
         # ── Valve A ───────────────────────────────────────────
-        grp_a = QGroupBox("Valve A — SV-01 Multiport (8-port)")
-        form_a = QFormLayout(grp_a)
+        ga = QGroupBox("Valve A: SV-01 Multiport Valve (8-Port Selector)")
+        fla = QVBoxLayout(ga)
 
-        self.port_combo_a = QComboBox()
-        refresh_a = _btn("Refresh", self.refresh_ports)
         row_a = QHBoxLayout()
-        row_a.addWidget(self.port_combo_a)
-        row_a.addWidget(refresh_a)
-        form_a.addRow("COM Port:", row_a)
+        row_a.addWidget(QLabel("COM Port:"))
+        self.port_a = QComboBox(); self.port_a.setMinimumWidth(100)
+        row_a.addWidget(self.port_a)
+        row_a.addWidget(QLabel("Baud:"))
+        self.baud_a = QComboBox()
+        self.baud_a.addItems(["9600","19200","38400","57600","115200"])
+        row_a.addWidget(self.baud_a)
+        row_a.addWidget(QLabel("Addr (hex):"))
+        self.addr_a = QLineEdit("00"); self.addr_a.setMaximumWidth(40)
+        row_a.addWidget(self.addr_a)
+        row_a.addStretch()
+        fla.addLayout(row_a)
 
-        self.baud_combo_a = QComboBox()
-        self.baud_combo_a.addItems(["9600", "19200", "38400", "115200"])
-        form_a.addRow("Baudrate:", self.baud_combo_a)
-
-        btn_row_a = QHBoxLayout()
-        self.conn_btn_a   = _btn("Connect",    self._connect_a)
-        self.disconn_btn_a = _btn("Disconnect", self._disconnect_a)
-        self.test_btn_a   = _btn("Test",        self._test_a)
-        btn_row_a.addWidget(self.conn_btn_a)
-        btn_row_a.addWidget(self.disconn_btn_a)
-        btn_row_a.addWidget(self.test_btn_a)
-        form_a.addRow("", btn_row_a)
-
-        self.status_label_a = QLabel("Disconnected")
-        self.status_label_a.setStyleSheet("color: red; font-weight: bold;")
-        form_a.addRow("Status:", self.status_label_a)
-
-        layout.addWidget(grp_a)
+        btn_a = QHBoxLayout()
+        self.conn_a_btn  = _btn("Connect A",    self._connect_a,    "#4CAF50")
+        self.disc_a_btn  = _btn("Disconnect A", self._disconnect_a, "#F44336")
+        self.test_a_btn  = _btn("Test A",       self._test_a,       "#2196F3")
+        self.disc_a_btn.setEnabled(False); self.test_a_btn.setEnabled(False)
+        self.status_a    = _status_lbl()
+        btn_a.addWidget(self.conn_a_btn); btn_a.addWidget(self.disc_a_btn)
+        btn_a.addWidget(self.test_a_btn); btn_a.addWidget(self.status_a); btn_a.addStretch()
+        fla.addLayout(btn_a)
+        layout.addWidget(ga)
 
         # ── Valve B ───────────────────────────────────────────
-        grp_b = QGroupBox("Valve B — SY-07B Injector (6-port)")
-        form_b = QFormLayout(grp_b)
+        gb = QGroupBox("Valve B: SY-07B Injector Valve (6-Port, 2-State)")
+        flb = QVBoxLayout(gb)
 
-        self.port_combo_b = QComboBox()
-        refresh_b = _btn("Refresh", self.refresh_ports)
         row_b = QHBoxLayout()
-        row_b.addWidget(self.port_combo_b)
-        row_b.addWidget(refresh_b)
-        form_b.addRow("COM Port:", row_b)
+        row_b.addWidget(QLabel("COM Port:"))
+        self.port_b = QComboBox(); self.port_b.setMinimumWidth(100)
+        row_b.addWidget(self.port_b)
+        row_b.addWidget(QLabel("Baud:"))
+        self.baud_b = QComboBox()
+        self.baud_b.addItems(["9600","19200","38400","57600","115200"])
+        row_b.addWidget(self.baud_b)
+        row_b.addWidget(QLabel("Addr (hex):"))
+        self.addr_b = QLineEdit("00"); self.addr_b.setMaximumWidth(40)
+        row_b.addWidget(self.addr_b)
+        row_b.addStretch()
+        flb.addLayout(row_b)
 
-        self.baud_combo_b = QComboBox()
-        self.baud_combo_b.addItems(["9600", "19200", "38400", "115200"])
-        form_b.addRow("Baudrate:", self.baud_combo_b)
+        btn_b = QHBoxLayout()
+        self.conn_b_btn  = _btn("Connect B",    self._connect_b,    "#4CAF50")
+        self.disc_b_btn  = _btn("Disconnect B", self._disconnect_b, "#F44336")
+        self.test_b_btn  = _btn("Test B",       self._test_b,       "#2196F3")
+        self.disc_b_btn.setEnabled(False); self.test_b_btn.setEnabled(False)
+        self.status_b    = _status_lbl()
+        btn_b.addWidget(self.conn_b_btn); btn_b.addWidget(self.disc_b_btn)
+        btn_b.addWidget(self.test_b_btn); btn_b.addWidget(self.status_b); btn_b.addStretch()
+        flb.addLayout(btn_b)
+        flb.addWidget(_lbl("States: 1=Load (1-6, 2-3, 4-5) | 2=Inject (1-2, 3-4, 5-6)", color="#888"))
+        layout.addWidget(gb)
 
-        btn_row_b = QHBoxLayout()
-        self.conn_btn_b    = _btn("Connect",    self._connect_b)
-        self.disconn_btn_b = _btn("Disconnect", self._disconnect_b)
-        self.test_btn_b    = _btn("Test",        self._test_b)
-        btn_row_b.addWidget(self.conn_btn_b)
-        btn_row_b.addWidget(self.disconn_btn_b)
-        btn_row_b.addWidget(self.test_btn_b)
-        form_b.addRow("", btn_row_b)
+        # ── Refresh ports ─────────────────────────────────────
+        layout.addWidget(_btn("Refresh COM Ports", self._refresh_ports))
 
-        self.status_label_b = QLabel("Disconnected")
-        self.status_label_b.setStyleSheet("color: red; font-weight: bold;")
-        form_b.addRow("Status:", self.status_label_b)
+        # ── Valve A Speed ─────────────────────────────────────
+        gs = QGroupBox("Valve A Speed Control (Port Transition Speed)")
+        fls = QVBoxLayout(gs)
+        sr  = QHBoxLayout()
+        sr.addWidget(QLabel("Speed (5-350 rpm):"))
+        self.speed_spin = QSpinBox(); self.speed_spin.setRange(5, 350); self.speed_spin.setValue(200)
+        sr.addWidget(self.speed_spin)
+        fls.addLayout(sr)
 
-        layout.addWidget(grp_b)
+        pr = QHBoxLayout()
+        pr.addWidget(QLabel("Presets:"))
+        for v, label in [(50,"Slow"),(150,"Medium"),(250,"Fast"),(350,"Max")]:
+            pr.addWidget(_btn(f"{label} ({v})", lambda checked, s=v: self.speed_spin.setValue(s)))
+        pr.addStretch()
+        fls.addLayout(pr)
 
-        # ── DropView ──────────────────────────────────────────
-        grp_dv = QGroupBox("DropView 8400M")
-        form_dv = QFormLayout(grp_dv)
+        sb = QHBoxLayout()
+        self.set_spd_btn  = _btn("Set Temporary",  self._set_speed_dynamic,  "#FF9800")
+        self.set_spd_btn.setEnabled(False)
+        self.set_perm_btn = _btn("Set Permanent",  self._set_speed_permanent,"#795548")
+        self.set_perm_btn.setEnabled(False)
+        self.qry_spd_btn  = _btn("Query Speed",    self._query_speed,        "#607D8B")
+        self.qry_spd_btn.setEnabled(False)
+        self.speed_lbl = QLabel("Valve A Speed: Unknown")
+        self.speed_lbl.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+        sb.addWidget(self.set_spd_btn); sb.addWidget(self.set_perm_btn)
+        sb.addWidget(self.qry_spd_btn); sb.addWidget(self.speed_lbl); sb.addStretch()
+        fls.addLayout(sb)
+        fls.addWidget(_lbl("Note: 'Temporary' resets on power cycle. 'Permanent' requires restart.", color="#888"))
+        layout.addWidget(gs)
 
-        btn_row_dv = QHBoxLayout()
-        self.start_dv_btn  = _btn("Start DropView",  self._start_dropview)
-        self.stop_dv_btn   = _btn("Exit DropView",   self._exit_dropview)
-        btn_row_dv.addWidget(self.start_dv_btn)
-        btn_row_dv.addWidget(self.stop_dv_btn)
-        form_dv.addRow("", btn_row_dv)
+        # ── DropView / DropSens ───────────────────────────────
+        gd = QGroupBox("DropSens - DropView 8400M")
+        fld = QVBoxLayout(gd)
 
-        self.status_label_dv = QLabel("Unknown")
-        self.status_label_dv.setStyleSheet("color: gray; font-weight: bold;")
-        form_dv.addRow("Status:", self.status_label_dv)
+        row_prog = QHBoxLayout()
+        self.dv_launch_btn = _btn("Start DropView", self._dv_launch, "#3F51B5", 130)
+        self.dv_close_btn  = _btn("Stop DropView",  self._dv_close,  "#9C27B0", 120)
+        row_prog.addWidget(self.dv_launch_btn)
+        row_prog.addWidget(self.dv_close_btn)
+        row_prog.addStretch()
+        fld.addLayout(row_prog)
 
-        layout.addWidget(grp_dv)
+        row_conn = QHBoxLayout()
+        self.dv_connect_btn    = _btn("Connect",    self._dv_connect,    "#4CAF50", 90)
+        self.dv_disconnect_btn = _btn("Disconnect", self._dv_disconnect, "#F44336", 100)
+        self.dv_status         = _status_lbl("● Disconnected")
+        row_conn.addWidget(self.dv_connect_btn)
+        row_conn.addWidget(self.dv_disconnect_btn)
+        row_conn.addWidget(self.dv_status)
+        row_conn.addStretch()
+        fld.addLayout(row_conn)
+
+        fld.addWidget(_lbl(
+            "Start DropView: Programı başlatır  |  Connect: DropSens'e bağlanır (Ctrl+C)\n"
+            "Disconnect: Bağlantıyı keser (Ctrl+D)  |  Stop DropView: Programı kapatır (Alt+F4)",
+            color="#888"))
+
+        layout.addWidget(gd)
+
+        # ── Connection summary ────────────────────────────────
+        gc = QGroupBox("Connection Summary")
+        flc = QVBoxLayout(gc)
+        self.summary_text = QTextEdit(); self.summary_text.setReadOnly(True)
+        self.summary_text.setMaximumHeight(100)
+        flc.addWidget(self.summary_text)
+        layout.addWidget(gc)
         layout.addStretch()
 
-    def _connect_signals(self):
-        self.dv_ctrl.status_changed.connect(self._on_dv_status)
+        self._update_summary()
 
-    def refresh_ports(self):
+    def _refresh_ports(self):
         ports = [p.device for p in serial.tools.list_ports.comports()]
-        for combo in [self.port_combo_a, self.port_combo_b]:
+        for combo in [self.port_a, self.port_b]:
             current = combo.currentText()
             combo.clear()
             combo.addItems(ports)
-            if current in ports:
-                combo.setCurrentText(current)
+            if current in ports: combo.setCurrentText(current)
 
     def _connect_a(self):
-        port = self.port_combo_a.currentText()
-        baud = int(self.baud_combo_a.currentText())
-        if not port:
-            QMessageBox.warning(self, "Uyarı", "COM port seçilmedi.")
-            return
         try:
-            self.ctrl_a.connect(port, baud)
-            remember("valve_a_port", port)
-            self.status_label_a.setText("Connected")
-            self.status_label_a.setStyleSheet("color: green; font-weight: bold;")
-            self.log_signal.emit(f"Valve A bağlandı: {port}")
+            self.ctrl_a.address = int(self.addr_a.text(), 16)
+            self.ctrl_a.connect(self.port_a.currentText(), int(self.baud_a.currentText()))
+            self.status_a.setText("● Connected"); self.status_a.setStyleSheet("color:#4CAF50;")
+            self.conn_a_btn.setEnabled(False); self.disc_a_btn.setEnabled(True)
+            self.test_a_btn.setEnabled(True);  self.set_spd_btn.setEnabled(True)
+            self.set_perm_btn.setEnabled(True); self.qry_spd_btn.setEnabled(True)
+            self.log_signal.emit(f"Valve A connected to {self.port_a.currentText()}")
+            self._update_summary(); self._query_speed()
         except Exception as e:
-            QMessageBox.critical(self, "Hata", str(e))
+            QMessageBox.critical(self, "Connection Error", f"Valve A: {e}")
+            self.log_signal.emit(f"Valve A connection failed: {e}")
 
     def _disconnect_a(self):
         self.ctrl_a.disconnect()
-        self.status_label_a.setText("Disconnected")
-        self.status_label_a.setStyleSheet("color: red; font-weight: bold;")
-        self.log_signal.emit("Valve A bağlantısı kesildi.")
+        self.status_a.setText("● Disconnected"); self.status_a.setStyleSheet("color:#F44336;")
+        self.conn_a_btn.setEnabled(True); self.disc_a_btn.setEnabled(False)
+        self.test_a_btn.setEnabled(False); self.set_spd_btn.setEnabled(False)
+        self.set_perm_btn.setEnabled(False); self.qry_spd_btn.setEnabled(False)
+        self.speed_lbl.setText("Valve A Speed: Unknown")
+        self.log_signal.emit("Valve A disconnected"); self._update_summary()
 
     def _test_a(self):
         r = self.ctrl_a.test_connection()
         if r.get("success"):
-            self.log_signal.emit(f"Valve A test OK: {r.get('status_message')}")
+            msg = f"Connection OK. Status: {r.get('status_message','')}"
+            QMessageBox.information(self, "Valve A Test", msg)
+            self.log_signal.emit(f"Valve A test: {msg}")
         else:
-            self.log_signal.emit(f"Valve A test FAILED: {r.get('error')}")
+            QMessageBox.critical(self, "Valve A Test", r.get("error", "Unknown"))
+
+    def _set_speed_dynamic(self):
+        r = self.ctrl_a.set_speed_dynamic(self.speed_spin.value())
+        if r.get("success") and r.get("status") == SV01Protocol.STATUS_NORMAL:
+            self.speed_lbl.setText(f"Valve A Speed: {self.speed_spin.value()} rpm (temp)")
+            self.log_signal.emit(f"Valve A speed set to {self.speed_spin.value()} rpm (temp)")
+        else:
+            QMessageBox.critical(self, "Error", r.get("error", r.get("status_message", "Failed")))
+
+    def _set_speed_permanent(self):
+        spd = self.speed_spin.value()
+        if QMessageBox.question(self, "Confirm", f"Set permanent speed to {spd} rpm?\n(Device restart required)") \
+                == QMessageBox.StandardButton.Yes:
+            r = self.ctrl_a.set_max_speed(spd)
+            if r.get("success") and r.get("status") == SV01Protocol.STATUS_NORMAL:
+                self.speed_lbl.setText(f"Valve A Speed: {spd} rpm (pending restart)")
+                self.log_signal.emit(f"Valve A permanent speed set to {spd} rpm")
+            else:
+                QMessageBox.critical(self, "Error", r.get("error", "Failed"))
+
+    def _query_speed(self):
+        r = self.ctrl_a.get_max_speed()
+        if r.get("success") and r.get("status") == SV01Protocol.STATUS_NORMAL:
+            spd = r.get("speed_rpm", 0)
+            self.speed_lbl.setText(f"Valve A Speed: {spd} rpm")
+            self.speed_spin.setValue(spd)
+            self.log_signal.emit(f"Valve A max speed: {spd} rpm")
 
     def _connect_b(self):
-        port = self.port_combo_b.currentText()
-        baud = int(self.baud_combo_b.currentText())
-        if not port:
-            QMessageBox.warning(self, "Uyarı", "COM port seçilmedi.")
-            return
         try:
-            self.ctrl_b.connect(port, baud)
-            remember("valve_b_port", port)
-            self.status_label_b.setText("Connected")
-            self.status_label_b.setStyleSheet("color: green; font-weight: bold;")
-            self.log_signal.emit(f"Valve B bağlandı: {port}")
+            self.ctrl_b.address = int(self.addr_b.text(), 16)
+            self.ctrl_b.connect(self.port_b.currentText(), int(self.baud_b.currentText()))
+            self.status_b.setText("● Connected"); self.status_b.setStyleSheet("color:#4CAF50;")
+            self.conn_b_btn.setEnabled(False); self.disc_b_btn.setEnabled(True)
+            self.test_b_btn.setEnabled(True)
+            self.log_signal.emit(f"Valve B connected to {self.port_b.currentText()}")
+            self._update_summary()
         except Exception as e:
-            QMessageBox.critical(self, "Hata", str(e))
+            QMessageBox.critical(self, "Connection Error", f"Valve B: {e}")
 
     def _disconnect_b(self):
         self.ctrl_b.disconnect()
-        self.status_label_b.setText("Disconnected")
-        self.status_label_b.setStyleSheet("color: red; font-weight: bold;")
-        self.log_signal.emit("Valve B bağlantısı kesildi.")
+        self.status_b.setText("● Disconnected"); self.status_b.setStyleSheet("color:#F44336;")
+        self.conn_b_btn.setEnabled(True); self.disc_b_btn.setEnabled(False)
+        self.test_b_btn.setEnabled(False)
+        self.log_signal.emit("Valve B disconnected"); self._update_summary()
 
     def _test_b(self):
         r = self.ctrl_b.test_connection()
-        if r.get("success"):
-            self.log_signal.emit(f"Valve B test OK: {r.get('status_message')}")
-        else:
-            self.log_signal.emit(f"Valve B test FAILED: {r.get('error')}")
+        msg = f"Connection OK. Status: {r.get('status_message','')}" if r.get("success") else r.get("error","")
+        (QMessageBox.information if r.get("success") else QMessageBox.critical)(self, "Valve B Test", msg)
 
-    def _start_dropview(self):
-        self.log_signal.emit("DropView başlatılıyor...")
+    def _dv_launch(self):
+        self.dv_status.setText("● Başlatılıyor..."); self.dv_status.setStyleSheet("color:#FF9800;")
+        self._set_dv_btns(False)
         self.dv_ctrl.launch_dropview()
 
-    def _exit_dropview(self):
-        self.log_signal.emit("DropView kapatılıyor...")
-        self.dv_ctrl.exit_dropview()
+    def _dv_close(self):
+        self.dv_status.setText("● Kapatılıyor..."); self.dv_status.setStyleSheet("color:#FF9800;")
+        self._set_dv_btns(False)
+        self.dv_ctrl.close_dropview()
 
-    def _on_dv_status(self, connected: bool):
+    def _dv_connect(self):
+        self.dv_status.setText("● Bağlanıyor..."); self.dv_status.setStyleSheet("color:#FF9800;")
+        self._set_dv_btns(False)
+        self.dv_ctrl.connect_dropsens()
+
+    def _dv_disconnect(self):
+        self.dv_status.setText("● Kesiliyor..."); self.dv_status.setStyleSheet("color:#FF9800;")
+        self._set_dv_btns(False)
+        self.dv_ctrl.disconnect_dropsens()
+
+    def _set_dv_btns(self, enabled: bool):
+        for b in [self.dv_launch_btn, self.dv_close_btn,
+                  self.dv_connect_btn, self.dv_disconnect_btn]:
+            b.setEnabled(enabled)
+
+    @pyqtSlot(str, bool)
+    def _on_dv_action_done(self, action: str, success: bool):
+        self._set_dv_btns(True)
+
+    @pyqtSlot(bool)
+    def _on_dv_status(self, connected):
         if connected:
-            self.status_label_dv.setText("Connected")
-            self.status_label_dv.setStyleSheet("color: green; font-weight: bold;")
+            self.dv_status.setText("● Connected"); self.dv_status.setStyleSheet("color:#4CAF50;")
         else:
-            self.status_label_dv.setText("Disconnected")
-            self.status_label_dv.setStyleSheet("color: red; font-weight: bold;")
+            self.dv_status.setText("● Disconnected"); self.dv_status.setStyleSheet("color:#F44336;")
+
+    def _update_summary(self):
+        lines = []
+        lines.append(f"Valve A (SV-01):  {'Connected - ' + self.port_a.currentText() if self.ctrl_a.is_connected() else 'Not connected'}")
+        lines.append(f"Valve B (SY-07B): {'Connected - ' + self.port_b.currentText() if self.ctrl_b.is_connected() else 'Not connected'}")
+        dv_connected = self.dv_ctrl._is_connected()
+        lines.append(f"DropSens:         {'Connected (DropView 8400M)' if dv_connected else 'Not connected'}")
+        self.summary_text.setPlainText("\n".join(lines))
+
+    def _on_dv_status_summary(self, connected):
+        self._update_summary()

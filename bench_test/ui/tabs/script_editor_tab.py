@@ -9,11 +9,7 @@ from PyQt6.QtCore import pyqtSignal
 from bench_test.utils.paths import open_file, save_file, get_last, remember
 from bench_test.dropview.script_generator import generate_dropview_script
 
-
-def _btn(label, slot):
-    b = QPushButton(label)
-    b.clicked.connect(slot)
-    return b
+from bench_test.ui.widgets import _btn, _lbl
 
 
 class ScriptEditorTab(QWidget):
