@@ -336,7 +336,8 @@ class InjectorValveController:  # TODO: bench_test/valve/injector.py'ye taşınd
 #  DROPVIEW KONTROLCÜ
 # ═══════════════════════════════════════════════════════════════
 
-class DropViewController(QObject):
+from bench_test.dropview.controller import DropViewController  # noqa — asıl kod oraya taşındı
+class DropViewController(QObject):  # TODO: bench_test/dropview/controller.py'ye taşındı, ileride silinecek
     """
     DropView 8400M yazilimini orchestrator.py uzerinden yonetir.
     Tum islemler arka plan thread'lerinde calisir, GUI'yi bloke etmez.

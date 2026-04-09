@@ -334,4 +334,4 @@ def step_start_measure(config: dict):
 
     print("│  Ölçüm başlaması bekleniyor (sarı nokta) ...")
     wait_for_image(_IMG["yellow_dot_selected"], timeout=30,
-                   poll_interval=POLL_INTERVAL_SLOW, threshold=THRESHOLD_
+                   poll_interval=POLL_INTERVAL_SLOW, threshold=THRESHOLD_HIGH)
