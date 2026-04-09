@@ -272,7 +272,7 @@ class ConnectionTab(QWidget):  # TODO: bench_test/ui/tabs/connection_tab.py'ye t
     def _dv_launch(self):
         self.dv_status.setText("● Başlatılıyor..."); self.dv_status.setStyleSheet("color:#FF9800;")
         self._set_dv_btns(False)
-        self.dv_ctrl.launch_dropview()
+        self.dv_ctrl.do_start_dropview(log_fn=lambda msg: self.log_signal.emit(msg))
 
     def _dv_close(self):
         self.dv_status.setText("● Kapatılıyor..."); self.dv_status.setStyleSheet("color:#FF9800;")

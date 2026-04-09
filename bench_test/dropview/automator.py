@@ -30,7 +30,9 @@ pyautogui.FAILSAFE = PYAUTOGUI_FAILSAFE
 pyautogui.PAUSE    = PYAUTOGUI_PAUSE
 
 # Görüntü dosyaları
-_IMG = {k: os.path.join(ASSETS_DIR, v) for k, v in {
+_IMG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "img")
+
+_IMG = {k: os.path.join(_IMG_DIR, v) for k, v in {
     "scripts_menu":        "scripts_menu.png",
     "load_btn":            "load_btn.png",
     "delete_btn":          "delete_btn.png",
