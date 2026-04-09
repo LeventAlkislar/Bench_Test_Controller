@@ -150,7 +150,8 @@ class SV01Protocol:  # TODO: bu blok bench_test/valve/protocol.py'ye taşındı,
 #  VALF KONTROLCÜLER
 # ═══════════════════════════════════════════════════════════════
 
-class ValveController:
+from bench_test.valve.multiport import ValveController  # noqa — asıl kod oraya taşındı
+class ValveController:  # TODO: bench_test/valve/multiport.py'ye taşındı, ileride silinecek
     MIN_SPEED = 5; MAX_SPEED = 350; DEFAULT_SPEED = 200; SERIAL_TIMEOUT = 5.0
 
     def __init__(self):
@@ -249,7 +250,8 @@ class ValveController:
         return False
 
 
-class InjectorValveController:
+from bench_test.valve.injector import InjectorValveController  # noqa — asıl kod oraya taşındı
+class InjectorValveController:  # TODO: bench_test/valve/injector.py'ye taşındı, ileride silinecek
     STATE_LOAD = 1; STATE_INJECT = 2
     STATE_NAMES = {1: "Load (1-6, 2-3, 4-5)", 2: "Inject (1-2, 3-4, 5-6)"}
     SERIAL_TIMEOUT = 5.0
