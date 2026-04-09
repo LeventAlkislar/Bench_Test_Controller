@@ -1923,8 +1923,8 @@ class RecipeTab(QWidget):
 # ═══════════════════════════════════════════════════════════════
 #  SCRIPT EDITOR TAB
 # ═══════════════════════════════════════════════════════════════
-
-class ScriptEditorTab(QWidget):
+from bench_test.ui.tabs.script_editor_tab import ScriptEditorTab  # noqa — asıl kod oraya taşındı
+class ScriptEditorTab(QWidget):  # TODO: bench_test/ui/tabs/script_editor_tab.py'ye taşındı, ileride silinecek
     log_signal    = pyqtSignal(str)
     scr_changed   = pyqtSignal(str)
 
