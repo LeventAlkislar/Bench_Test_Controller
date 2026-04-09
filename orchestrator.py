@@ -137,6 +137,16 @@ _IMG = {k: os.path.join(os.path.dirname(__file__), v) for k, v in {
 #  Ekran görüntüsü yardımcıları
 # ─────────────────────────────────────────────
 
+from bench_test.dropview.vision import (  # noqa — asıl kod oraya taşındı
+    find_on_screen,
+    match_score_on_screen,
+    wait_for_image,
+    wait_for_image_gone,
+    _grab_region,
+    _images_equal,
+)
+
+# TODO: bench_test/dropview/vision.py'ye taşındı
 def find_on_screen(image_path, threshold=0.7):
     """
     Ekranda image_path görüntüsünü arar.
@@ -159,7 +169,7 @@ def find_on_screen(image_path, threshold=0.7):
     h, w = needle.shape[:2]
     return max_loc[0] + w // 2, max_loc[1] + h // 2
 
-
+# TODO: bench_test/dropview/vision.py'ye taşındı
 def wait_for_image(image_path, timeout=60, poll_interval=1.0, threshold=0.7):
     """Ekranda image_path görüntüsü görünene kadar bekler."""
     start = time.time()
@@ -173,7 +183,7 @@ def wait_for_image(image_path, timeout=60, poll_interval=1.0, threshold=0.7):
         f"'{os.path.basename(image_path)}' {timeout}sn icinde ekranda bulunamadi."
     )
 
-
+# TODO: bench_test/dropview/vision.py'ye taşındı
 def wait_for_image_gone(image_path, timeout=60, poll_interval=1.0, threshold=0.7):
     """Ekrandaki image_path görüntüsü kaybolana kadar bekler."""
     start = time.time()
@@ -255,7 +265,7 @@ def wait_for_window_close(title_keyword, timeout=60, poll_interval=0.5):
 # ─────────────────────────────────────────────
 #  Bağlantı durumu yardımcıları
 # ─────────────────────────────────────────────
-
+# TODO: bench_test/dropview/vision.py'ye taşındı
 def match_score_on_screen(image_path) -> float:
     """
     Ekranda image_path görüntüsünün en yüksek korelasyon skorunu döndürür.
@@ -648,11 +658,11 @@ def step_stop_measurement():
 # ─────────────────────────────────────────────
 #  Multiscript Editor yardımcıları
 # ─────────────────────────────────────────────
-
+# TODO: bench_test/dropview/vision.py'ye taşındı
 def _grab_region(x, y, w, h):
     return ImageGrab.grab(bbox=(x, y, x + w, y + h))
 
-
+# TODO: bench_test/dropview/vision.py'ye taşındı
 def _images_equal(img1, img2):
     a = np.array(img1); b = np.array(img2)
     return a.shape == b.shape and np.array_equal(a, b)
