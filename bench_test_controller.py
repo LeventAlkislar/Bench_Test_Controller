@@ -77,7 +77,8 @@ class Recipe:
 #  PROTOKOL
 # ═══════════════════════════════════════════════════════════════
 
-class SV01Protocol:
+from bench_test.valve.protocol import SV01Protocol  # noqa — asıl kod oraya taşındı
+class SV01Protocol:  # TODO: bu blok bench_test/valve/protocol.py'ye taşındı, silinecek
     START_CODE = 0xCC
     END_CODE   = 0xDD
     PASSWORD   = [0xFF, 0xEE, 0xBB, 0xAA]
