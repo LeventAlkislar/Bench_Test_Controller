@@ -1182,8 +1182,8 @@ class ConnectionTab(QWidget):  # TODO: bench_test/ui/tabs/connection_tab.py'ye t
 # ═══════════════════════════════════════════════════════════════
 #  MANUAL CONTROL TAB
 # ═══════════════════════════════════════════════════════════════
-
-class ManualControlTab(QWidget):
+from bench_test.ui.tabs.manual_tab import ManualControlTab  # noqa — asıl kod oraya taşındı
+class ManualControlTab(QWidget):  # TODO: bench_test/ui/tabs/manual_tab.py'ye taşındı, ileride silinecek
     log_signal = pyqtSignal(str)
 
     def __init__(self, ctrl_a: ValveController, ctrl_b: InjectorValveController,
