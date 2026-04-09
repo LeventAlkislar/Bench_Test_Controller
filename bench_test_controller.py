@@ -2175,8 +2175,8 @@ class ScriptEditorTab(QWidget):
 # ═══════════════════════════════════════════════════════════════
 #  LOG TAB
 # ═══════════════════════════════════════════════════════════════
-
-class LogTab(QWidget):
+from bench_test.ui.tabs.log_tab import LogTab  # noqa — asıl kod oraya taşındı
+class LogTab(QWidget):  # TODO: bench_test/ui/tabs/log_tab.py'ye taşındı, ileride silinecek
     def __init__(self):
         super().__init__()
         layout = QVBoxLayout(self)
