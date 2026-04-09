@@ -48,15 +48,16 @@ from common import BASE_DIR, ASSETS_DIR, get_last, remember, open_file, save_fil
 #  VERİ YAPILARI
 # ═══════════════════════════════════════════════════════════════
 
+from bench_test.recipe.models import StepLoop, RecipeStep, Recipe  # noqa — asıl kod oraya taşındı
 @dataclass
-class StepLoop:
+class StepLoop:  # TODO: bench_test/recipe/models.py'ye taşındı, ileride silinecek
     start_step: int
     end_step: int
     loop_count: int
 
 
 @dataclass
-class RecipeStep:
+class RecipeStep:  # TODO: bench_test/recipe/models.py'ye taşındı, ileride silinecek
     port: int                    # Valve A portu (1-8), 0 = degisiklik yok
     duration_minutes: float
     description: str = ""
@@ -66,7 +67,7 @@ class RecipeStep:
 
 
 @dataclass
-class Recipe:
+class Recipe:  # TODO: bench_test/recipe/models.py'ye taşındı, ileride silinecek
     name: str
     steps: List[RecipeStep]
     loop_count: int = 1
