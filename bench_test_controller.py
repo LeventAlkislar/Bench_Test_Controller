@@ -814,8 +814,8 @@ def _group(title, layout=None):
 # ═══════════════════════════════════════════════════════════════
 #  STEP LOOP DİALOG
 # ═══════════════════════════════════════════════════════════════
-
-class StepLoopDialog(QDialog):
+from bench_test.ui.tabs.recipe_tab import StepLoopDialog, RecipeTab  # noqa — asıl kod oraya taşındı
+class StepLoopDialog(QDialog):  # TODO: bench_test/ui/tabs/recipe_tab.py'ye taşındı, ileride silinecek
     def __init__(self, parent, total_steps, existing_loops, selected_steps=None):
         super().__init__(parent)
         self.setWindowTitle("Set Step Loop Range")
@@ -1451,7 +1451,7 @@ _DV_IDX_TO_KEY = {
 _DV_KEY_TO_IDX = {v: k for k, v in _DV_IDX_TO_KEY.items()}
 
 
-class RecipeTab(QWidget):
+class RecipeTab(QWidget):  # TODO: bench_test/ui/tabs/recipe_tab.py'ye taşındı, ileride silinecek
     log_signal = pyqtSignal(str)
 
     def __init__(self, ctrl_a: ValveController, ctrl_b: InjectorValveController,
