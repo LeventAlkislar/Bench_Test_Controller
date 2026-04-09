@@ -57,7 +57,7 @@ _DROPVIEW_EXE_CANDIDATES = [
     r"C:\Program Files (x86)\DropView 8400M\Dropview.exe",
 ]
 
-
+# TODO: bench_test/dropview/automator.py'ye taşındı
 def _get_dropview_exe() -> str:
     """
     DropView.exe yolunu döndürür.
@@ -146,6 +146,23 @@ from bench_test.dropview.vision import (  # noqa — asıl kod oraya taşındı
     _images_equal,
 )
 
+from bench_test.dropview.automator import (  # noqa — asıl kod oraya taşındı
+    find_window,
+    window_exists,
+    wait_for_window_close,
+    wait_until_connected,
+    wait_until_disconnected,
+    _is_dropview_connected,
+    get_dropview_connection_scores,
+    _get_dropview_exe,
+    _count_and_clear_scripts,
+    _delete_scripts_above,
+    step_start_dropview,
+    step_start_measure,
+    step_stop_measure,
+    step_exit_dropview,
+)
+
 # TODO: bench_test/dropview/vision.py'ye taşındı
 def find_on_screen(image_path, threshold=0.7):
     """
@@ -197,7 +214,7 @@ def wait_for_image_gone(image_path, timeout=60, poll_interval=1.0, threshold=0.7
         f"'{os.path.basename(image_path)}' {timeout}sn icinde kaybolmadi."
     )
 
-
+# TODO: bench_test/dropview/automator.py'ye taşındı
 def wait_until_connected(timeout=30, poll_interval=1.0):
     """connected_score > disconnected_score olana kadar bekler."""
     start = time.time()
@@ -209,7 +226,7 @@ def wait_until_connected(timeout=30, poll_interval=1.0):
         time.sleep(poll_interval)
     raise TimeoutError("DropSens bağlantısı zaman aşımına uğradı.")
 
-
+# TODO: bench_test/dropview/automator.py'ye taşındı
 def wait_until_disconnected(timeout=10, poll_interval=1.0):
     """disconnected_score > connected_score olana kadar bekler."""
     start = time.time()
@@ -224,7 +241,7 @@ def wait_until_disconnected(timeout=10, poll_interval=1.0):
 # ─────────────────────────────────────────────
 #  win32 pencere yardımcıları
 # ─────────────────────────────────────────────
-
+# TODO: bench_test/dropview/automator.py'ye taşındı
 def find_window(title_keyword, timeout=60, poll_interval=1.0):
     """Başlığında title_keyword geçen ilk görünür pencereyi bulur."""
     start = time.time()
@@ -240,7 +257,7 @@ def find_window(title_keyword, timeout=60, poll_interval=1.0):
         time.sleep(poll_interval)
     raise TimeoutError(f"'{title_keyword}' penceresi {timeout}sn icinde bulunamadi.")
 
-
+# TODO: bench_test/dropview/automator.py'ye taşındı
 def window_exists(title_keyword):
     """Başlığında title_keyword geçen görünür bir pencere var mı?"""
     found = []
@@ -251,7 +268,7 @@ def window_exists(title_keyword):
     win32gui.EnumWindows(_cb, None)
     return len(found) > 0
 
-
+# TODO: bench_test/dropview/automator.py'ye taşındı
 def wait_for_window_close(title_keyword, timeout=60, poll_interval=0.5):
     """Başlığında title_keyword geçen pencere kapanana kadar bekler."""
     start = time.time()
@@ -281,7 +298,7 @@ def match_score_on_screen(image_path) -> float:
     except Exception:
         return 0.0
 
-
+# TODO: bench_test/dropview/automator.py'ye taşındı
 def _is_dropview_connected():
     """DropView açık ve cihaz bağlı mı kontrol eder."""
     if not window_exists(DROPVIEW_WINDOW_NAME):
@@ -292,7 +309,7 @@ def _is_dropview_connected():
         return False
     return conn_sc > disc_sc
 
-
+# TODO: bench_test/dropview/automator.py'ye taşındı
 def get_dropview_connection_scores() -> dict:
     """Hem connected hem disconnected görüntülerinin korelasyon skorlarını döndürür."""
     dv_open = window_exists(DROPVIEW_WINDOW_NAME)
@@ -309,7 +326,7 @@ def get_dropview_connection_scores() -> dict:
 #  Aksiyon: Start DropView
 #  DropView.exe başlat + DropSens bağlan
 # ─────────────────────────────────────────────
-
+# TODO: bench_test/dropview/automator.py'ye taşındı
 def step_start_dropview(config: dict):
     """
     DropView.exe'yi başlatır ve DropSens'e bağlanır.
@@ -372,7 +389,7 @@ def step_start_dropview(config: dict):
 #  Multiscript Editor aç, script yükle, eskileri sil, Run
 #  Sarı nokta görününce return eder
 # ─────────────────────────────────────────────
-
+# TODO: bench_test/dropview/automator.py'ye taşındı
 def step_start_measure(config: dict):
     """
     Multiscript Editor'ü açar, scripti yükler, önceki scriptleri siler,
@@ -471,7 +488,7 @@ def step_start_measure(config: dict):
 #  Aksiyon: Stop Measure
 #  Stop butonu → sarı kaybolur yeşil gelir → Exit butonu
 # ─────────────────────────────────────────────
-
+# TODO: bench_test/dropview/automator.py'ye taşındı
 def step_stop_measure():
     """
     Multiscript Editor'de Stop'a basar, ölçümün durmasını bekler
@@ -512,7 +529,7 @@ def step_stop_measure():
 #  Aksiyon: Exit DropView
 #  DropSens disconnect + DropView.exe kapat
 # ─────────────────────────────────────────────
-
+# TODO: bench_test/dropview/automator.py'ye taşındı
 def step_exit_dropview(config: dict, log_fn=None):
     """
     DropSens bağlantısını keser (Ctrl+D) ve DropView programını kapatır (Alt+F4).
@@ -667,7 +684,7 @@ def _images_equal(img1, img2):
     a = np.array(img1); b = np.array(img2)
     return a.shape == b.shape and np.array_equal(a, b)
 
-
+# TODO: bench_test/dropview/automator.py'ye taşındı
 def _count_and_clear_scripts(ms_hwnd, listbox_x, listbox_y):
     """Yükleme öncesi listede kaç script var sayar."""
     rect = win32gui.GetWindowRect(ms_hwnd)
@@ -691,7 +708,7 @@ def _count_and_clear_scripts(ms_hwnd, listbox_x, listbox_y):
 
     return count
 
-
+# TODO: bench_test/dropview/automator.py'ye taşındı
 def _delete_scripts_above(ms_hwnd, listbox_x, listbox_y, count):
     """Yükleme sonrası bizim scriptimiz seçili; üstteki eskileri siler."""
     if count == 0:
