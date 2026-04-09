@@ -573,7 +573,9 @@ class DropViewController(QObject):  # TODO: bench_test/dropview/controller.py'ye
 # ═══════════════════════════════════════════════════════════════
 
 # DropView aksiyon sabitleri
+# TODO: bench_test/recipe/runner.py'ye taşındı
 DROPVIEW_ACTIONS = ["none", "start_dropview", "start_measure", "stop_measure", "exit_dropview"]
+# TODO: bench_test/recipe/runner.py'ye taşındı
 DROPVIEW_LABELS  = {
     "none":           "None",
     "start_dropview": "Start DropView",
@@ -582,10 +584,17 @@ DROPVIEW_LABELS  = {
     "exit_dropview":  "Exit DropView",
 }
 # Süre 0'a izin verilen aksiyonlar (valve ayarına gerek kalmayan saf DropView adımları)
+# TODO: bench_test/recipe/runner.py'ye taşındı
 DROPVIEW_ZERO_DURATION_OK = {"start_dropview", "start_measure", "stop_measure", "exit_dropview"}
 
+from bench_test.recipe.runner import (  # noqa — asıl kod oraya taşındı
+    RecipeRunner,
+    DROPVIEW_ACTIONS,
+    DROPVIEW_LABELS,
+    DROPVIEW_ZERO_DURATION_OK,
+)
 
-class RecipeRunner(threading.Thread):
+class RecipeRunner(threading.Thread):  # TODO: bench_test/recipe/runner.py'ye taşındı, ileride silinecek
     def __init__(self, controller_a, controller_b, recipe: Recipe,
                  status_queue: queue.Queue, stop_event: threading.Event,
                  dropview_ctrl: Optional[DropViewController] = None):
