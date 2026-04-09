@@ -880,8 +880,8 @@ class StepLoopDialog(QDialog):
 # ═══════════════════════════════════════════════════════════════
 #  CONNECTION TAB
 # ═══════════════════════════════════════════════════════════════
-
-class ConnectionTab(QWidget):
+from bench_test.ui.tabs.connection_tab import ConnectionTab  # noqa — asıl kod oraya taşındı
+class ConnectionTab(QWidget):  # TODO: bench_test/ui/tabs/connection_tab.py'ye taşındı, ileride silinecek
     log_signal = pyqtSignal(str)
 
     def __init__(self, ctrl_a: ValveController, ctrl_b: InjectorValveController,
