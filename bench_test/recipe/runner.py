@@ -139,10 +139,17 @@ class RecipeRunner(threading.Thread):
             elapsed   = time.time() - start_t
             remaining = (duration_sec - elapsed) / 60
             self.status_queue.put(("progress", {
-                "step": step_num, "total_steps": total_steps,
+                "step": step_num,
+                "total_steps": total_steps,
                 "elapsed_min": elapsed / 60,
                 "remaining_min": remaining,
+                "remaining_minutes": remaining,
                 "duration_min": step.duration_minutes,
+                "total_minutes": step.duration_minutes,
+                "port": step.port,
+                "valve_b_state": step.valve_b_state,
+                "description": step.description,
+                "loop_info": loop_info,
             }))
             time.sleep(1.0)
 

@@ -4,6 +4,7 @@ import os
 import queue
 import threading
 
+from dataclasses import asdict
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGridLayout,
     QLabel, QLineEdit, QPushButton, QComboBox, QSpinBox,
@@ -21,7 +22,6 @@ from bench_test.dropview.controller import DropViewController
 from bench_test.recipe.models import Recipe, RecipeStep, StepLoop
 from bench_test.recipe.runner import RecipeRunner, DROPVIEW_ACTIONS, DROPVIEW_LABELS, DROPVIEW_ZERO_DURATION_OK
 from bench_test.utils.paths import open_file, save_file, get_last, remember
-
 from bench_test.ui.widgets import _btn, _lbl
 
 _DV_COMBO_LABELS = [
@@ -554,6 +554,15 @@ class RecipeTab(QWidget):
                     self.status_lbl.setText(f"COMPLETED: {data}")
                     self.progress.setValue(100); self.progress_lbl.setText("100%")
                     self.start_btn.setEnabled(True); self.pause_btn.setEnabled(False)
+                    self.stop_btn.setEnabled(False)
+                    QMessageBox.information(self, "Recipe Complete", str(data))
+                    self.log_signal.emit(str(data))
+                elif msg_type == "finished":
+                    self.status_lbl.setText(f"TAMAMLANDI: {data}")
+                    self.progress.setValue(100);
+                    self.progress_lbl.setText("100%")
+                    self.start_btn.setEnabled(True);
+                    self.pause_btn.setEnabled(False)
                     self.stop_btn.setEnabled(False)
                     QMessageBox.information(self, "Recipe Complete", str(data))
                     self.log_signal.emit(str(data))

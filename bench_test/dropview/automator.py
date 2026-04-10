@@ -280,6 +280,35 @@ def step_disconnect_dropsens():
     wait_until_disconnected(timeout=TIMEOUT_CLOSE_WINDOW)
     print("│  DropSens bağlantısı kesildi.")
 
+def step_stop_measure():
+    """Stop butonuna basar, ölçümün durmasını bekler, Exit ile Multiscript Editor'ü kapatır."""
+    if not window_exists(MULTISCRIPT_WINDOW):
+        print("│  Multiscript Editor açık değil — Stop Measure atlandı.")
+        return
+
+    ms_hwnd = find_window(MULTISCRIPT_WINDOW, timeout=5)
+    win32gui.SetForegroundWindow(ms_hwnd)
+    time.sleep(SLEEP_AFTER_FOCUS)
+
+    sx, sy = find_on_screen(_IMG["stop_btn"], threshold=THRESHOLD_HIGH)
+    pyautogui.click(sx, sy)
+    time.sleep(SLEEP_AFTER_COMMAND)
+
+    print("│  Ölçümün durması bekleniyor (sarı nokta kaybolacak) ...")
+    wait_for_image_gone(_IMG["yellow_dot_selected"], timeout=TIMEOUT_STOP_MEASURE,
+                        poll_interval=POLL_INTERVAL_SLOW, threshold=THRESHOLD_HIGH)
+
+    print("│  Yeşil nokta bekleniyor ...")
+    wait_for_image(_IMG["green_dot_selected"], timeout=15,
+                   poll_interval=POLL_INTERVAL_NORMAL, threshold=THRESHOLD_HIGH)
+
+    ex, ey = find_on_screen(_IMG["exit_btn"], threshold=THRESHOLD_HIGH)
+    pyautogui.click(ex, ey)
+    time.sleep(SLEEP_AFTER_FOCUS)
+
+    wait_for_window_close(MULTISCRIPT_WINDOW, timeout=TIMEOUT_CLOSE_WINDOW)
+    print("│  Multiscript Editor kapatıldı.")
+
 def step_exit_dropview(config: dict, log_fn=None):
     """Ctrl+D ile bağlantıyı kes + Alt+F4 ile DropView'i kapat."""
     def _log(msg):

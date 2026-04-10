@@ -1,17 +1,20 @@
 # bench_test/ui/tabs/manual_tab.py
+import threading
+import time
+
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGridLayout,
     QLabel, QPushButton, QComboBox, QSpinBox, QSplitter,
     QDoubleSpinBox, QGroupBox, QMessageBox, QFrame, QSizePolicy,
     QTextEdit, QScrollArea, QAbstractItemView
 )
-from PyQt6.QtCore import pyqtSignal, Qt, QTimer
+from PyQt6.QtCore import pyqtSignal, Qt, QTimer, QMetaObject, Q_ARG
 from PyQt6.QtGui import QFont, QColor
 from bench_test.valve.multiport import ValveController
 from bench_test.valve.injector import InjectorValveController
 from bench_test.dropview.controller import DropViewController
-
 from bench_test.ui.widgets import _btn, _lbl
+from datetime import datetime
 
 class ManualControlTab(QWidget):
     log_signal = pyqtSignal(str)
@@ -146,20 +149,36 @@ class ManualControlTab(QWidget):
 
     def _switch_port(self, port):
         if not self.ctrl_a.is_connected():
-            QMessageBox.warning(self, "Warning", "Valve A not connected"); return
+            QMessageBox.warning(self, "Warning", "Valve A not connected")
+            return
         self.status_a_lbl.setText(f"Switching to Port {port}...")
         self._log(f"Valve A: Switching to port {port}...")
+
         def _run():
-            r = self.ctrl_a.switch_port(port)
-            if r.get("success"):
-                time.sleep(0.3); self.ctrl_a.wait_for_completion(20.0)
-                self.cur_port.setText(f"Port {port}")
-                self.status_a_lbl.setText(f"At Port {port}")
-                self._log(f"Valve A: At port {port}")
-            else:
-                self.status_a_lbl.setText(f"Failed: {r.get('error','')}")
-                self._log(f"Valve A switch failed: {r.get('error','')}")
+            try:
+                r = self.ctrl_a.switch_port(port)
+                if r.get("success"):
+                    time.sleep(0.3)
+                    self.ctrl_a.wait_for_completion(20.0)
+                    QMetaObject.invokeMethod(self.cur_port, "setText",
+                                             Qt.ConnectionType.QueuedConnection,
+                                             Q_ARG(str, f"Port {port}"))
+                    QMetaObject.invokeMethod(self.status_a_lbl, "setText",
+                                             Qt.ConnectionType.QueuedConnection,
+                                             Q_ARG(str, f"At Port {port}"))
+                    self._log(f"Valve A: At port {port}")
+                else:
+                    QMetaObject.invokeMethod(self.status_a_lbl, "setText",
+                                             Qt.ConnectionType.QueuedConnection,
+                                             Q_ARG(str, f"Failed: {r.get('error', '')}"))
+                    self._log(f"Valve A switch failed: {r.get('error', '')}")
+            except Exception as e:
+                self._log(f"HATA _switch_port: {e}")
+                import traceback
+                self._log(traceback.format_exc())
+
         threading.Thread(target=_run, daemon=True).start()
+
 
     def _reset_a(self):
         if not self.ctrl_a.is_connected(): return

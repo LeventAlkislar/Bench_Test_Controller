@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import pyqtSignal, Qt, QTimer, pyqtSlot
 from PyQt6.QtGui import QColor, QFont
 
-from bench_test.valve.multiport import ValveController
+from bench_test.valve.multiport import ValveController, SV01Protocol
 from bench_test.valve.injector import InjectorValveController
 from bench_test.dropview.controller import DropViewController
 from bench_test.utils.paths import get_last, remember
