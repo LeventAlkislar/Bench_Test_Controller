@@ -270,25 +270,28 @@ class ConnectionTab(QWidget):  # TODO: bench_test/ui/tabs/connection_tab.py'ye t
         (QMessageBox.information if r.get("success") else QMessageBox.critical)(self, "Valve B Test", msg)
 
     def _dv_launch(self):
-        self.dv_status.setText("● Başlatılıyor..."); self.dv_status.setStyleSheet("color:#FF9800;")
-        self._set_dv_btns(False)
-        self.dv_ctrl.do_start_dropview(log_fn=lambda msg: self.log_signal.emit(msg))
-
-    def _dv_close(self):
-        self.dv_status.setText("● Kapatılıyor..."); self.dv_status.setStyleSheet("color:#FF9800;")
-        self._set_dv_btns(False)
-        self.dv_ctrl.close_dropview()
+        self.dv_status.setText("● Başlatılıyor...")
+        self.dv_status.setStyleSheet("color:#FF9800;")
+        self.log_signal.emit("DropView başlatılıyor...")
+        self.dv_ctrl.do_launch_dropview(log_fn=lambda msg: self.log_signal.emit(msg))
 
     def _dv_connect(self):
-        self.dv_status.setText("● Bağlanıyor..."); self.dv_status.setStyleSheet("color:#FF9800;")
-        self._set_dv_btns(False)
-        self.dv_ctrl.connect_dropsens()
+        self.dv_status.setText("● Bağlanıyor...")
+        self.dv_status.setStyleSheet("color:#FF9800;")
+        self.log_signal.emit("DropSens bağlanıyor...")
+        self.dv_ctrl.do_connect_dropsens(log_fn=lambda msg: self.log_signal.emit(msg))
 
     def _dv_disconnect(self):
-        self.dv_status.setText("● Kesiliyor..."); self.dv_status.setStyleSheet("color:#FF9800;")
-        self._set_dv_btns(False)
-        self.dv_ctrl.disconnect_dropsens()
+        self.dv_status.setText("● Bağlantı kesiliyor...")
+        self.dv_status.setStyleSheet("color:#FF9800;")
+        self.log_signal.emit("DropSens bağlantısı kesiliyor...")
+        self.dv_ctrl.do_disconnect_dropsens(log_fn=lambda msg: self.log_signal.emit(msg))
 
+    def _dv_close(self):
+        self.dv_status.setText("● Kapatılıyor...")
+        self.dv_status.setStyleSheet("color:#FF9800;")
+        self.log_signal.emit("DropView kapatılıyor...")
+        self.dv_ctrl.do_exit_dropview(log_fn=lambda msg: self.log_signal.emit(msg))
     def _set_dv_btns(self, enabled: bool):
         for b in [self.dv_launch_btn, self.dv_close_btn,
                   self.dv_connect_btn, self.dv_disconnect_btn]:

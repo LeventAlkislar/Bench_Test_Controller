@@ -69,48 +69,76 @@ class DropViewController(QObject):
         except Exception:
             return False
 
-    # ── 4 ana aksiyon ─────────────────────────────────────────
+# ── Connection sekmesi için 4 ayrı aksiyon ─────────────────
+
+    def do_launch_dropview(self, log_fn=None):
+        """Sadece exe'yi başlatır, bağlanmaz."""
+        def _run():
+            try:
+                automator.step_launch_dropview()
+                if log_fn: log_fn("DropView başlatıldı.")
+                self.force_poll()
+            except Exception as e:
+                if log_fn: log_fn(f"Launch hatası: {e}")
+        threading.Thread(target=_run, daemon=True).start()
+
+    def do_connect_dropsens(self, log_fn=None):
+        """Sadece Ctrl+C ile bağlanır."""
+        def _run():
+            try:
+                automator.step_connect_dropsens()
+                self._last_connected = True
+                self.status_changed.emit(True)
+                if log_fn: log_fn("DropSens bağlandı.")
+            except Exception as e:
+                if log_fn: log_fn(f"Connect hatası: {e}")
+        threading.Thread(target=_run, daemon=True).start()
+
+    def do_disconnect_dropsens(self, log_fn=None):
+        """Sadece Ctrl+D ile bağlantıyı keser."""
+        def _run():
+            try:
+                automator.step_disconnect_dropsens()
+                self._last_connected = False
+                self.status_changed.emit(False)
+                if log_fn: log_fn("DropSens bağlantısı kesildi.")
+            except Exception as e:
+                if log_fn: log_fn(f"Disconnect hatası: {e}")
+        threading.Thread(target=_run, daemon=True).start()
 
     def do_start_dropview(self, log_fn=None) -> bool:
+        """Recipe için: exe başlat + bağlan."""
         try:
             automator.step_start_dropview({})
             self._last_connected = True
             self.status_changed.emit(True)
-            if log_fn:
-                log_fn("DropView başlatıldı ve DropSens bağlandı.")
+            if log_fn: log_fn("DropView başlatıldı ve DropSens bağlandı.")
             return True
         except Exception as e:
-            if log_fn:
-                log_fn(f"Start DropView hatası: {e}")
+            if log_fn: log_fn(f"Start DropView hatası: {e}")
             return False
 
     def do_start_measure(self, scr_path: str, log_fn=None) -> bool:
         if not scr_path:
-            if log_fn:
-                log_fn("DropView: .scr dosya yolu boş — ölçüm başlatılamadı.")
+            if log_fn: log_fn("DropView: .scr dosya yolu boş — ölçüm başlatılamadı.")
             return False
         try:
             config = {"script_path": scr_path}
-            if log_fn:
-                log_fn(f"Script yükleniyor: {scr_path}")
+            if log_fn: log_fn(f"Script yükleniyor: {scr_path}")
             automator.step_start_measure(config)
-            if log_fn:
-                log_fn("Ölçüm başlatıldı.")
+            if log_fn: log_fn("Ölçüm başlatıldı.")
             return True
         except Exception as e:
-            if log_fn:
-                log_fn(f"Start Measure hatası: {e}")
+            if log_fn: log_fn(f"Start Measure hatası: {e}")
             return False
 
     def do_stop_measure(self, log_fn=None) -> bool:
         try:
             automator.step_stop_measure()
-            if log_fn:
-                log_fn("Ölçüm durduruldu.")
+            if log_fn: log_fn("Ölçüm durduruldu.")
             return True
         except Exception as e:
-            if log_fn:
-                log_fn(f"Stop Measure hatası: {e}")
+            if log_fn: log_fn(f"Stop Measure hatası: {e}")
             return False
 
     def do_exit_dropview(self, log_fn=None) -> bool:
@@ -118,31 +146,8 @@ class DropViewController(QObject):
             automator.step_exit_dropview({}, log_fn=log_fn)
             self._last_connected = False
             self.status_changed.emit(False)
-            if log_fn:
-                log_fn("DropView kapatıldı.")
+            if log_fn: log_fn("DropView kapatıldı.")
             return True
         except Exception as e:
-            if log_fn:
-                log_fn(f"Exit DropView hatası: {e}")
+            if log_fn: log_fn(f"Exit DropView hatası: {e}")
             return False
-
-    # ── Geriye dönük uyumluluk ────────────────────────────────
-
-    def start_dropview(self):
-        threading.Thread(
-            target=self.do_start_dropview,
-            daemon=True
-        ).start()
-
-    def start_measurement(self, scr_path: str = ""):
-        threading.Thread(
-            target=self.do_start_measure,
-            args=(scr_path,),
-            daemon=True
-        ).start()
-
-    def stop_measurement(self):
-        threading.Thread(
-            target=self.do_stop_measure,
-            daemon=True
-        ).start()

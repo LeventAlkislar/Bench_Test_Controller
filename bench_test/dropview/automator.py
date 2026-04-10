@@ -208,6 +208,137 @@ def _delete_scripts_above(ms_hwnd, listbox_x, listbox_y, count):
 
 # ── Ana adım fonksiyonları ─────────────────────────────────────
 
+def step_launch_dropview():
+    """Sadece DropView.exe'yi başlatır, bağlanmaz."""
+    if window_exists(DROPVIEW_WINDOW_NAME):
+        print("│  DropView zaten açık.")
+        return
+    print("│  DropView başlatılıyor ...")
+    subprocess.Popen([_get_dropview_exe()])
+    find_window(DROPVIEW_WINDOW_NAME, timeout=TIMEOUT_WINDOW_OPEN)
+    time.sleep(SLEEP_AFTER_LAUNCH)
+    print("│  DropView penceresi açıldı.")
+
+
+def step_connect_dropsens():
+    """Sadece Ctrl+C ile DropSens'e bağlanır."""
+    if _is_dropview_connected():
+        print("│  DropSens zaten bağlı.")
+        return
+    if not window_exists(DROPVIEW_WINDOW_NAME):
+        raise RuntimeError("DropView penceresi açık değil.")
+
+    dv_hwnd = find_window(DROPVIEW_WINDOW_NAME, timeout=10)
+    if win32gui.IsIconic(dv_hwnd):
+        win32gui.ShowWindow(dv_hwnd, win32con.SW_RESTORE)
+        time.sleep(SLEEP_AFTER_FOCUS)
+
+    win32gui.SetForegroundWindow(dv_hwnd)
+    time.sleep(SLEEP_AFTER_CLICK)
+    win32api.keybd_event(win32con.VK_CONTROL, 0, 0, 0)
+    win32api.keybd_event(ord('C'), 0, 0, 0)
+    win32api.keybd_event(ord('C'), 0, win32con.KEYEVENTF_KEYUP, 0)
+    win32api.keybd_event(win32con.VK_CONTROL, 0, win32con.KEYEVENTF_KEYUP, 0)
+    time.sleep(SLEEP_AFTER_COMMAND)
+
+    if window_exists(CONNECTING_DIALOG):
+        print("│    Bağlanıyor, dialog bekleniyor ...")
+        wait_for_window_close(CONNECTING_DIALOG, timeout=TIMEOUT_WINDOW_OPEN)
+
+    try:
+        wait_until_connected(timeout=TIMEOUT_CONNECT)
+    except TimeoutError:
+        raise RuntimeError(
+            "DropSens bağlantısı kurulamadı: Cihazın fiziksel olarak bağlı "
+            "olduğundan ve DropView'in hazır durumda olduğundan emin olun."
+        )
+
+    time.sleep(SLEEP_AFTER_FOCUS)
+    if not _is_dropview_connected():
+        raise RuntimeError(
+            "DropSens bağlantı sinyali alındı ancak son doğrulama başarısız."
+        )
+    print("│  DropSens bağlandı.")
+
+
+def step_disconnect_dropsens():
+    """Sadece Ctrl+D ile DropSens bağlantısını keser."""
+    if not window_exists(DROPVIEW_WINDOW_NAME):
+        return
+    if not _is_dropview_connected():
+        print("│  DropSens zaten bağlı değil.")
+        return
+
+    dv_hwnd = find_window(DROPVIEW_WINDOW_NAME, timeout=10)
+    win32gui.SetForegroundWindow(dv_hwnd)
+    time.sleep(SLEEP_AFTER_CLICK)
+    win32api.keybd_event(win32con.VK_CONTROL, 0, 0, 0)
+    win32api.keybd_event(ord('D'), 0, 0, 0)
+    win32api.keybd_event(ord('D'), 0, win32con.KEYEVENTF_KEYUP, 0)
+    win32api.keybd_event(win32con.VK_CONTROL, 0, win32con.KEYEVENTF_KEYUP, 0)
+    time.sleep(SLEEP_AFTER_COMMAND)
+    wait_until_disconnected(timeout=TIMEOUT_CLOSE_WINDOW)
+    print("│  DropSens bağlantısı kesildi.")
+
+def step_exit_dropview(config: dict, log_fn=None):
+    """Ctrl+D ile bağlantıyı kes + Alt+F4 ile DropView'i kapat."""
+    def _log(msg):
+        print(msg)
+        if log_fn:
+            log_fn(msg)
+
+    def _close_warning_if_exists():
+        if not window_exists(WARNING_UNSAVED):
+            return False
+        hwnd = None
+        def _find(h, _):
+            nonlocal hwnd
+            if win32gui.IsWindowVisible(h) and WARNING_UNSAVED in win32gui.GetWindowText(h):
+                hwnd = h
+        win32gui.EnumWindows(_find, None)
+        if hwnd:
+            try:
+                win32gui.SetForegroundWindow(hwnd)
+                time.sleep(SLEEP_AFTER_CLICK)
+                pyautogui.press("enter")
+                time.sleep(SLEEP_AFTER_FOCUS)
+                return True
+            except Exception as e:
+                _log(f"│    HATA (uyarı kapatılırken): {e}")
+                return False
+        return False
+
+    if not window_exists(DROPVIEW_WINDOW_NAME):
+        _log("│  DropView zaten kapalı.")
+        return
+
+    dv_hwnd = find_window(DROPVIEW_WINDOW_NAME, timeout=10)
+
+    if _is_dropview_connected():
+        win32gui.SetForegroundWindow(dv_hwnd)
+        time.sleep(SLEEP_AFTER_CLICK)
+        win32api.keybd_event(win32con.VK_CONTROL, 0, 0, 0)
+        win32api.keybd_event(ord('D'), 0, 0, 0)
+        win32api.keybd_event(ord('D'), 0, win32con.KEYEVENTF_KEYUP, 0)
+        win32api.keybd_event(win32con.VK_CONTROL, 0, win32con.KEYEVENTF_KEYUP, 0)
+        time.sleep(SLEEP_AFTER_COMMAND)
+        _close_warning_if_exists()
+        wait_until_disconnected(timeout=TIMEOUT_CLOSE_WINDOW)
+        _log("│  DropSens bağlantısı kesildi.")
+    else:
+        _log("│  DropSens zaten bağlı değil.")
+
+    dv_hwnd = find_window(DROPVIEW_WINDOW_NAME, timeout=5)
+    win32gui.SetForegroundWindow(dv_hwnd)
+    time.sleep(SLEEP_AFTER_CLICK)
+    win32api.keybd_event(win32con.VK_MENU, 0, 0, 0)
+    win32api.keybd_event(win32con.VK_F4, 0, 0, 0)
+    win32api.keybd_event(win32con.VK_F4, 0, win32con.KEYEVENTF_KEYUP, 0)
+    win32api.keybd_event(win32con.VK_MENU, 0, win32con.KEYEVENTF_KEYUP, 0)
+    time.sleep(SLEEP_AFTER_COMMAND)
+    _close_warning_if_exists()
+    _log("│  DropView kapatıldı.")
+
 def step_start_dropview(config: dict):
     if window_exists(DROPVIEW_WINDOW_NAME) and _is_dropview_connected():
         print("│  [Start DropView] DropView zaten açık ve Connected — atlandı.")
