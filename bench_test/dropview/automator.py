@@ -140,23 +140,14 @@ def _get_dropview_exe() -> str:
         if os.path.isfile(candidate):
             remember("dropview_exe", candidate)
             return candidate
-    try:
-        from PyQt6.QtWidgets import QApplication, QFileDialog, QMessageBox
-        QMessageBox.information(None, "DropView Bulunamadı",
-            "DropView.exe bulunamadı.\nLütfen DropView.exe dosyasını seçin.")
-        path, _ = QFileDialog.getOpenFileName(None,
-            "DropView.exe Dosyasını Seç", "",
-            "Executable (*.exe);;Tüm dosyalar (*.*)")
-    except ImportError:
-        import tkinter as tk
-        from tkinter import filedialog, messagebox
-        root = tk.Tk(); root.withdraw(); root.attributes("-topmost", True)
-        messagebox.showinfo("DropView Bulunamadı",
-            "DropView.exe bulunamadı.\nLütfen DropView.exe dosyasını seçin.")
-        path = filedialog.askopenfilename(
-            title="DropView.exe Dosyasını Seç",
-            filetypes=[("Executable", "*.exe"), ("Tüm dosyalar", "*.*")])
-        root.destroy()
+
+    from PyQt6.QtWidgets import QApplication, QFileDialog, QMessageBox
+    QMessageBox.information(None, "DropView Bulunamadı",
+        "DropView.exe bulunamadı.\nLütfen DropView.exe dosyasını seçin.")
+    path, _ = QFileDialog.getOpenFileName(None,
+        "DropView.exe Dosyasını Seç", "",
+        "Executable (*.exe);;Tüm dosyalar (*.*)")
+
     if not path:
         raise FileNotFoundError("DropView.exe seçilmedi, işlem iptal edildi.")
     path = os.path.normpath(path)
@@ -164,7 +155,6 @@ def _get_dropview_exe() -> str:
         raise FileNotFoundError(f"Seçilen dosya bulunamadı: {path}")
     remember("dropview_exe", path)
     return path
-
 
 # ── Multiscript Editor yardımcıları ───────────────────────────
 

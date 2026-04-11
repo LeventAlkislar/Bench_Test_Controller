@@ -144,25 +144,22 @@ class ConnectionTab(QWidget):  # TODO: bench_test/ui/tabs/connection_tab.py'ye t
 
         row_prog = QHBoxLayout()
         self.dv_launch_btn = _btn("Start DropView", self._dv_launch, "#3F51B5", 130)
-        self.dv_close_btn  = _btn("Stop DropView",  self._dv_close,  "#9C27B0", 120)
+        self.dv_connect_btn    = _btn("Connect",    self._dv_connect,    "#4CAF50", 130)
+        self.dv_disconnect_btn = _btn("Disconnect", self._dv_disconnect, "#F44336", 130)
+        self.dv_close_btn  = _btn("Exit DropView",  self._dv_close,  "#9C27B0", 130)
+        self.dv_status         = _status_lbl("● Disconnected")
+
         row_prog.addWidget(self.dv_launch_btn)
+        row_prog.addWidget(self.dv_connect_btn)
+        row_prog.addWidget(self.dv_disconnect_btn)
         row_prog.addWidget(self.dv_close_btn)
+        row_prog.addWidget(self.dv_status)
         row_prog.addStretch()
         fld.addLayout(row_prog)
 
-        row_conn = QHBoxLayout()
-        self.dv_connect_btn    = _btn("Connect",    self._dv_connect,    "#4CAF50", 90)
-        self.dv_disconnect_btn = _btn("Disconnect", self._dv_disconnect, "#F44336", 100)
-        self.dv_status         = _status_lbl("● Disconnected")
-        row_conn.addWidget(self.dv_connect_btn)
-        row_conn.addWidget(self.dv_disconnect_btn)
-        row_conn.addWidget(self.dv_status)
-        row_conn.addStretch()
-        fld.addLayout(row_conn)
-
         fld.addWidget(_lbl(
-            "Start DropView: Programı başlatır  |  Connect: DropSens'e bağlanır (Ctrl+C)\n"
-            "Disconnect: Bağlantıyı keser (Ctrl+D)  |  Stop DropView: Programı kapatır (Alt+F4)",
+            "Start DropView: Initiates DropView           |  Exit DropView: Terminates DropView (Alt+F4)\n"
+            "Connect: Connects to DropSens (Ctrl+C)  |  Disconnect: Disconnects from DropSens (Ctrl+D)",
             color="#888"))
 
         layout.addWidget(gd)
@@ -292,6 +289,7 @@ class ConnectionTab(QWidget):  # TODO: bench_test/ui/tabs/connection_tab.py'ye t
         self.dv_status.setStyleSheet("color:#FF9800;")
         self.log_signal.emit("DropView kapatılıyor...")
         self.dv_ctrl.do_exit_dropview(log_fn=lambda msg: self.log_signal.emit(msg))
+
     def _set_dv_btns(self, enabled: bool):
         for b in [self.dv_launch_btn, self.dv_close_btn,
                   self.dv_connect_btn, self.dv_disconnect_btn]:
@@ -310,10 +308,10 @@ class ConnectionTab(QWidget):  # TODO: bench_test/ui/tabs/connection_tab.py'ye t
 
     def _update_summary(self):
         lines = []
-        lines.append(f"Valve A (SV-01):  {'Connected - ' + self.port_a.currentText() if self.ctrl_a.is_connected() else 'Not connected'}")
-        lines.append(f"Valve B (SY-07B): {'Connected - ' + self.port_b.currentText() if self.ctrl_b.is_connected() else 'Not connected'}")
+        lines.append(f"Valve A (SV-01)    : {'Connected - ' + self.port_a.currentText() if self.ctrl_a.is_connected() else 'Not connected'}")
+        lines.append(f"Valve B (SY-07B)  : {'Connected - ' + self.port_b.currentText() if self.ctrl_b.is_connected() else 'Not connected'}")
         dv_connected = self.dv_ctrl._is_connected()
-        lines.append(f"DropSens:         {'Connected (DropView 8400M)' if dv_connected else 'Not connected'}")
+        lines.append(f"DropSens             : {'Connected (DropView 8400M)' if dv_connected else 'Not connected'}")
         self.summary_text.setPlainText("\n".join(lines))
 
     def _on_dv_status_summary(self, connected):

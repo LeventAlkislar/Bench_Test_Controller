@@ -147,7 +147,7 @@ class RecipeTab(QWidget):
 
         fla.addWidget(QLabel("Valve A:"))
         self.step_port = QSpinBox(); self.step_port.setRange(0, 8); self.step_port.setMaximumWidth(55)
-        self.step_port.setToolTip("0 = no change, 1-8 = port")
+        self.step_port.setToolTip("0 = No change, 1-8 = port")
         fla.addWidget(self.step_port)
 
         fla.addWidget(QLabel("Valve B:"))
@@ -162,7 +162,7 @@ class RecipeTab(QWidget):
         self.step_dur.setMaximumWidth(80)
         fla.addWidget(self.step_dur)
 
-        fla.addWidget(QLabel("Desc:"))
+        fla.addWidget(QLabel("Description:"))
         self.step_desc = QLineEdit(); self.step_desc.setMaximumWidth(120)
         fla.addWidget(self.step_desc)
 
@@ -171,9 +171,9 @@ class RecipeTab(QWidget):
         self.step_dv.addItems(_DV_COMBO_LABELS)
         fla.addWidget(self.step_dv)
 
-        fla.addWidget(QLabel(".scr:"))
+        fla.addWidget(QLabel("*.scr:"))
         self.step_scr = QLineEdit(); self.step_scr.setMaximumWidth(120)
-        self.step_scr.setPlaceholderText("Boş = Script Editor sekmesindeki dosya")
+        self.step_scr.setPlaceholderText("Boş = From Script Editor")
         fla.addWidget(self.step_scr)
         fla.addWidget(_btn("...", self._browse_step_scr))
         fla.addWidget(_btn("Add Step", self._add_step, "#4CAF50"))
@@ -196,10 +196,10 @@ class RecipeTab(QWidget):
 
         # ── Step buttons ──────────────────────────────────────
         sb = QHBoxLayout()
-        sb.addWidget(_btn("Remove Selected", self._remove_step))
+        sb.addWidget(_btn("Duplicate",       self._duplicate))
         sb.addWidget(_btn("Move Up",         self._move_up))
         sb.addWidget(_btn("Move Down",       self._move_down))
-        sb.addWidget(_btn("Duplicate",       self._duplicate))
+        sb.addWidget(_btn("Remove Selected", self._remove_step))
         sb.addWidget(_btn("Clear All",       self._clear_all))
         sb.addWidget(QFrame())
         sb.addWidget(_btn("Set Step Loop",   self._set_loop,   "#9C27B0"))

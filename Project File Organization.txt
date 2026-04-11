@@ -1,0 +1,50 @@
+bench_test/
+├── main.py                        # Giriş noktası — sadece QApplication + MainWindow
+├── config.py                      # Tüm sabitler: threshold, sleep, pencere adları
+│
+├── valve/
+│   ├── protocol.py                # SV01Protocol — saf protokol, bağımlılıksız
+│   ├── base_controller.py         # BaseValveController (ABC): connect/send_command/wait
+│   ├── multiport.py               # ValveController (8-port)
+│   └── injector.py                # InjectorValveController (6-port)
+│
+├── dropview/
+│   ├── script_generator.py        # Mevcut dropview_script_generator.py (neredeyse hazır)
+│   ├── automator.py               # Mevcut orchestrator.py'nin adım fonksiyonları
+│   ├── vision.py                  # find_on_screen, wait_for_image, match_score — izole
+│   └── controller.py              # DropViewController (QObject + polling)
+│
+├── recipe/
+│   ├── models.py                  # Recipe, RecipeStep, StepLoop dataclass'ları
+│   └── runner.py                  # RecipeRunner thread
+│
+├── ui/
+│   ├── main_window.py             # MainWindow
+│   └── tabs/
+│       ├── connection_tab.py
+│       ├── manual_tab.py
+│       ├── script_editor_tab.py
+│       ├── recipe_tab.py
+│       └── log_tab.py
+│
+└── utils/
+    └── paths.py                   # Mevcut common.py (yeniden adlandırılmış)
+
+
+
+Bağlantı (Connect/Disconnect)	 → bench_test/ui/tabs/connection_tab.py
+Manuel valf kontrolü		 → bench_test/ui/tabs/manual_tab.py
+Script oluşturma		 → bench_test/ui/tabs/script_editor_tab.py
+Recipe oluşturma/çalıştırma	 → bench_test/ui/tabs/recipe_tab.py
+Log				 → bench_test/ui/tabs/log_tab.py
+Valf protokolü			 → bench_test/valve/protocol.py
+Valf bağlantı/komut		 → bench_test/valve/base_controller.py
+Valve A komutları		 → bench_test/valve/multiport.py
+Valve B komutları		 → bench_test/valve/injector.py
+DropView ekran otomasyonu	 → bench_test/dropview/automator.py
+Ekran görüntüsü eşleme		 → bench_test/dropview/vision.py
+DropView GUI kontrolü		 → bench_test/dropview/controller.py
+Recipe adım modelleri		 → bench_test/recipe/models.py
+Recipe çalıştırma motoru	 → bench_test/recipe/runner.py
+Sabitler			 → bench_test/config.py
+Dosya/dizin yönetimi		 → bench_test/utils/paths.py

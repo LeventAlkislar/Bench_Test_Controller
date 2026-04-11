@@ -26,7 +26,7 @@ class LogTab(QWidget):
         btns = QHBoxLayout()
         btns.addWidget(_btn("Clear Log",     self.log.clear))
         btns.addWidget(_btn("Save Log",      self._save))
-        btns.addWidget(_btn("Zaman Damgasi", self._insert_timestamp))
+        btns.addWidget(_btn("Time Stamp", self._insert_timestamp))
         btns.addStretch()
         layout.addLayout(btns)
 
