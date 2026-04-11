@@ -184,7 +184,6 @@ def _count_and_clear_scripts(ms_hwnd, listbox_x, listbox_y):
 
 def _delete_scripts_above(ms_hwnd, listbox_x, listbox_y, count):
     if count == 0:
-        print("│    Silinecek script yok.")
         return
     pyautogui.click(listbox_x, listbox_y)
     time.sleep(SLEEP_AFTER_CLICK)
@@ -201,19 +200,15 @@ def _delete_scripts_above(ms_hwnd, listbox_x, listbox_y, count):
 def step_launch_dropview():
     """Sadece DropView.exe'yi başlatır, bağlanmaz."""
     if window_exists(DROPVIEW_WINDOW_NAME):
-        print("│  DropView zaten açık.")
         return
-    print("│  DropView başlatılıyor ...")
     subprocess.Popen([_get_dropview_exe()])
     find_window(DROPVIEW_WINDOW_NAME, timeout=TIMEOUT_WINDOW_OPEN)
     time.sleep(SLEEP_AFTER_LAUNCH)
-    print("│  DropView penceresi açıldı.")
 
 
 def step_connect_dropsens():
     """Sadece Ctrl+C ile DropSens'e bağlanır."""
     if _is_dropview_connected():
-        print("│  DropSens zaten bağlı.")
         return
     if not window_exists(DROPVIEW_WINDOW_NAME):
         raise RuntimeError("DropView penceresi açık değil.")
@@ -232,7 +227,6 @@ def step_connect_dropsens():
     time.sleep(SLEEP_AFTER_COMMAND)
 
     if window_exists(CONNECTING_DIALOG):
-        print("│    Bağlanıyor, dialog bekleniyor ...")
         wait_for_window_close(CONNECTING_DIALOG, timeout=TIMEOUT_WINDOW_OPEN)
 
     try:
@@ -248,7 +242,6 @@ def step_connect_dropsens():
         raise RuntimeError(
             "DropSens bağlantı sinyali alındı ancak son doğrulama başarısız."
         )
-    print("│  DropSens bağlandı.")
 
 
 def step_disconnect_dropsens():
@@ -256,7 +249,6 @@ def step_disconnect_dropsens():
     if not window_exists(DROPVIEW_WINDOW_NAME):
         return
     if not _is_dropview_connected():
-        print("│  DropSens zaten bağlı değil.")
         return
 
     dv_hwnd = find_window(DROPVIEW_WINDOW_NAME, timeout=10)
@@ -268,12 +260,10 @@ def step_disconnect_dropsens():
     win32api.keybd_event(win32con.VK_CONTROL, 0, win32con.KEYEVENTF_KEYUP, 0)
     time.sleep(SLEEP_AFTER_COMMAND)
     wait_until_disconnected(timeout=TIMEOUT_CLOSE_WINDOW)
-    print("│  DropSens bağlantısı kesildi.")
 
 def step_stop_measure():
     """Stop butonuna basar, ölçümün durmasını bekler, Exit ile Multiscript Editor'ü kapatır."""
     if not window_exists(MULTISCRIPT_WINDOW):
-        print("│  Multiscript Editor açık değil — Stop Measure atlandı.")
         return
 
     ms_hwnd = find_window(MULTISCRIPT_WINDOW, timeout=5)
@@ -284,11 +274,9 @@ def step_stop_measure():
     pyautogui.click(sx, sy)
     time.sleep(SLEEP_AFTER_COMMAND)
 
-    print("│  Ölçümün durması bekleniyor (sarı nokta kaybolacak) ...")
     wait_for_image_gone(_IMG["yellow_dot_selected"], timeout=TIMEOUT_STOP_MEASURE,
                         poll_interval=POLL_INTERVAL_SLOW, threshold=THRESHOLD_HIGH)
 
-    print("│  Yeşil nokta bekleniyor ...")
     wait_for_image(_IMG["green_dot_selected"], timeout=15,
                    poll_interval=POLL_INTERVAL_NORMAL, threshold=THRESHOLD_HIGH)
 
@@ -297,7 +285,6 @@ def step_stop_measure():
     time.sleep(SLEEP_AFTER_FOCUS)
 
     wait_for_window_close(MULTISCRIPT_WINDOW, timeout=TIMEOUT_CLOSE_WINDOW)
-    print("│  Multiscript Editor kapatıldı.")
 
 def step_exit_dropview(config: dict, log_fn=None):
     """Ctrl+D ile bağlantıyı kes + Alt+F4 ile DropView'i kapat."""
@@ -360,16 +347,11 @@ def step_exit_dropview(config: dict, log_fn=None):
 
 def step_start_dropview(config: dict):
     if window_exists(DROPVIEW_WINDOW_NAME) and _is_dropview_connected():
-        print("│  [Start DropView] DropView zaten açık ve Connected — atlandı.")
         return
     if not window_exists(DROPVIEW_WINDOW_NAME):
-        print("│  DropView başlatılıyor ...")
         subprocess.Popen([_get_dropview_exe()])
         find_window(DROPVIEW_WINDOW_NAME, timeout=TIMEOUT_WINDOW_OPEN)
         time.sleep(SLEEP_AFTER_LAUNCH)
-        print("│  DropView penceresi açıldı.")
-    else:
-        print("│  DropView zaten açık, bağlantı kurulmaya çalışılıyor ...")
 
     dv_hwnd = find_window(DROPVIEW_WINDOW_NAME, timeout=10)
     if win32gui.IsIconic(dv_hwnd):
@@ -385,10 +367,7 @@ def step_start_dropview(config: dict):
     time.sleep(SLEEP_AFTER_COMMAND)
 
     if window_exists(CONNECTING_DIALOG):
-        print("│    Bağlanıyor, dialog bekleniyor ...")
         wait_for_window_close(CONNECTING_DIALOG, timeout=TIMEOUT_WINDOW_OPEN)
-    else:
-        print("│    Bağlantı popup'ı zaten kapandı, devam ediliyor ...")
 
     try:
         wait_until_connected(timeout=TIMEOUT_CONNECT)
@@ -404,7 +383,6 @@ def step_start_dropview(config: dict):
             "DropSens bağlantı sinyali alındı ancak son doğrulama başarısız. "
             "Lütfen tekrar deneyin."
         )
-    print("│  DropSens bağlandı.")
 
 
 def step_start_measure(config: dict):
@@ -480,10 +458,8 @@ def step_start_measure(config: dict):
     time.sleep(SLEEP_AFTER_COMMAND)
 
     if window_exists(WARNING_UNSAVED):
-        print("│    Uyari penceresi kapatılıyor ...")
         pyautogui.press("enter")
         time.sleep(SLEEP_AFTER_FOCUS)
 
-    print("│  Ölçüm başlaması bekleniyor (sarı nokta) ...")
     wait_for_image(_IMG["yellow_dot_selected"], timeout=30,
                    poll_interval=POLL_INTERVAL_SLOW, threshold=THRESHOLD_HIGH)

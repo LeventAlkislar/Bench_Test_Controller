@@ -45,7 +45,7 @@ class StepLoopDialog(QDialog):
     def __init__(self, parent, total_steps, existing_loops, selected_steps=None):
         super().__init__(parent)
         self.setWindowTitle("Set Step Loop Range")
-        self.setFixedSize(400, 260)
+        self.setFixedSize(350, 210)
         self.result_loop = None
         self.existing_loops = existing_loops
         self.total_steps = total_steps
@@ -53,12 +53,12 @@ class StepLoopDialog(QDialog):
         layout = QVBoxLayout(self)
 
         layout.addWidget(_lbl("Create a loop range for specific steps:", bold=True))
-        layout.addWidget(_lbl("Steps within this range will repeat the specified number of times.", color="#888"))
+        layout.addWidget(_lbl("Steps within this range will repeat the specified \nnumber of times.", color="#888"))
 
         form = QFormLayout()
-        self.start_spin = QSpinBox(); self.start_spin.setRange(1, total_steps)
-        self.end_spin   = QSpinBox(); self.end_spin.setRange(1, total_steps)
-        self.loop_spin  = QSpinBox(); self.loop_spin.setRange(1, 999); self.loop_spin.setValue(2)
+        self.start_spin = QSpinBox(); self.start_spin.setRange(1, total_steps); self.start_spin.setFixedHeight(22)
+        self.end_spin   = QSpinBox(); self.end_spin.setRange(1, total_steps); self.end_spin.setFixedHeight(22)
+        self.loop_spin  = QSpinBox(); self.loop_spin.setRange(1, 999); self.loop_spin.setValue(2); self.loop_spin.setFixedHeight(22)
 
         if selected_steps:
             self.start_spin.setValue(selected_steps[0])
@@ -187,6 +187,8 @@ class RecipeTab(QWidget):
             ["Step #", "Valve A", "Valve B", "Duration (min)", "Description", "DropView Action", "Script (.scr)", "Loop Info"])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        self.table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
+        self.table.verticalHeader().setDefaultSectionSize(22)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.DoubleClicked)
         self.table.itemChanged.connect(self._on_item_changed)

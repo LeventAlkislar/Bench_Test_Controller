@@ -26,11 +26,11 @@ class ScriptEditorTab(QWidget):
         layout = QVBoxLayout(self)
 
         # ── Yol ───────────────────────────────────────────────
-        path_grp = QGroupBox("Script Dosyası")
+        path_grp = QGroupBox("Script File")
         path_lay = QHBoxLayout(path_grp)
         self.path_edit = QLineEdit()
         self.path_edit.setReadOnly(True)
-        self.path_edit.setPlaceholderText("Henüz kaydedilmedi...")
+        self.path_edit.setPlaceholderText("Not saved yet...")
         path_lay.addWidget(self.path_edit)
         path_lay.addWidget(_btn("New",     self._new))
         path_lay.addWidget(_btn("Load",    self._load))
@@ -39,7 +39,7 @@ class ScriptEditorTab(QWidget):
         layout.addWidget(path_grp)
 
         # ── Parametreler ───────────────────────────────────────
-        param_grp = QGroupBox("Parametreler")
+        param_grp = QGroupBox("Parameters")
         form      = QFormLayout(param_grp)
 
         method_row = QHBoxLayout()
@@ -52,35 +52,35 @@ class ScriptEditorTab(QWidget):
 
         csv_row = QHBoxLayout()
         self.csv_edit = QLineEdit()
-        self.csv_edit.setPlaceholderText("C:\\...\\output.csv")
+        self.csv_edit.setPlaceholderText("C:\\...\\measurement-001.csv")
         self.csv_edit.textChanged.connect(self._mark_modified)
         csv_row.addWidget(self.csv_edit)
         csv_row.addWidget(_btn("Browse", self._browse_csv))
-        form.addRow("CSV Çıktı:", csv_row)
+        form.addRow("CSV File:", csv_row)
 
         self.repeat_spin = QSpinBox()
         self.repeat_spin.setRange(1, 99999)
         self.repeat_spin.setValue(1440)
         self.repeat_spin.valueChanged.connect(self._mark_modified)
-        form.addRow("Tekrar Sayısı:", self.repeat_spin)
+        form.addRow("Repeat Count:", self.repeat_spin)
 
         self.wait_spin = QDoubleSpinBox()
         self.wait_spin.setRange(1.0, 3600.0)
         self.wait_spin.setValue(47.0)
         self.wait_spin.setSuffix(" sn")
         self.wait_spin.valueChanged.connect(self._mark_modified)
-        form.addRow("Bekleme Süresi:", self.wait_spin)
+        form.addRow("Wait Duration:", self.wait_spin)
 
         layout.addWidget(param_grp)
 
         # ── XML Önizleme ───────────────────────────────────────
-        prev_grp = QGroupBox("XML Önizleme")
+        prev_grp = QGroupBox("XML Preview")
         prev_lay = QVBoxLayout(prev_grp)
         self.xml_preview = QTextEdit()
         self.xml_preview.setReadOnly(True)
-        self.xml_preview.setMaximumHeight(200)
+        self.xml_preview.setFixedHeight(380)
         prev_lay.addWidget(self.xml_preview)
-        prev_lay.addWidget(_btn("Önizlemeyi Güncelle", self._update_preview))
+        prev_lay.addWidget(_btn("Update Preview", self._update_preview))
         layout.addWidget(prev_grp)
         layout.addStretch()
 
@@ -105,14 +105,13 @@ class ScriptEditorTab(QWidget):
                 self.xml_preview.setPlainText(f.read())
             os.unlink(tmp_path)
         except Exception as e:
-            self.xml_preview.setPlainText(f"Önizleme hatası: {e}")
+            self.xml_preview.setPlainText(f"Preview error: {e}")
 
     def _restore_last_scr(self):
         last = get_last("scr_last_used", "")
         if last and __import__("os").path.isfile(last):
             try:
                 self._load_from_path(last)
-                self.log_signal.emit(f"Son script yüklendi: {last}")
             except Exception:
                 pass
 
@@ -136,7 +135,7 @@ class ScriptEditorTab(QWidget):
 
         wait = actions.find(".//action[@type='WAIT']")
         if wait is not None:
-            ms = int(wait.get("timeMS", 47000))
+            ms = int(wait.get("timeMS", 47500))
             self.wait_spin.setValue(ms / 1000)
 
         self._current_path = path
@@ -153,13 +152,12 @@ class ScriptEditorTab(QWidget):
         self.method_edit.setText("")
         self.csv_edit.setText("")
         self.repeat_spin.setValue(1440)
-        self.wait_spin.setValue(47.0)
+        self.wait_spin.setValue(47.5)
         self.xml_preview.clear()
-        self.log_signal.emit("Yeni script formu açıldı.")
 
     def _load(self):
-        path = open_file(self, "Script Dosyası Aç", "scr_open_dir",
-                         "Script dosyası (*.scr);;Tüm dosyalar (*.*)")
+        path = open_file(self, "Open Script File", "scr_open_dir",
+                         "Script file (*.scr);;All Files (*.*)")
         if not path:
             return
         try:
@@ -170,7 +168,7 @@ class ScriptEditorTab(QWidget):
                 remember("csv_output_dir", self.csv_edit.text())
             self.log_signal.emit(f"Script yüklendi: {path}")
         except Exception as e:
-            QMessageBox.critical(self, "Hata", f"Dosya yüklenemedi: {e}")
+            QMessageBox.critical(self, "Error", f"File can not be loaded: {e}")
 
     def _save(self):
         if not self._current_path:
@@ -179,8 +177,8 @@ class ScriptEditorTab(QWidget):
         self._write_scr(self._current_path)
 
     def _save_as(self):
-        path = save_file(self, "Script Dosyasını Kaydet", "scr_save_dir",
-                         "Script dosyası (*.scr);;Tüm dosyalar (*.*)", ".scr")
+        path = save_file(self, "Save Script File", "scr_save_dir",
+                         "Script file (*.scr);;All files (*.*)", ".scr")
         if not path:
             return
         self._current_path = path
@@ -189,10 +187,10 @@ class ScriptEditorTab(QWidget):
 
     def _write_scr(self, path: str):
         if not self.method_edit.text():
-            QMessageBox.warning(self, "Uyarı", "Method dosyası seçilmedi.")
+            QMessageBox.warning(self, "Warning", "Method file not chosen.")
             return
         if not self.csv_edit.text():
-            QMessageBox.warning(self, "Uyarı", "CSV çıktı yolu girilmedi.")
+            QMessageBox.warning(self, "Warning", "CSV path not chosen.")
             return
         try:
             generate_dropview_script(
@@ -208,19 +206,19 @@ class ScriptEditorTab(QWidget):
             self.scr_changed.emit(path)
             self.log_signal.emit(f"Script kaydedildi: {path}")
             self._update_preview()
-            QMessageBox.information(self, "Başarıldı", f"Script kaydedildi:\n{path}")
+            QMessageBox.information(self, "Success", f"Script saved:\n{path}")
         except Exception as e:
-            QMessageBox.critical(self, "Hata", f"Kaydetme hatası: {e}")
+            QMessageBox.critical(self, "Fault", f"Save fault: {e}")
 
     def _browse_method(self):
-        p = open_file(self, "Method Dosyası Seç", "method_dir",
-                      "DropView Method (*.tp);;Tüm dosyalar (*.*)")
+        p = open_file(self, "Select Method File", "method_dir",
+                      "DropView Method (*.tp);;All files (*.*)")
         if p:
             self.method_edit.setText(p)
 
     def _browse_csv(self):
-        p = save_file(self, "CSV Çıktı Dosyası", "csv_output_dir",
-                      "CSV dosyası (*.csv)", ".csv")
+        p = save_file(self, "CSV File", "csv_output_dir",
+                      "CSV file (*.csv)", ".csv")
         if p:
             self.csv_edit.setText(p)
 
