@@ -50,13 +50,11 @@ class ScriptEditorTab(QWidget):
         method_row.addWidget(_btn("Browse", self._browse_method))
         form.addRow("Method (.tp):", method_row)
 
-        csv_row = QHBoxLayout()
         self.csv_edit = QLineEdit()
-        self.csv_edit.setPlaceholderText("C:\\...\\measurement-001.csv")
-        self.csv_edit.textChanged.connect(self._mark_modified)
-        csv_row.addWidget(self.csv_edit)
-        csv_row.addWidget(_btn("Browse", self._browse_csv))
-        form.addRow("CSV File:", csv_row)
+        self.csv_edit.setReadOnly(True)
+        self.csv_edit.setPlaceholderText("[Oturum başladığında otomatik ayarlanır]")
+        self.csv_edit.setStyleSheet("color: #888; font-style: italic;")
+        form.addRow("CSV File:", self.csv_edit)
 
         self.repeat_spin = QSpinBox()
         self.repeat_spin.setRange(1, 99999)
@@ -88,15 +86,16 @@ class ScriptEditorTab(QWidget):
         self._modified = True
 
     def _update_preview(self):
-        if not self.method_edit.text() or not self.csv_edit.text():
+        if not self.method_edit.text():
             return
+        csv_path = self.csv_edit.text() or "[session_dir]\\measurements\\part_number.csv"
         import tempfile, os
         try:
             with tempfile.NamedTemporaryFile(suffix=".scr", delete=False) as tmp:
                 tmp_path = tmp.name
             generate_dropview_script(
                 method_file=self.method_edit.text(),
-                output_csv=self.csv_edit.text(),
+                output_csv=csv_path,
                 repeat_times=self.repeat_spin.value(),
                 wait_ms=int(self.wait_spin.value() * 1000),
                 output_script_path=tmp_path
@@ -195,7 +194,7 @@ class ScriptEditorTab(QWidget):
         try:
             generate_dropview_script(
                 method_file=self.method_edit.text(),
-                output_csv=self.csv_edit.text(),
+                output_csv=csv_path,
                 repeat_times=self.repeat_spin.value(),
                 wait_ms=int(self.wait_spin.value() * 1000),
                 output_script_path=path
@@ -216,11 +215,6 @@ class ScriptEditorTab(QWidget):
         if p:
             self.method_edit.setText(p)
 
-    def _browse_csv(self):
-        p = save_file(self, "CSV File", "csv_output_dir",
-                      "CSV file (*.csv)", ".csv")
-        if p:
-            self.csv_edit.setText(p)
 
     def get_current_scr_path(self) -> str:
         return self._current_path

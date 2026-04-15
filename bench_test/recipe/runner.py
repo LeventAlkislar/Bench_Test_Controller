@@ -25,15 +25,23 @@ DROPVIEW_ZERO_DURATION_OK = {"start_dropview", "start_measure", "stop_measure", 
 class RecipeRunner(threading.Thread):
     def __init__(self, controller_a, controller_b, recipe: Recipe,
                  status_queue: queue.Queue, stop_event: threading.Event,
-                 dropview_ctrl: Optional[DropViewController] = None):
+                 dropview_ctrl: Optional[DropViewController] = None,
+                 session_scr_path: str = ""):
         super().__init__(daemon=True)
-        self.controller_a  = controller_a
-        self.controller_b  = controller_b
-        self.recipe        = recipe
-        self.status_queue  = status_queue
-        self.stop_event    = stop_event
-        self.dropview_ctrl = dropview_ctrl
-        self.pause_event   = threading.Event()
+        self.controller_a     = controller_a
+        self.controller_b     = controller_b
+        self.recipe           = recipe
+        self.status_queue     = status_queue
+        self.stop_event       = stop_event
+        self.dropview_ctrl    = dropview_ctrl
+        self.session_scr_path = session_scr_path
+        self.pause_event      = threading.Event()
+        self.pause_event.set()
+
+    def pause(self):
+        self.pause_event.clear()
+
+    def resume(self):
         self.pause_event.set()
 
     def _log(self, msg):
@@ -68,7 +76,10 @@ class RecipeRunner(threading.Thread):
                     f"Adım {step_num}: DropView bağlantısı yok — ölçüm başlatılamadı. "
                     "Lütfen önce Start DropView adımı ekleyin."))
                 return False
-            ok = dv.do_start_measure(step.dropview_scr, log_fn=self._log)
+            scr_path = self.session_scr_path or step.dropview_scr
+            if scr_path:
+                self._log(f"Script: {scr_path}")
+            ok = dv.do_start_measure(scr_path, log_fn=self._log)
             if not ok:
                 self.status_queue.put(("error", f"Adım {step_num}: Start Measure başarısız."))
                 return False

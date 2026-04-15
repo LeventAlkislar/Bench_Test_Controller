@@ -17,7 +17,6 @@ class RecipeStep:
     description:      str  = ""
     valve_b_state:    int  = 0       # 0=yok, 1=Load, 2=Inject
     dropview_action:  str  = "none"  # "none" | "start_dropview" | "start_measure" | "stop_measure" | "exit_dropview"
-    dropview_scr:     str  = ""      # .scr dosya yolu (boş = mevcut)
 
 
 @dataclass

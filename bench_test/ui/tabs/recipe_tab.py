@@ -5,6 +5,7 @@ import queue
 import threading
 
 from dataclasses import asdict
+from typing import List, Optional
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGridLayout,
     QLabel, QLineEdit, QPushButton, QComboBox, QSpinBox,
@@ -107,17 +108,20 @@ class RecipeTab(QWidget):
 
     def __init__(self, ctrl_a: ValveController, ctrl_b: InjectorValveController,
                  dv_ctrl: DropViewController,
-                 script_tab: "ScriptEditorTab" = None):
+                 script_tab: "ScriptEditorTab" = None,
+                 package_tab: "PackageTab" = None):          # ← YENİ
         super().__init__()
         self.ctrl_a = ctrl_a; self.ctrl_b = ctrl_b
         self.dv_ctrl = dv_ctrl
-        self.script_tab = script_tab
+        self.script_tab  = script_tab
+        self.package_tab = package_tab                        # ← YENİ
         self.recipe_steps: List[RecipeStep] = []
         self.step_loops:   List[StepLoop]   = []
         self.recipe_runner: Optional[RecipeRunner] = None
         self.stop_event    = threading.Event()
         self.status_queue  = queue.Queue()
         self._ignoring_changes = False
+        self._current_recipe_path = ""                        # ← YENİ
 
         self._build()
 
@@ -171,11 +175,6 @@ class RecipeTab(QWidget):
         self.step_dv.addItems(_DV_COMBO_LABELS)
         fla.addWidget(self.step_dv)
 
-        fla.addWidget(QLabel("*.scr:"))
-        self.step_scr = QLineEdit(); self.step_scr.setMaximumWidth(120)
-        self.step_scr.setPlaceholderText("Boş = From Script Editor")
-        fla.addWidget(self.step_scr)
-        fla.addWidget(_btn("...", self._browse_step_scr))
         fla.addWidget(_btn("Add Step", self._add_step, "#4CAF50"))
         layout.addWidget(ga)
 
@@ -261,7 +260,6 @@ class RecipeTab(QWidget):
         vb_state = int(vb_str[0]) if vb_str and vb_str[0].isdigit() else 0
         dv_idx   = self.step_dv.currentIndex()
         dv_action = _DV_IDX_TO_KEY.get(dv_idx, "none")
-        dv_scr = self.step_scr.text().strip()
 
         # Süre 0 sadece DropView aksiyonu olduğunda geçerli
         if duration <= 0 and dv_action == "none":
@@ -270,30 +268,12 @@ class RecipeTab(QWidget):
                 "None aksiyonunda süre 0 girilemeez.")
             return
 
-        # start_measure için .scr dosyası zorunlu
-        if dv_action == "start_measure":
-            if not dv_scr:
-                editor_path = self.script_tab.get_current_scr_path() if self.script_tab else ""
-                if editor_path:
-                    dv_scr = editor_path
-                    self.step_scr.setText(dv_scr)
-                else:
-                    last = get_last("scr_last_used", "")
-                    if last and os.path.isfile(last):
-                        dv_scr = last
-                        self.step_scr.setText(dv_scr)
-                    else:
-                        QMessageBox.warning(self, "Uyarı",
-                            "DropView 'Start Measure' için .scr dosyası gerekli.\n"
-                            "Lütfen Script Editor'de bir dosya açın veya .scr kutusuna yol girin.")
-                        return
-
         # En az bir aksiyon olmalı
         if port == 0 and vb_state == 0 and dv_action == "none":
             QMessageBox.warning(self, "Warning", "At least one action must be specified"); return
 
         step = RecipeStep(port=port, duration_minutes=duration, description=desc,
-                          valve_b_state=vb_state, dropview_action=dv_action, dropview_scr=dv_scr)
+                          valve_b_state=vb_state, dropview_action=dv_action)
         self.recipe_steps.append(step)
         self._refresh_table(); self._update_total_time()
         log_msg = (f"Adım eklendi: A=Port{port}, B={VALVE_B_LABELS[vb_state]}, "
@@ -302,10 +282,20 @@ class RecipeTab(QWidget):
             log_msg += f"  |  {desc}"
         self.log_signal.emit(log_msg)
 
-    def _browse_step_scr(self):
-        p = open_file(self, "Script Dosyası Seç", "scr_open_dir",
-                       "Script dosyası (*.scr);;Tüm dosyalar (*.*)")
-        if p: self.step_scr.setText(p)
+    def _get_session_scr_name(self) -> str:
+        """Session'dan patch'li .scr dosyasının adını döndürür."""
+        if self.package_tab:
+            session = self.package_tab.get_session()
+            if session:
+                path = session.get_file_path("script") or ""
+                if path:
+                    return os.path.basename(path)
+        # Session yoksa Script Editor'daki aktif dosyayı göster
+        if self.script_tab:
+            path = self.script_tab.get_current_scr_path()
+            if path:
+                return f"{os.path.basename(path)} *"  # * = henüz patch'lenmemiş
+        return "--"
 
     def _refresh_table(self):
         self._ignoring_changes = True
@@ -319,7 +309,7 @@ class RecipeTab(QWidget):
                 str(step.duration_minutes),
                 step.description,
                 DROPVIEW_LABELS.get(step.dropview_action, "-"),
-                os.path.basename(step.dropview_scr) if (step.dropview_action == "start_measure" and step.dropview_scr) else "--",
+                self._get_session_scr_name() if step.dropview_action == "start_measure" else "--",
                 loop_info
             ]
             for j, v in enumerate(vals):
@@ -351,9 +341,8 @@ class RecipeTab(QWidget):
             elif col == COL_DUR:
                 d = float(val)
                 if d >= 0:
-                    # Süre 0 kontrolü: None aksiyonunda izin verme
                     if d <= 0 and step.dropview_action == "none":
-                        pass  # Hata vermeden eski değeri koru
+                        pass
                     else:
                         step.duration_minutes = d
                 else:
@@ -370,22 +359,13 @@ class RecipeTab(QWidget):
                 }
                 step.dropview_action = _dv_map.get(val.lower(), "none")
             elif col == COL_SCR:
-                pass  # Çift tıkla ile güncellenir
+                pass
         except (ValueError, TypeError):
             pass
         self._refresh_table(); self._update_total_time()
 
     def _on_cell_double_clicked(self, row: int, col: int):
-        if col != COL_SCR: return
-        if row >= len(self.recipe_steps): return
-        step = self.recipe_steps[row]
-        if step.dropview_action != "start_measure":
-            return
-        path = open_file(self, "Script Dosyası Seç", "scr_open_dir",
-                         "Script dosyası (*.scr);;Tüm dosyalar (*.*)")
-        if path:
-            step.dropview_scr = path
-            self._refresh_table()
+        pass  # COL_SCR artık readonly — çift tık ile düzenleme yok
 
     def _remove_step(self):
         rows = sorted({i.row() for i in self.table.selectedItems()}, reverse=True)
@@ -417,7 +397,7 @@ class RecipeTab(QWidget):
         if r < len(self.recipe_steps):
             s = self.recipe_steps[r]
             ns = RecipeStep(s.port, s.duration_minutes, s.description + " (copy)",
-                            s.valve_b_state, s.dropview_action, s.dropview_scr)
+                            s.valve_b_state, s.dropview_action)
             self.recipe_steps.insert(r+1, ns)
             self._refresh_table(); self._update_total_time()
 
@@ -483,6 +463,9 @@ class RecipeTab(QWidget):
                     "steps": [asdict(s) for s in self.recipe_steps],
                     "step_loops": [asdict(l) for l in self.step_loops]}
             with open(path, "w") as f: json.dump(data, f, indent=2)
+            self._current_recipe_path = path                  # ← YENİ
+            if self.package_tab:                              # ← YENİ
+                self.package_tab._refresh_refs()              # ← YENİ
             self.log_signal.emit(f"Recipe saved: {path}")
 
     def _load_recipe(self):
@@ -493,14 +476,26 @@ class RecipeTab(QWidget):
                 with open(path) as f: data = json.load(f)
                 self.name_edit.setText(data.get("name", ""))
                 self.loop_spin.setValue(data.get("loop_count", 1))
-                self.recipe_steps = [RecipeStep(**s) for s in data.get("steps", [])]
+                self.recipe_steps = [
+                    RecipeStep(**{k: v for k, v in s.items() if k != "dropview_scr"})
+                    for s in data.get("steps", [])]
                 self.step_loops   = [StepLoop(**l) for l in data.get("step_loops", [])]
                 self._refresh_table(); self._update_loops_display(); self._update_total_time()
+                self._current_recipe_path = path              # ← YENİ
+                if self.package_tab:                          # ← YENİ
+                    self.package_tab._refresh_refs()          # ← YENİ
                 self.log_signal.emit(f"Recipe loaded: {path}")
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to load: {e}")
 
     def _start_recipe(self):
+        # ── Paketi oluştur ────────────────────────────────────
+        if self.package_tab and not self.package_tab.build_package():
+            return
+        # Session .scr yolu artık hazır — COL_SCR sütununu güncelle
+        if self.package_tab and self.package_tab.get_session():
+            self._refresh_table()
+
         if not self.ctrl_a.is_connected() and not self.ctrl_b.is_connected():
             QMessageBox.warning(self, "Warning", "No valves connected"); return
         if not self.recipe_steps:
@@ -509,9 +504,16 @@ class RecipeTab(QWidget):
         self.stop_event.clear()
         recipe = Recipe(self.name_edit.text(), self.recipe_steps.copy(),
                         self.loop_spin.value(), self.step_loops.copy())
+        # Packager'ın ürettiği patch'li .scr yolunu al
+        session_scr = ""
+        if self.package_tab:
+            session = self.package_tab.get_session()
+            if session:
+                session_scr = session.get_file_path("script") or ""
+
         self.recipe_runner = RecipeRunner(
             self.ctrl_a, self.ctrl_b, recipe, self.status_queue, self.stop_event,
-            self.dv_ctrl)
+            self.dv_ctrl, session_scr_path=session_scr)
         self.recipe_runner.start()
 
         self.start_btn.setEnabled(False); self.pause_btn.setEnabled(True); self.stop_btn.setEnabled(True)
@@ -531,6 +533,8 @@ class RecipeTab(QWidget):
         self.start_btn.setEnabled(True); self.pause_btn.setEnabled(False); self.pause_btn.setText("Pause")
         self.stop_btn.setEnabled(False); self.status_lbl.setText("Stopped")
         self.progress.setValue(0); self.progress_lbl.setText("0%")
+        if self.package_tab:                                  # ← YENİ
+            self.package_tab.on_recipe_aborted()              # ← YENİ
         self.log_signal.emit("Recipe stopped")
 
     def _poll_queue(self):
@@ -557,15 +561,19 @@ class RecipeTab(QWidget):
                     self.progress.setValue(100); self.progress_lbl.setText("100%")
                     self.start_btn.setEnabled(True); self.pause_btn.setEnabled(False)
                     self.stop_btn.setEnabled(False)
+                    if self.package_tab:                      # ← YENİ
+                        self.package_tab.on_recipe_completed()  # ← YENİ
                     QMessageBox.information(self, "Recipe Complete", str(data))
                     self.log_signal.emit(str(data))
                 elif msg_type == "finished":
                     self.status_lbl.setText(f"TAMAMLANDI: {data}")
-                    self.progress.setValue(100);
+                    self.progress.setValue(100)
                     self.progress_lbl.setText("100%")
-                    self.start_btn.setEnabled(True);
+                    self.start_btn.setEnabled(True)
                     self.pause_btn.setEnabled(False)
                     self.stop_btn.setEnabled(False)
+                    if self.package_tab:                      # ← YENİ
+                        self.package_tab.on_recipe_completed()  # ← YENİ
                     QMessageBox.information(self, "Recipe Complete", str(data))
                     self.log_signal.emit(str(data))
                 elif msg_type == "stopped":
@@ -574,6 +582,8 @@ class RecipeTab(QWidget):
                     self.status_lbl.setText(f"ERROR: {data}")
                     self.start_btn.setEnabled(True); self.pause_btn.setEnabled(False)
                     self.stop_btn.setEnabled(False)
+                    if self.package_tab:                      # ← YENİ
+                        self.package_tab.on_recipe_aborted()  # ← YENİ
                     QMessageBox.critical(self, "Recipe Error", str(data))
                     self.log_signal.emit(f"Recipe error: {data}")
                 elif msg_type == "warning":

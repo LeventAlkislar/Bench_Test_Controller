@@ -21,7 +21,6 @@ setup_logging()
 from PyQt6.QtWidgets import QApplication
 from bench_test.ui.main_window import MainWindow
 
-
 def main():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
