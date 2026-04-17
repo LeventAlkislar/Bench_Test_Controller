@@ -154,3 +154,35 @@ class MeasurementSetupTab(QWidget):
     def sm(self):
         """ViewerTab ve MainWindow SessionStateMachine'e buradan erişir."""
         return self.package_panel.sm
+
+    def restore_from_session(self, session_dir):
+        """Geçmiş session'daki .tp ve .scr dosyalarını panellere yükler."""
+        from pathlib import Path
+        import json as _json
+
+        path = Path(session_dir)
+        session_json = path / "session.json"
+        if not session_json.is_file():
+            return
+
+        try:
+            with open(session_json, encoding="utf-8") as f:
+                data = _json.load(f)
+        except Exception:
+            return
+
+        files = data.get("files", {})
+
+        # .tp → MethodEditorPanel
+        tp_rel = files.get("tp", "")
+        if tp_rel:
+            tp_abs = path / tp_rel
+            if tp_abs.is_file():
+                self.method_panel.load_from_path(str(tp_abs))
+
+        # .scr → ScriptParamsPanel
+        scr_rel = files.get("script", "")
+        if scr_rel:
+            scr_abs = path / scr_rel
+            if scr_abs.is_file():
+                self.script_panel.restore_from_scr(str(scr_abs))

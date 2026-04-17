@@ -110,3 +110,22 @@ class ScriptParamsPanel(QWidget):
     def is_ready(self) -> bool:
         """Method ve CSV yolu doluysa True."""
         return bool(self.method_edit.text()) and bool(self.csv_edit.text())
+
+    def restore_from_scr(self, scr_path: str):
+        """Geçmiş session .scr dosyasından repeat ve wait parametrelerini yükler."""
+        import xml.etree.ElementTree as ET
+        try:
+            tree = ET.parse(scr_path)
+            root = tree.getroot()
+            for action in root.findall(".//action"):
+                atype = action.get("type", "")
+                if atype == "REPEAT":
+                    times = action.findtext("times")
+                    if times:
+                        self.repeat_spin.setValue(int(times))
+                elif atype == "WAIT":
+                    time_ms = action.get("timeMS")
+                    if time_ms:
+                        self.wait_spin.setValue(float(time_ms) / 1000.0)
+        except Exception:
+            pass  # Parse hatası sessizce geçilir, mevcut değerler korunur

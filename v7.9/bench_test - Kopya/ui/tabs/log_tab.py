@@ -53,16 +53,3 @@ class LogTab(QWidget):
         if path:
             with open(path, "w", encoding="utf-8") as f:
                 f.write(self.log.toPlainText())
-
-    def restore_from_session(self, session_dir):
-        from pathlib import Path
-        log_path = Path(session_dir) / "logs" / "session.log"
-        if not log_path.is_file():
-            return
-        self.log.clear()
-        self.log.append(f"# --- Restored from: {session_dir} ---")
-        with open(log_path, encoding="utf-8", errors="replace") as f:
-            for line in f:
-                self.log.append(line.rstrip())
-        sb = self.log.verticalScrollBar()
-        sb.setValue(0)

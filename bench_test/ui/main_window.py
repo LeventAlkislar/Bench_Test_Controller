@@ -49,10 +49,18 @@ class MainWindow(QMainWindow):
 
         self.setup_tab.sm.aggregate_done.connect(self.viewer_tab._refresh)
         self.setup_tab.sm.log_signal.connect(self.log_tab.append)
+        self.viewer_tab.session_loaded.connect(self._on_session_loaded)
         self.setup_tab.sm.state_changed.connect(
             self.viewer_tab._on_session_state_changed)
 
         self.dv_ctrl.start_polling()
+
+    def _on_session_loaded(self, session_dir: str):
+        from pathlib import Path
+        path = Path(session_dir)
+        self.log_tab.restore_from_session(path)
+        self.recipe_tab.restore_from_session(path)
+        self.setup_tab.restore_from_session(path)
 
     def closeEvent(self, event):
         if self.recipe_tab.recipe_runner and self.recipe_tab.recipe_runner.is_alive():
