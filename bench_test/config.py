@@ -40,3 +40,8 @@ DROPVIEW_EXE_CANDIDATES = [
 # ── pyautogui ayarları ─────────────────────────────────────────
 PYAUTOGUI_FAILSAFE = False
 PYAUTOGUI_PAUSE    = 0.05
+AGGREGATE_INTERVAL_MS = 10_000   # Periyodik aggregate aralığı (ms)
+
+# ── script ayarları ─────────────────────────────────────────
+DEFAULT_REPEAT_COUNT      = 1440
+DEFAULT_WAIT_DURATION_SEC = 47.5

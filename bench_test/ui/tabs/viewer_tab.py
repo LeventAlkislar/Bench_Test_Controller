@@ -67,6 +67,8 @@ _SYSTEM_COLORS = {
     "resumed" : _C_PAUSED,
 }
 
+_C_MEASURE_LINE = (33, 150, 243)
+
 POLL_INTERVAL_MS = 10_000   # 10 saniye
 
 
@@ -79,6 +81,11 @@ class ViewerTab(QWidget):
         self._session      : Optional[MeasurementSession] = None
         self._parse_result : Optional[ParseResult]        = None
         self._marker_items : list = []   # grafikteki marker öğeleri
+
+        self._measure_dots : list = []
+        self._measure_range_hooks: dict = {}
+        self.plot_widget_top = None
+        self.plot_widget_bottom = None
 
         self._build_ui()
         self._setup_poll_timer()
@@ -96,13 +103,13 @@ class ViewerTab(QWidget):
         self.session_lbl.setStyleSheet("color: #888; font-size: 11px;")
         toolbar.addWidget(self.session_lbl, stretch=1)
 
-        toolbar.addWidget(_btn("Load Active Session", self._load_active_session))
-        toolbar.addWidget(_btn("Browse Session…",     self._browse_session))
-        toolbar.addWidget(_btn("Refresh",             self._refresh))
+        toolbar.addWidget(_btn("Load Active Session", self._load_active_session, "#FF9800"))
+        toolbar.addWidget(_btn("Refresh",             self._refresh, "#4CAF50"))
+        toolbar.addWidget(_btn("Browse Session…",     self._browse_session,       "#2196F3"))
 
-        self.delete_btn = _btn("Delete Session", self._delete_session)
+        self.delete_btn = _btn("Delete Session", self._delete_session,  "#F44336")
         self.delete_btn.setEnabled(False)
-        self.delete_btn.setStyleSheet("color: #F44336;")
+#        self.delete_btn.setStyleSheet("color: #F44336;")
         self.delete_btn.setToolTip("Seçili session dizinini kalıcı olarak siler.")
         toolbar.addWidget(self.delete_btn)
 
@@ -172,10 +179,10 @@ class ViewerTab(QWidget):
         layout    = QVBoxLayout(container)
         layout.setContentsMargins(10, 0, 0, 10)
 
-        # ── GroupBox (panel) ─────────────────────────
-        group = QGroupBox("Measurement Timeline")
-        group_layout = QVBoxLayout(group)
-        group_layout.setContentsMargins(10, 10, 10, 10)
+        # ── Top GroupBox (panel) ─────────────────────────
+        top_group = QGroupBox("Measurement Timeline")
+        top_group_layout = QVBoxLayout(top_group)
+        top_group_layout.setContentsMargins(10, 10, 10, 10)
 
         if not _PG_OK:
             lbl = QLabel(
@@ -184,7 +191,8 @@ class ViewerTab(QWidget):
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             lbl.setStyleSheet("color: #F44336; font-size: 13px;")
             layout.addWidget(lbl)
-            self.plot_widget = None
+            self.plot_widget_top = None
+            self.plot_widget_bottom = None
             return container
 
         pg.setConfigOption("background", pg.mkColor(*_C_BG))
@@ -192,27 +200,60 @@ class ViewerTab(QWidget):
 
         # Zaman ekseni için DateAxisItem
         date_axis = DateAxisItem(orientation="bottom")
-        self.plot_widget = pg.PlotWidget(axisItems={"bottom": date_axis})
-        self.plot_widget.setLabel("left",   "Current", units="uA")
-        self.plot_widget.setLabel("bottom", "Time")
-        self.plot_widget.showGrid(x=True, y=True, alpha=0.8)
-        self.plot_widget.getViewBox().setBorder(pg.mkPen((0, 0, 0), width=1))
+        self.plot_widget_top = pg.PlotWidget(axisItems={"bottom": date_axis})
+        self.plot_widget_top.setLabel("left",   "Current", units="uA")
+        self.plot_widget_top.setLabel("bottom", "Time")
+        self.plot_widget_top.showGrid(x=True, y=True, alpha=0.8)
+        self.plot_widget_top.getViewBox().setBorder(pg.mkPen((0, 0, 0), width=1))
 
         # Grafik yüksekliğini daha kısa tut
-        self.plot_widget.setSizePolicy(QSizePolicy.Policy.Expanding,
+        self.plot_widget_top.setSizePolicy(QSizePolicy.Policy.Expanding,
                                        QSizePolicy.Policy.Fixed)
-        self.plot_widget.setFixedHeight(360)   # istersen 220/250/300 yapabilirsin
+        self.plot_widget_top.setFixedHeight(360)   # istersen 220/250/300 yapabilirsin
 
-        self.plot_widget.getViewBox().setMouseMode(
+        self.plot_widget_top.getViewBox().setMouseMode(
             pg.ViewBox.RectMode)   # sürükle = zoom rect; sağ tık = pan
 
         # Legend
-        self.legend = self.plot_widget.addLegend(offset=(10, 10))
+        self.legend = self.plot_widget_top.addLegend(offset=(10, 10))
 
-        group_layout.addWidget(self.plot_widget)
-        layout.addWidget(group)
-        layout.addStretch(1)   # altta boşluk bırakır, grafik alanı daha kısa görünür
+        top_group_layout.addWidget(self.plot_widget_top)
+        layout.addWidget(top_group)
+
+        # ── Bottom GroupBox (panel) ──────────────────────
+        bottom_group = QGroupBox("Mean Measurement Timeline")
+        bottom_group_layout = QVBoxLayout(bottom_group)
+        bottom_group_layout.setContentsMargins(10, 10, 10, 10)
+
+        bottom_date_axis = DateAxisItem(orientation="bottom")
+        self.plot_widget_bottom = pg.PlotWidget(
+            axisItems={"bottom": bottom_date_axis}
+        )
+        self.plot_widget_bottom.setLabel("left", "Current", units="uA")
+        self.plot_widget_bottom.setLabel("bottom", "Time")
+        self.plot_widget_bottom.showGrid(x=True, y=True, alpha=0.8)
+        self.plot_widget_bottom.getViewBox().setBorder(pg.mkPen((0, 0, 0), width=1))
+
+        self.plot_widget_bottom.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Fixed
+        )
+        self.plot_widget_bottom.setFixedHeight(360)
+
+        self.plot_widget_bottom.getViewBox().setMouseMode(
+            pg.ViewBox.RectMode
+        )
+
+        # Üst grafik ile aynı eksen davranışı
+        self.plot_widget_bottom.setXLink(self.plot_widget_top)
+        self.plot_widget_bottom.setYLink(self.plot_widget_top)
+
+        bottom_group_layout.addWidget(self.plot_widget_bottom)
+        layout.addWidget(bottom_group)
+
+        layout.addStretch(1)
         return container
+
 
     # ── Zamanlayıcı ───────────────────────────────────────────────
 
@@ -319,7 +360,7 @@ class ViewerTab(QWidget):
     def _update_meta(self):
         """Session meta bilgilerini annotation paneline yazar."""
         s = self._session
-        created = s.created_at.strftime("%Y-%m-%d %H:%M")
+        created = s.created_at.strftime("%Y-%m-%d %H:%M:%S")
         status_color = {
             "completed"  : "#4CAF50",
             "in_progress": "#2196F3",
@@ -355,7 +396,7 @@ class ViewerTab(QWidget):
         if self._parse_result.manual_notes:
             lines = []
             for n in self._parse_result.manual_notes:
-                ts = n.timestamp.strftime("%m-%d %H:%M")
+                ts = n.timestamp.strftime("%Y-%m-%d %H:%M:%S")
                 lines.append(f"[{ts}] {n.text}")
             self.notes_edit.setPlainText("\n".join(lines))
         else:
@@ -365,7 +406,7 @@ class ViewerTab(QWidget):
         if self._parse_result.system_events:
             lines = []
             for e in self._parse_result.system_events:
-                ts = e.timestamp.strftime("%m-%d %H:%M")
+                ts = e.timestamp.strftime("%Y-%m-%d %H:%M:%S")
                 lines.append(f"[{ts}] {e.detail[:50]}")
             self.sys_edit.setPlainText("\n".join(lines))
         else:
@@ -386,12 +427,12 @@ class ViewerTab(QWidget):
     # ── Grafik çizimi ─────────────────────────────────────────────
 
     def _plot_data(self):
-        if not self.plot_widget:
+        if not self.plot_widget_top:
             return
 
-        self.plot_widget.clear()
-        self.plot_widget.clear()
+        self.plot_widget_top.clear()
         self._marker_items.clear()
+        self._measure_dots.clear()
 
         timestamps, currents = self._read_measurement_data()
 
@@ -400,7 +441,7 @@ class ViewerTab(QWidget):
             return
 
         # Ana seri — Current (uA) -> sadece point, çizgi yok
-        self.plot_widget.plot(
+        self.top_curve = self.plot_widget_top.plot(
             timestamps,
             currents,
             pen=None,   # çizgi çizme
@@ -411,9 +452,42 @@ class ViewerTab(QWidget):
             name="Current (uA)"
         )
 
+
+        # ── Bottom grafik: downsample edilmiş veri ─────────────────
+        if self.plot_widget_bottom:
+            self.plot_widget_bottom.clear()
+
+            self.bottom_curve = self.plot_widget_bottom.plot(
+                timestamps,
+                currents,
+                pen=None,  # çizgi çizme
+                symbol="o",
+                symbolSize=5,
+                symbolBrush=pg.mkBrush(_C_DATA_LINE),
+                symbolPen=pg.mkPen(color=_C_DATA_LINE, width=1),
+                name="Mean Current (uA)"
+            )
+
+            # 🔥 Downsample (GUI'deki: 5x Subsample)
+            self.bottom_curve.setDownsampling(
+                ds=5,
+                auto=False,
+                method='mean'
+            )
+
         # Marker çizgileri
         if self._parse_result:
             self._draw_markers(timestamps)
+
+        # Measure dot'larını doğru konuma yerleştir.
+        # Veri çizildikten sonra auto-range kesinleşsin, sonra dot'lar güncellensin.
+        self.plot_widget_top.getViewBox().enableAutoRange()
+        self.plot_widget_top.getViewBox().autoRange()
+        self._update_measure_dots_for_plot(self.plot_widget_top)
+        if self.plot_widget_bottom:
+            self.plot_widget_bottom.getViewBox().enableAutoRange()
+            self.plot_widget_bottom.getViewBox().autoRange()
+            self._update_measure_dots_for_plot(self.plot_widget_bottom)
 
     def _read_measurement_data(self):
         """
@@ -502,13 +576,20 @@ class ViewerTab(QWidget):
         if not data_timestamps:
             return
 
-        t_min = min(data_timestamps)
+        t_min = min(data_timestamps)-120
         t_max = max(data_timestamps)
 
         # Step marker'ları
         for ev in self._parse_result.step_events:
             t = ev.timestamp.timestamp()
             if not (t_min <= t <= t_max):
+                continue
+
+            if getattr(ev, "marker_kind", "step") == "measure":
+                self._add_measure_marker(
+                    t,
+                    is_start=(getattr(ev, "marker_label", "") == "Start Measure"),
+                )
                 continue
 
             label = self._step_label(ev)
@@ -523,6 +604,17 @@ class ViewerTab(QWidget):
                 color = _C_RESET_LINE  # turuncu
                 width = 3  # kalın
 
+            # Port/Load-Inject önceliği label içeriğinden değil event alanlarından gelsin.
+            if ev.port_a is not None:
+                color = _C_STEP_LINE
+                width = 3
+            elif ev.valve_b is not None:
+                color = _C_RESET_LINE
+                width = 1
+            else:
+                color = _C_RESET_LINE
+                width = 3
+
             self._add_vline(t, color, label, width=width)
 
         # Sistem event marker'ları
@@ -533,46 +625,99 @@ class ViewerTab(QWidget):
             color = _SYSTEM_COLORS.get(ev.event_type, _C_PAUSED)
             self._add_vline(t, color, ev.event_type.upper(), dashed=True)
 
-        # Sistem event marker'ları
-        for ev in self._parse_result.system_events:
-            t = ev.timestamp.timestamp()
-            if not (t_min <= t <= t_max):
-                continue
-            color = _SYSTEM_COLORS.get(ev.event_type, _C_PAUSED)
-            color = _SYSTEM_COLORS.get(ev.event_type, _C_PAUSED)
-            self._add_vline(t, color, ev.event_type.upper(), dashed=True)
-
     def _add_vline(self, x: float, color: tuple, label: str,
                    dashed: bool = False, width: int = 1):
 
         """Dikey InfiniteLine + TextItem ekler."""
-        if not self.plot_widget:
+        if not self.plot_widget_top:
             return
 
         style = Qt.PenStyle.DashLine if dashed else Qt.PenStyle.SolidLine
-        pen   = pg.mkPen(color=color, width=width, style=style)
-        line  = pg.InfiniteLine(
+        pen = pg.mkPen(color=color, width=width, style=style)
+
+        # Üst grafik çizgisi
+        line_top = pg.InfiniteLine(
             pos=x, angle=90, pen=pen, movable=False, label=label,
             labelOpts={
-                "position"  : 0.97,
-                "color"     : color,
-                "fill"      : _C_BG,
-                "border"    : pg.mkPen(color=_C_BG, width=1),
-                "movable"   : False,
+                "position": 0.97,
+                "color": color,
+                "fill": _C_BG,
+                "border": pg.mkPen(color=_C_BG, width=1),
+                "movable": False,
             })
-        self.plot_widget.addItem(line)
-        self._marker_items.append(line)
+        self.plot_widget_top.addItem(line_top)
+        self._marker_items.append(line_top)
+
+        # Alt grafik çizgisi
+        if self.plot_widget_bottom:
+            line_bottom = pg.InfiniteLine(
+                pos=x, angle=90, pen=pen, movable=False, label=label,
+                labelOpts={
+                    "position": 0.97,
+                    "color": color,
+                    "fill": _C_BG,
+                    "border": pg.mkPen(color=_C_BG, width=1),
+                    "movable": False,
+                })
+            self.plot_widget_bottom.addItem(line_bottom)
+            self._marker_items.append(line_bottom)
+
+    def _add_measure_marker(self, x: float, is_start: bool):
+        """Measure event'lerinde sadece nokta cizer."""
+        marker_color = _C_STARTED if is_start else _C_STOPPED
+
+        def _draw_on(plot_widget):
+            if not plot_widget:
+                return
+            dot = pg.ScatterPlotItem(
+                [x], [0.0],
+                size=10,
+                pen=pg.mkPen(marker_color, width=1),
+                brush=pg.mkBrush(marker_color),
+            )
+            plot_widget.addItem(dot)
+            self._marker_items.append(dot)
+            self._measure_dots.append({"plot": plot_widget, "dot": dot, "x": x})
+            self._ensure_measure_dot_tracking(plot_widget)
+            self._update_measure_dots_for_plot(plot_widget)
+
+        _draw_on(self.plot_widget_top)
+        _draw_on(self.plot_widget_bottom)
+
+    def _ensure_measure_dot_tracking(self, plot_widget):
+        """Zoom veya pan sonrasi measure noktalarini ust banda tasir."""
+        if not plot_widget or plot_widget in self._measure_range_hooks:
+            return
+
+        vb = plot_widget.getViewBox()
+
+        def _on_range_changed(*_):
+            self._update_measure_dots_for_plot(plot_widget)
+
+        vb.sigRangeChanged.connect(_on_range_changed)
+        self._measure_range_hooks[plot_widget] = _on_range_changed
+
+    def _update_measure_dots_for_plot(self, plot_widget):
+        """Measure noktalarini mevcut gorunur Y araligina gore konumlar."""
+        if not plot_widget:
+            return
+
+        y_min, y_max = plot_widget.getViewBox().viewRange()[1]
+        y_pos = y_min + (y_max - y_min) * 0.90
+        for item in self._measure_dots:
+            if item["plot"] is plot_widget:
+                item["dot"].setData([item["x"]], [y_pos])
 
     def _step_label(self, ev: StepEvent) -> str:
         """Step marker için kısa etiket: 'S3 P1 Load'"""
-        parts = [f"S{ev.step_no}"]
+        parts = []
         if ev.port_a:
             parts.append(f"P{ev.port_a}")
         if ev.valve_b:
             parts.append(ev.valve_b)
         if ev.loop_info:
             parts.append(ev.loop_info)
-        return " ".join(parts)
+        return " ".join(parts) if parts else "STEP"
 
     def _delete_session(self):
         """Yüklü session dizinini kullanıcı onayı alarak siler."""
@@ -616,15 +761,30 @@ class ViewerTab(QWidget):
         self.notes_edit.clear()
         self.sys_edit.clear()
         self.delete_btn.setEnabled(False)
-        if self.plot_widget:
-            self.plot_widget.clear()
+        if self.plot_widget_top:
+            self.plot_widget_top.clear()
+        if self.plot_widget_bottom:
+            self.plot_widget_bottom.clear()
 
     def _show_no_data_msg(self):
         """Veri yoksa grafik alanına mesaj yazar."""
-        if not self.plot_widget:
+        if not self.plot_widget_top:
             return
         text = pg.TextItem(
             "Veri bulunamadı.\nÖnce Aggregator çalıştırın veya CSV bekleyin.",
             color=(150, 150, 150), anchor=(0.5, 0.5))
-        self.plot_widget.addItem(text)
+        self.plot_widget_top.addItem(text)
         text.setPos(0, 0)
+
+    def _on_session_state_changed(self, state: str):
+        """MainWindow state_changed bağlantısı için."""
+        state_norm = (state or "").strip().lower()
+        if state_norm == "running":
+            if self._session:
+                self._poll_timer.start()
+                self.live_lbl.setText(f"⟳ Canlı mod ({POLL_INTERVAL_MS // 1000}sn)")
+            return
+        if state_norm == "idle":
+            self._poll_timer.stop()
+            self.live_lbl.setText("")
+            self._refresh()

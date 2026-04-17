@@ -108,13 +108,12 @@ class RecipeTab(QWidget):
 
     def __init__(self, ctrl_a: ValveController, ctrl_b: InjectorValveController,
                  dv_ctrl: DropViewController,
-                 script_tab: "ScriptEditorTab" = None,
-                 package_tab: "PackageTab" = None):          # ← YENİ
+                 package_tab=None):
         super().__init__()
         self.ctrl_a = ctrl_a; self.ctrl_b = ctrl_b
         self.dv_ctrl = dv_ctrl
-        self.script_tab  = script_tab
         self.package_tab = package_tab                        # ← YENİ
+
         self.recipe_steps: List[RecipeStep] = []
         self.step_loops:   List[StepLoop]   = []
         self.recipe_runner: Optional[RecipeRunner] = None
@@ -150,7 +149,7 @@ class RecipeTab(QWidget):
         fla = QHBoxLayout(ga)
 
         fla.addWidget(QLabel("Valve A:"))
-        self.step_port = QSpinBox(); self.step_port.setRange(0, 8); self.step_port.setMaximumWidth(55)
+        self.step_port = QSpinBox(); self.step_port.setRange(0, 8); self.step_port.setFixedWidth(60)
         self.step_port.setToolTip("0 = No change, 1-8 = port")
         fla.addWidget(self.step_port)
 
@@ -163,11 +162,11 @@ class RecipeTab(QWidget):
         self.step_dur = QDoubleSpinBox()
         self.step_dur.setRange(0, 9999)   # 0'a izin var
         self.step_dur.setValue(60)
-        self.step_dur.setMaximumWidth(80)
+        self.step_dur.setMaximumWidth(70)
         fla.addWidget(self.step_dur)
 
         fla.addWidget(QLabel("Description:"))
-        self.step_desc = QLineEdit(); self.step_desc.setMaximumWidth(120)
+        self.step_desc = QLineEdit(); self.step_desc.setMinimumWidth(240)
         fla.addWidget(self.step_desc)
 
         fla.addWidget(QLabel("DropView:"))
@@ -218,8 +217,9 @@ class RecipeTab(QWidget):
 
         # ── File ops + total time ─────────────────────────────
         fb = QHBoxLayout()
-        fb.addWidget(_btn("Save Recipe", self._save_recipe))
+#        fb.addWidget(_btn("Save Recipe", self._save_recipe))
         fb.addWidget(_btn("Load Recipe", self._load_recipe))
+        fb.addWidget(_btn("Save Recipe", self._save_recipe))
         fb.addStretch()
         self.total_time_lbl = QLabel("Total Time: 0 min (0h 0m)")
         self.total_time_lbl.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
@@ -242,14 +242,33 @@ class RecipeTab(QWidget):
         self.status_lbl.setFont(QFont("Segoe UI", 11))
         gel.addWidget(self.status_lbl)
 
+        #        pr = QHBoxLayout()
+        #        pr.addWidget(QLabel("Progress:"))
+        #        self.progress = QProgressBar(); self.progress.setMaximum(100); self.progress.setMinimumWidth(300)
+        #        pr.addWidget(self.progress)
+        #        self.progress_lbl = QLabel("0%")
+        #        pr.addWidget(self.progress_lbl); pr.addStretch()
+        #        gel.addLayout(pr)
+        #        layout.addWidget(ge)
+
         pr = QHBoxLayout()
         pr.addWidget(QLabel("Progress:"))
-        self.progress = QProgressBar(); self.progress.setMaximum(100); self.progress.setMinimumWidth(300)
-        pr.addWidget(self.progress)
+
+        self.progress = QProgressBar()
+        self.progress.setMaximum(100)
+
+        # 🔥 Kritik: expand et
+        self.progress.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Fixed
+        )
+
+        pr.addWidget(self.progress, 1)  # stretch factor
         self.progress_lbl = QLabel("0%")
-        pr.addWidget(self.progress_lbl); pr.addStretch()
+        pr.addWidget(self.progress_lbl)
         gel.addLayout(pr)
         layout.addWidget(ge)
+
 
     # ── Step management ───────────────────────────────────────
     def _add_step(self):
@@ -283,18 +302,12 @@ class RecipeTab(QWidget):
         self.log_signal.emit(log_msg)
 
     def _get_session_scr_name(self) -> str:
-        """Session'dan patch'li .scr dosyasının adını döndürür."""
         if self.package_tab:
             session = self.package_tab.get_session()
             if session:
                 path = session.get_file_path("script") or ""
                 if path:
                     return os.path.basename(path)
-        # Session yoksa Script Editor'daki aktif dosyayı göster
-        if self.script_tab:
-            path = self.script_tab.get_current_scr_path()
-            if path:
-                return f"{os.path.basename(path)} *"  # * = henüz patch'lenmemiş
         return "--"
 
     def _refresh_table(self):
@@ -464,8 +477,8 @@ class RecipeTab(QWidget):
                     "step_loops": [asdict(l) for l in self.step_loops]}
             with open(path, "w") as f: json.dump(data, f, indent=2)
             self._current_recipe_path = path                  # ← YENİ
-            if self.package_tab:                              # ← YENİ
-                self.package_tab._refresh_refs()              # ← YENİ
+            if self.package_tab:
+                self.package_tab.package_panel.set_recipe_ref(path)  # ← güncellendi
             self.log_signal.emit(f"Recipe saved: {path}")
 
     def _load_recipe(self):
@@ -482,15 +495,16 @@ class RecipeTab(QWidget):
                 self.step_loops   = [StepLoop(**l) for l in data.get("step_loops", [])]
                 self._refresh_table(); self._update_loops_display(); self._update_total_time()
                 self._current_recipe_path = path              # ← YENİ
-                if self.package_tab:                          # ← YENİ
-                    self.package_tab._refresh_refs()          # ← YENİ
+                if self.package_tab:
+                    self.package_tab.package_panel.set_recipe_ref(path)  # ← güncellendi
                 self.log_signal.emit(f"Recipe loaded: {path}")
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to load: {e}")
 
     def _start_recipe(self):
         # ── Paketi oluştur ────────────────────────────────────
-        if self.package_tab and not self.package_tab.build_package():
+        if self.package_tab and not self.package_tab.build_package(
+                recipe_path=self._current_recipe_path or ""):
             return
         # Session .scr yolu artık hazır — COL_SCR sütununu güncelle
         if self.package_tab and self.package_tab.get_session():
@@ -515,6 +529,8 @@ class RecipeTab(QWidget):
             self.ctrl_a, self.ctrl_b, recipe, self.status_queue, self.stop_event,
             self.dv_ctrl, session_scr_path=session_scr)
         self.recipe_runner.start()
+        if self.package_tab:
+            self.package_tab.sm.start()
 
         self.start_btn.setEnabled(False); self.pause_btn.setEnabled(True); self.stop_btn.setEnabled(True)
         self.log_signal.emit(f"Recipe started: {recipe.name}")
@@ -578,6 +594,8 @@ class RecipeTab(QWidget):
                     self.log_signal.emit(str(data))
                 elif msg_type == "stopped":
                     self.status_lbl.setText(f"Stopped: {data}"); self.log_signal.emit(str(data))
+                    if self.package_tab:
+                        self.package_tab.on_recipe_aborted()
                 elif msg_type == "error":
                     self.status_lbl.setText(f"ERROR: {data}")
                     self.start_btn.setEnabled(True); self.pause_btn.setEnabled(False)

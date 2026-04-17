@@ -27,6 +27,7 @@ from bench_test.measurement.session import MeasurementSession, SessionStatus
 from bench_test.measurement.packager import Packager, PackagerError
 from bench_test.measurement.aggregator import Aggregator, AggregatorError
 from bench_test.measurement.log_writer import LogWriter
+from bench_test.measurement.state_machine import SessionStateMachine
 from bench_test.utils.paths import get_last, remember, open_dir
 from bench_test.ui.widgets import _btn, _lbl
 
@@ -48,7 +49,18 @@ class PackageTab(QWidget):
         self.recipe_tab  = recipe_tab
         self._session   : MeasurementSession = None
         self._log_writer: LogWriter           = None
+        self.sm = SessionStateMachine(self)
+        self.sm.log_signal.connect(self._log)
+        self.sm.state_changed.connect(self._on_state_changed)
         self._build_ui()
+
+    def _close_log_writer(self):
+        """Açık session.log dosya handle'ını güvenli biçimde kapat."""
+        if self._log_writer and self._log_writer.is_open:
+            try:
+                self._log_writer.close()
+            except Exception as e:
+                self._log(f"⚠ LogWriter kapatılamadı: {e}")
 
     # ── UI ────────────────────────────────────────────────────────
 
@@ -61,7 +73,7 @@ class PackageTab(QWidget):
         id_form = QFormLayout(id_grp)
 
         self.part_number_edit = QLineEdit()
-        self.part_number_edit.setPlaceholderText("e.g. Sil, XXX-YYY-ZZZ")
+        self.part_number_edit.setPlaceholderText("e.g. UNAM-XXX-YYY-ZZZ")
         self.part_number_edit.setMaximumWidth(200)
         self.part_number_edit.textChanged.connect(self._refresh_status)
         id_form.addRow("Part Number:", self.part_number_edit)
@@ -81,9 +93,9 @@ class PackageTab(QWidget):
         ref_grp = QGroupBox("File References")
         ref_form = QFormLayout(ref_grp)
 
-        self.tp_lbl   = self._ref_row(ref_form, "Method (.tp):")
-        self.scr_lbl  = self._ref_row(ref_form, "Script (.scr):")
-        self.recipe_lbl = self._ref_row(ref_form, "Recipe (.json):")
+        self.tp_lbl   = self._ref_row(ref_form, "Method File (.tp):")
+        self.scr_lbl  = self._ref_row(ref_form, "Script File (.scr):")
+        self.recipe_lbl = self._ref_row(ref_form, "Recipe File (.json):")
 
         refresh_row = QHBoxLayout()
         refresh_row.addStretch()
@@ -315,6 +327,7 @@ class PackageTab(QWidget):
 
             self._log(f"Paket oluşturuldu: {self._session.session_dir}")
             self.log_signal.emit(f"Paket oluşturuldu: {self._session.session_dir}")
+            self.sm.build(self._session)
             return True
 
         except PackagerError as e:
@@ -344,70 +357,39 @@ class PackageTab(QWidget):
     def on_recipe_completed(self):
         """RecipeTab recipe tamamlandığında çağırır."""
         if self._session:
-            self._session.set_status(SessionStatus.COMPLETED)
             self._set_status(
                 f"Tamamlandı: {self._session.part_number}", _COLOR_DONE)
             self._log("Oturum tamamlandı.")
-            self.log_signal.emit(
-                f"Oturum tamamlandı: {self._session.session_dir}")
-            if self._log_writer:
-                self._log_writer.close()
-            # Aggregate çalıştır, sonra sakla/sil sor
-            self._run_aggregator()
+        self.sm.finish()
 
     # ── Aggregator ────────────────────────────────────────────────
 
     def _run_aggregator(self):
-        """
-        Aggregator'ı GUI moduyla çalıştırır.
-        - COMPLETED → direkt çalışır
-        - ABORTED   → önce onay dialog'u gösterir
-        - Manuel buton → aynı akış
-        """
+        """Manuel buton — kullanıcı istediğinde aggregate çalıştırır."""
         if not self._session:
             QMessageBox.warning(self, "Aggregator",
-                "Aktif oturum yok.\nÖnce bir recipe çalıştırın.")
+                                "Aktif oturum yok.\nÖnce bir recipe çalıştırın.")
             return
-
-        # ABORTED ise kullanıcıdan onay al
-        if self._session.status == SessionStatus.ABORTED:
-            reply = QMessageBox.question(
-                self, "Kısmi Veri",
-                "Recipe durduruldu — CSV dosyaları eksik olabilir.\n\n"
-                "Mevcut ölçümlerle xlsx oluşturulsun mu?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
-            )
-            if reply != QMessageBox.StandardButton.Yes:
-                self._log("Aggregate iptal edildi (kullanıcı onaylamadı).")
-                return
-
+        if self.sm.state == "running":
+            QMessageBox.warning(self, "Aggregator",
+                                "Recipe çalışıyor.\nBitmesini bekleyin veya durdurun.")
+            return
         aggregator = Aggregator(self._session)
-        xlsx_path = aggregator.run(parent=self)  # saat offset dialog'u burada açılır
-
+        xlsx_path = aggregator.run(parent=self)
         if xlsx_path:
             self._log(f"✓ Aggregate tamamlandı: {os.path.basename(xlsx_path)}")
             self.log_signal.emit(f"Aggregate tamamlandı: {xlsx_path}")
         else:
             self._log("⚠ Aggregate iptal edildi veya başarısız.")
-
-        # Aggregate sonucu ne olursa olsun sakla/sil sor
         self._ask_keep_session()
-
 
     def on_recipe_aborted(self):
         """RecipeTab recipe durdurulduğunda çağırır."""
         if self._session:
-            self._session.set_status(SessionStatus.ABORTED)
             self._set_status(
                 f"Durduruldu: {self._session.part_number}", _COLOR_ERROR)
             self._log("Oturum durduruldu.")
-            self.log_signal.emit(
-                f"Oturum durduruldu: {self._session.session_dir}")
-            if self._log_writer:
-                self._log_writer.close()
-            # Aggregate otomatik çalıştır (kısmi veri onayı içinde sorulur)
-            self._run_aggregator()
+        self.sm.stop()
 
     def _ask_keep_session(self):
         """
@@ -435,6 +417,7 @@ class PackageTab(QWidget):
         )
 
         if reply == QMessageBox.StandardButton.No:
+            self._close_log_writer()
             try:
                 shutil.rmtree(session_dir)
                 self._log(f"Oturum silindi: {session_dir}")
@@ -444,10 +427,12 @@ class PackageTab(QWidget):
                 QMessageBox.warning(self, "Hata", f"Dizin silinemedi:\n{e}")
         else:
             self._log(f"Oturum saklandı: {session_dir}")
+            self._close_log_writer()
 
         # Her durumda session'ı kapat — yeni recipe yeni session açar
         self._session    = None
         self._log_writer = None
+        self.sm.reset()
         self.aggregate_btn.setEnabled(False)
         self.session_dir_lbl.setText("")
         self._set_status("Hazır — yeni recipe başlatılabilir", _COLOR_READY)
@@ -462,3 +447,13 @@ class PackageTab(QWidget):
         self.log_edit.append(msg)
         if self._log_writer and self._log_writer.is_open:
             self._log_writer.write(msg)
+
+    def _on_state_changed(self, state: str):
+        """State machine geçişlerini dinler."""
+        from bench_test.measurement.state_machine import AGGREGATING, IDLE
+        if state == AGGREGATING:
+            self.aggregate_btn.setEnabled(False)
+        elif state == IDLE:
+            # Sadece session açıksa sor — reset() sonrası tekrar tetiklenmesin
+            if self._session is not None:
+                self._ask_keep_session()

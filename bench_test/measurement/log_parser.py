@@ -41,6 +41,8 @@ class StepEvent:
     duration_min: Optional[float]  # Süre dakika cinsinden
     loop_info : str          # "Loop 1/50" veya ""
     raw_line  : str          # Ham log satırı
+    marker_label: Optional[str] = None  # "Start Measure" | "Stop Measure" gibi özel etiket
+    marker_kind : str = "step"          # "step" | "measure"
 
 
 @dataclass
@@ -100,6 +102,14 @@ _RE_STEP = re.compile(
     r"(?:A:Port (\d+))?"
     r"(?:,?\s*B:(Load|Inject))?"
     r"(?:\s+for ([\d.]+) min)?",
+    re.IGNORECASE
+)
+
+# Ölçüm aksiyonu satırları:
+# - "Start Measure", "Stop Measure", "Start Measure: ..."
+# - "Ölçüm başlatıldı.", "Ölçüm durduruldu."
+_RE_MEASURE = re.compile(
+    r"^(Start Measure|Stop Measure|Ölçüm başlatıldı\.?|Ölçüm durduruldu\.?)\b",
     re.IGNORECASE
 )
 
@@ -199,6 +209,12 @@ class LogParser:
                     result.step_events.append(step_ev)
                     continue
 
+            # Ölçüm aksiyonu olayı mı? (Start/Stop Measure)
+            measure_ev = self._parse_measure(ts, content, raw_line)
+            if measure_ev:
+                result.step_events.append(measure_ev)
+                continue
+
             # Sistem olayı mı?
             sys_ev = self._parse_system(ts, content, raw_line)
             if sys_ev:
@@ -243,7 +259,40 @@ class LogParser:
             valve_b     = valve_b,
             duration_min= duration,
             loop_info   = loop_info,
+            marker_kind = "step",
             raw_line    = raw_line,
+        )
+
+    def _parse_measure(
+        self,
+        ts: datetime,
+        content: str,
+        raw_line: str,
+    ) -> Optional[StepEvent]:
+        """'Start Measure' / 'Stop Measure' satırlarını StepEvent olarak parse eder."""
+        m = _RE_MEASURE.match(content)
+        if not m:
+            return None
+
+        token = m.group(1).strip()
+        low = token.lower()
+        if low.startswith("start measure") or "başlat" in low:
+            label = "Start Measure"
+        elif low.startswith("stop measure") or "durdur" in low:
+            label = "Stop Measure"
+        else:
+            label = token.title()
+        return StepEvent(
+            timestamp    = ts,
+            step_no      = 0,
+            total_steps  = 0,
+            port_a       = None,
+            valve_b      = None,
+            duration_min = None,
+            loop_info    = "",
+            marker_label = label,
+            marker_kind  = "measure",
+            raw_line     = raw_line,
         )
 
     def _parse_system(

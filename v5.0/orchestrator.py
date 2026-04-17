@@ -307,18 +307,13 @@ def step_start_dropview(config: dict):
     """
     # Zaten açık ve bağlı ise sessizce geç
     if window_exists(DROPVIEW_WINDOW_NAME) and _is_dropview_connected():
-        print("│  [Start DropView] DropView zaten açık ve Connected — atlandı.")
         return
 
     # Önce exe'yi başlat (zaten açıksa atla)
     if not window_exists(DROPVIEW_WINDOW_NAME):
-        print("│  DropView başlatılıyor ...")
         subprocess.Popen([_get_dropview_exe()])
         find_window(DROPVIEW_WINDOW_NAME, timeout=60)
         time.sleep(2)
-        print("│  DropView penceresi açıldı.")
-    else:
-        print("│  DropView zaten açık, bağlantı kurulmaya çalışılıyor ...")
 
     # DropSens'e bağlan
     dv_hwnd = find_window(DROPVIEW_WINDOW_NAME, timeout=10)
@@ -335,10 +330,7 @@ def step_start_dropview(config: dict):
 
     time.sleep(1)
     if window_exists(CONNECTING_DIALOG):
-        print("│    Bağlanıyor, dialog bekleniyor ...")
         wait_for_window_close(CONNECTING_DIALOG, timeout=60)
-    else:
-        print("│    Bağlantı popup'ı zaten kapandı, devam ediliyor ...")
 
     try:
         wait_until_connected(timeout=30)
@@ -354,8 +346,6 @@ def step_start_dropview(config: dict):
             "DropSens bağlantı sinyali alındı ancak son doğrulama başarısız. "
             "Lütfen tekrar deneyin."
         )
-    print("│  DropSens bağlandı.")
-
 
 # ─────────────────────────────────────────────
 #  Aksiyon: Start Measure
@@ -627,7 +617,6 @@ def step_disconnect_dropsens(config: dict):
     win32api.keybd_event(win32con.VK_CONTROL, 0, win32con.KEYEVENTF_KEYUP, 0)
     time.sleep(1)
     wait_until_disconnected(timeout=10)
-    print("│  DropSens bağlantısı kesildi.")
 
 
 def step_close_dropview(config: dict):

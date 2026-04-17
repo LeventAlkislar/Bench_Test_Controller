@@ -48,7 +48,7 @@ class ScriptEditorTab(QWidget):
         self.method_edit.textChanged.connect(self._mark_modified)
         method_row.addWidget(self.method_edit)
         method_row.addWidget(_btn("Browse", self._browse_method))
-        form.addRow("Method (.tp):", method_row)
+        form.addRow("Method File (.tp):", method_row)
 
         self.csv_edit = QLineEdit()
         self.csv_edit.setReadOnly(True)
@@ -64,7 +64,7 @@ class ScriptEditorTab(QWidget):
 
         self.wait_spin = QDoubleSpinBox()
         self.wait_spin.setRange(1.0, 3600.0)
-        self.wait_spin.setValue(47.0)
+        self.wait_spin.setValue(47.5)
         self.wait_spin.setSuffix(" sn")
         self.wait_spin.valueChanged.connect(self._mark_modified)
         form.addRow("Wait Duration:", self.wait_spin)
@@ -188,9 +188,7 @@ class ScriptEditorTab(QWidget):
         if not self.method_edit.text():
             QMessageBox.warning(self, "Warning", "Method file not chosen.")
             return
-        if not self.csv_edit.text():
-            QMessageBox.warning(self, "Warning", "CSV path not chosen.")
-            return
+        csv_path = self.csv_edit.text() or "[session_dir]\\measurements\\placeholder.csv"
         try:
             generate_dropview_script(
                 method_file=self.method_edit.text(),

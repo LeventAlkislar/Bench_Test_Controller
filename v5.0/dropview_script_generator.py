@@ -77,9 +77,6 @@ def generate_dropview_script(
     with open(output_script_path, "w", encoding="utf-8") as f:
         f.write(final_xml)
 
-    print(f"Script oluşturuldu: {output_script_path}")
-
-
 def prompt_and_generate():
     """
     Kullanıcıdan interaktif girdi alarak DropView scripti üretir.
