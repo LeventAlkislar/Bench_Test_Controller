@@ -432,6 +432,8 @@ class ViewerTab(QWidget):
             return
 
         self.plot_widget_top.clear()
+        if self.plot_widget_bottom:
+            self.plot_widget_bottom.clear()
         self._marker_items.clear()
         self._measure_dots.clear()
 
@@ -456,8 +458,6 @@ class ViewerTab(QWidget):
 
         # ── Bottom grafik: downsample edilmiş veri ─────────────────
         if self.plot_widget_bottom:
-            self.plot_widget_bottom.clear()
-
             self.bottom_curve = self.plot_widget_bottom.plot(
                 timestamps,
                 currents,
@@ -482,12 +482,15 @@ class ViewerTab(QWidget):
 
         # Measure dot'larını doğru konuma yerleştir.
         # Veri çizildikten sonra auto-range kesinleşsin, sonra dot'lar güncellensin.
-        self.plot_widget_top.getViewBox().enableAutoRange()
-        self.plot_widget_top.getViewBox().autoRange()
+        top_view_box = self.plot_widget_top.getViewBox()
+        top_view_box.enableAutoRange()
+        top_view_box.autoRange()
         self._update_measure_dots_for_plot(self.plot_widget_top)
         if self.plot_widget_bottom:
-            self.plot_widget_bottom.getViewBox().enableAutoRange()
-            self.plot_widget_bottom.getViewBox().autoRange()
+            # Alt grafik Y eksenini ust grafikten linked olarak aliyor;
+            # burada yeniden autoRange yaparsak ortak Y araligi alttaki
+            # downsample edilmis gorunume gore yeniden hesaplanabiliyor.
+            self.plot_widget_bottom.getViewBox().disableAutoRange(axis="y")
             self._update_measure_dots_for_plot(self.plot_widget_bottom)
 
     def _read_measurement_data(self):
