@@ -159,7 +159,8 @@ class MeasurementSetupTab(QWidget):
         """Geçmiş session'daki .tp ve .scr dosyalarını panellere yükler."""
         from pathlib import Path
         import json as _json
-
+        import os
+        
         path = Path(session_dir)
         session_json = path / "session.json"
         if not session_json.is_file():
@@ -172,6 +173,15 @@ class MeasurementSetupTab(QWidget):
             return
 
         files = data.get("files", {})
+
+        # Part Number → PackagePanel
+        part_number = data.get("part_number", "")
+        if part_number:
+            self.package_panel.part_number_edit.setText(part_number)
+
+        session_id = data.get("session_id", "") or os.path.basename(session_dir)
+        if session_id:
+            self.package_panel.session_id_edit.setText(session_id)
 
         # .tp → MethodEditorPanel
         tp_rel = files.get("tp", "")

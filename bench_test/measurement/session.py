@@ -190,6 +190,7 @@ class MeasurementSession:
         """Oturum meta verisini session.json olarak diske yazar."""
         data = {
             "part_number" : self.part_number,
+            "session_id"  : os.path.basename(self.session_dir),
             "created_at"  : self.created_at.isoformat(),
             "status"      : self.status.value,
             "files"       : self.files,

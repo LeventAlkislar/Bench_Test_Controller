@@ -75,6 +75,11 @@ class PackagePanel(QWidget):
         self.part_number_edit.textChanged.connect(self._on_part_number_changed)
         id_form.addRow("Part Number:", self.part_number_edit)
 
+        self.session_id_edit = QLineEdit()
+        self.session_id_edit.setReadOnly(True)
+        self.session_id_edit.setPlaceholderText("Session başlatıldığında atanır...")
+        id_form.addRow("Session ID:", self.session_id_edit)
+
         pkg_row = QHBoxLayout()
         self.package_root_edit = QLineEdit()
         self.package_root_edit.setReadOnly(True)
@@ -290,6 +295,7 @@ class PackagePanel(QWidget):
             session_name = os.path.basename(self._session.session_dir)
             self._set_status(f"Aktif: {part_number} / {session_name}", _COLOR_RUNNING)
             self.session_dir_lbl.setText(self._session.session_dir)
+            self.session_id_edit.setText(session_name)
             self.aggregate_btn.setEnabled(True)
 
             self._log_writer = LogWriter(self._session)
@@ -386,6 +392,7 @@ class PackagePanel(QWidget):
         self.sm.reset()
         self.aggregate_btn.setEnabled(False)
         self.session_dir_lbl.setText("")
+        self.session_id_edit.setText("")
         self._set_status("Hazır — yeni recipe başlatılabilir", _COLOR_READY)
 
     def get_session(self) -> MeasurementSession:

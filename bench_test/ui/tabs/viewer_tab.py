@@ -47,6 +47,7 @@ from bench_test.measurement.session import MeasurementSession, SessionStatus
 from bench_test.measurement.aggregator import Aggregator, AggregatorError
 from bench_test.measurement.log_parser import LogParser, ParseResult, StepEvent, SystemEvent
 from bench_test.ui.widgets import _btn
+from bench_test.utils.paths import open_dir
 
 # ── Renkler ───────────────────────────────────────────────────────
 _C_STEP_LINE    = (255,   0,   0)   # Kırmızı  — STEP (Sx Px) marker
@@ -299,9 +300,7 @@ class ViewerTab(QWidget):
 
     def _browse_session(self):
         """Geçmiş session dizinini kullanıcı seçer."""
-        path = QFileDialog.getExistingDirectory(
-            self, "Session Dizini Seç", "",
-            QFileDialog.Option.ShowDirsOnly)
+        path = open_dir(self, "Session Dizini Seç", "browse_session")
         if not path:
             return
 
