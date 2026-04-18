@@ -47,7 +47,7 @@ from bench_test.measurement.session import MeasurementSession, SessionStatus
 from bench_test.measurement.aggregator import Aggregator, AggregatorError
 from bench_test.measurement.log_parser import LogParser, ParseResult, StepEvent, SystemEvent
 from bench_test.ui.widgets import _btn
-from bench_test.utils.paths import open_dir
+from bench_test.utils.paths import open_dir, get_value, remember_value
 
 # ── Renkler ───────────────────────────────────────────────────────
 _C_STEP_LINE    = (255,   0,   0)   # Kırmızı  — STEP (Sx Px) marker
@@ -76,6 +76,7 @@ POLL_INTERVAL_MS = 10_000   # 10 saniye
 class ViewerTab(QWidget):
     log_signal     = pyqtSignal(str)
     session_loaded = pyqtSignal(str)
+    delay_changed  = pyqtSignal(int, int)   # (minutes, seconds)
 
     def __init__(self, package_tab=None):
         super().__init__()
@@ -107,17 +108,43 @@ class ViewerTab(QWidget):
 
         toolbar.addWidget(_btn("Load Active Session", self._load_active_session, "#FF9800"))
         toolbar.addWidget(_btn("Refresh",             self._refresh, "#4CAF50"))
-        toolbar.addWidget(_btn("Browse Session",     self._browse_session,       "#2196F3"))
+        toolbar.addWidget(_btn("Load Session",     self._browse_session,       "#2196F3"))
 
         self.delete_btn = _btn("Delete Session", self._delete_session,  "#F44336")
         self.delete_btn.setEnabled(False)
-#        self.delete_btn.setStyleSheet("color: #F44336;")
         self.delete_btn.setToolTip("Seçili session dizinini kalıcı olarak siler.")
         toolbar.addWidget(self.delete_btn)
 
         self.live_lbl = QLabel("")
         self.live_lbl.setStyleSheet("color: #4CAF50; font-size: 10px;")
         toolbar.addWidget(self.live_lbl)
+
+        # ── Tepki Gecikmesi ───────────────────────────────────────
+        from PyQt6.QtWidgets import QSpinBox as _QSpinBox
+        from PyQt6.QtWidgets import QFrame
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.VLine)
+        sep.setFrameShadow(QFrame.Shadow.Sunken)
+        toolbar.addWidget(sep)
+        toolbar.addWidget(QLabel("Response Delay:"))
+
+        self._delay_min_spin = _QSpinBox()
+        self._delay_min_spin.setRange(0, 59)
+        self._delay_min_spin.setSuffix(" min")
+        self._delay_min_spin.setFixedWidth(72)
+        self._delay_min_spin.setValue(get_value("response_delay_min", 0))
+
+        self._delay_sec_spin = _QSpinBox()
+        self._delay_sec_spin.setRange(0, 59)
+        self._delay_sec_spin.setSuffix(" sec")
+        self._delay_sec_spin.setFixedWidth(72)
+        self._delay_sec_spin.setValue(get_value("response_delay_sec", 0))
+
+        self._delay_min_spin.valueChanged.connect(self._on_delay_changed)
+        self._delay_sec_spin.valueChanged.connect(self._on_delay_changed)
+
+        toolbar.addWidget(self._delay_min_spin)
+        toolbar.addWidget(self._delay_sec_spin)
 
         root.addLayout(toolbar)
 
@@ -154,7 +181,7 @@ class ViewerTab(QWidget):
         layout.addWidget(meta_grp)
 
         # Manuel notlar
-        notes_grp = QGroupBox("Notes")
+        notes_grp = QGroupBox("User Notes")
         notes_lay = QVBoxLayout(notes_grp)
         self.notes_edit = QTextEdit()
         self.notes_edit.setReadOnly(True)
@@ -179,7 +206,7 @@ class ViewerTab(QWidget):
         """Sağ panel: pyqtgraph veya fallback mesaj."""
         container = QWidget()
         layout    = QVBoxLayout(container)
-        layout.setContentsMargins(10, 0, 0, 10)
+        layout.setContentsMargins(10, 10, 10, 10)
 
         # ── Top GroupBox (panel) ─────────────────────────
         top_group = QGroupBox("Measurement Timeline")
@@ -210,8 +237,10 @@ class ViewerTab(QWidget):
 
         # Grafik yüksekliğini daha kısa tut
         self.plot_widget_top.setSizePolicy(QSizePolicy.Policy.Expanding,
-                                       QSizePolicy.Policy.Fixed)
-        self.plot_widget_top.setFixedHeight(360)   # istersen 220/250/300 yapabilirsin
+            QSizePolicy.Policy.Expanding
+        )
+        self.plot_widget_top.setMinimumHeight(280)
+        self.plot_widget_top.setMaximumHeight(520)
 
         self.plot_widget_top.getViewBox().setMouseMode(
             pg.ViewBox.RectMode)   # sürükle = zoom rect; sağ tık = pan
@@ -236,11 +265,11 @@ class ViewerTab(QWidget):
         self.plot_widget_bottom.showGrid(x=True, y=True, alpha=0.8)
         self.plot_widget_bottom.getViewBox().setBorder(pg.mkPen((0, 0, 0), width=1))
 
-        self.plot_widget_bottom.setSizePolicy(
-            QSizePolicy.Policy.Expanding,
-            QSizePolicy.Policy.Fixed
+        self.plot_widget_top.setSizePolicy(QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding
         )
-        self.plot_widget_bottom.setFixedHeight(360)
+        self.plot_widget_top.setMinimumHeight(280)
+        self.plot_widget_top.setMaximumHeight(520)
 
         self.plot_widget_bottom.getViewBox().setMouseMode(
             pg.ViewBox.RectMode
@@ -256,9 +285,21 @@ class ViewerTab(QWidget):
         layout.addStretch(1)
         return container
 
+    # ── Tepki gecikmesi ───────────────────────────────────────────
+
+    def _get_offset_sec(self) -> float:
+        """Kullanıcının girdiği toplam gecikmeyi saniye cinsinden döner."""
+        return self._delay_min_spin.value() * 60.0 + self._delay_sec_spin.value()
+
+    def _on_delay_changed(self):
+        """Spinbox değişince kaydet, sinyal yay, grafiği yenile."""
+        remember_value("response_delay_min", self._delay_min_spin.value())
+        remember_value("response_delay_sec", self._delay_sec_spin.value())
+        self.delay_changed.emit(self._delay_min_spin.value(), self._delay_sec_spin.value())
+        if self._session:
+            self._refresh()
 
     # ── Zamanlayıcı ───────────────────────────────────────────────
-
     def _setup_poll_timer(self):
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(POLL_INTERVAL_MS)
@@ -584,17 +625,20 @@ class ViewerTab(QWidget):
         t_max = max(data_timestamps)
 
         # Step marker'ları
+        offset = self._get_offset_sec()
         for ev in self._parse_result.step_events:
-            t = ev.timestamp.timestamp()
-            if not (t_min <= t <= t_max):
+            t_raw = ev.timestamp.timestamp()
+            if not (t_min <= t_raw <= t_max):
                 continue
 
             if getattr(ev, "marker_kind", "step") == "measure":
                 self._add_measure_marker(
-                    t,
+                    t_raw,  # offset yok
                     is_start=(getattr(ev, "marker_label", "") == "Start Measure"),
                 )
                 continue
+
+            t = t_raw + offset
 
             label = self._step_label(ev)
 

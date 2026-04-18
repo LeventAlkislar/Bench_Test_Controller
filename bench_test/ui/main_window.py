@@ -53,6 +53,8 @@ class MainWindow(QMainWindow):
             self.viewer_tab._on_session_state_changed)
         self.setup_tab.package_panel.clear_session_requested.connect(   # ← YENİ
             self._on_clear_session)
+        self.viewer_tab.delay_changed.connect(
+            self.setup_tab.script_panel.set_response_delay)
 
         self.dv_ctrl.start_polling()
 

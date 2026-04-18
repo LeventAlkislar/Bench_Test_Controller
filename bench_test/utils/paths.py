@@ -73,6 +73,16 @@ def remember(key: str, path: str):
         _last_paths[key] = directory
         save_last_paths()
 
+def get_value(key: str, fallback=None):
+    """Sayısal/basit değerleri hafızadan okur."""
+    val = _last_paths.get(key)
+    return val if val is not None else fallback
+
+
+def remember_value(key: str, value):
+    """Sayısal/basit değeri hafızaya alır ve diske yazar."""
+    _last_paths[key] = value
+    save_last_paths()
 
 # İlk yükleme
 load_last_paths()

@@ -56,6 +56,14 @@ class ScriptParamsPanel(QWidget):
 
         layout.addWidget(user_grp)
 
+        # ── Görüntüleyici ayarları (salt-okunur) ─────────────
+        viewer_grp = QGroupBox("Viewer Settings")
+        viewer_form = QFormLayout(viewer_grp)
+        self.delay_lbl = QLabel("—")
+        self.delay_lbl.setStyleSheet("color: #888; font-style: italic;")
+        viewer_form.addRow("Response Delay:", self.delay_lbl)
+
+
         # ── Otomatik alanlar (salt-okunur) ────────────────────
         auto_grp = QGroupBox("Auto (read-only)")
         auto_form = QFormLayout(auto_grp)
@@ -73,7 +81,7 @@ class ScriptParamsPanel(QWidget):
         auto_form.addRow("CSV File:", self.csv_edit)
 
         layout.addWidget(auto_grp)
-
+        layout.addWidget(viewer_grp)
         layout.addStretch()
 
     # ── Dışarıdan set ─────────────────────────────────────────────
@@ -129,6 +137,15 @@ class ScriptParamsPanel(QWidget):
                         self.wait_spin.setValue(float(time_ms) / 1000.0)
         except Exception:
             pass  # Parse hatası sessizce geçilir, mevcut değerler korunur
+
+    def set_response_delay(self, minutes: int, seconds: int):
+        """ViewerTab delay_changed sinyalinden güncellenir."""
+        if minutes == 0 and seconds == 0:
+            self.delay_lbl.setText("—")
+            self.delay_lbl.setStyleSheet("color: #888; font-style: italic;")
+        else:
+            self.delay_lbl.setText(f"{minutes} min  {seconds} sec")
+            self.delay_lbl.setStyleSheet("color: #4CAF50; font-style: normal;")
 
     def clear(self):
         """ScriptParamsPanel'i açılış haline getirir."""
