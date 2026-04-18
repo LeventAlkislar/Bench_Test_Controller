@@ -629,3 +629,27 @@ class RecipeTab(QWidget):
         except queue.Empty:
             pass
 
+    def clear(self):
+        """RecipeTab'ı açılış haline getirir."""
+        # Çalışan recipe varsa durdur
+        if self.recipe_runner and self.recipe_runner.is_alive():
+            self.stop_event.set()
+
+        self.recipe_steps.clear()
+        self.step_loops.clear()
+        self._current_recipe_path = ""
+        self._ignoring_changes = False
+
+        self.name_edit.setText("New Recipe")
+        self.loop_spin.setValue(1)
+        self._refresh_table()
+        self._update_loops_display()
+        self._update_total_time()
+
+        self.status_lbl.setText("—")
+        self.progress.setValue(0)
+        self.progress_lbl.setText("0%")
+        self.start_btn.setEnabled(True)
+        self.pause_btn.setEnabled(False)
+        self.pause_btn.setText("Pause")
+        self.stop_btn.setEnabled(False)

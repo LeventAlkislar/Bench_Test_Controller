@@ -1,0 +1,10 @@
+[33me258108[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mfeature/measurement-package[m[33m)[m chore: checkpoint before clear-session feature
+[33m60137ac[m feat: session_id alanı eklendi ve restore akışı tamamlandı
+[33m6da5162[m feat: session restore - Browse Session loads Full Log, Recipe Control, and Measurement Setup
+[33m72337d8[m chore: v7.9 klasörü git takibinden çıkarıldı
+[33me47ec9f[m refactor(viewer_tab): grafik çizimleri ve anotasyonlar güncellendi
+[33m45b0dd1[m refactor(viewer_tab): grafik çizimleri ve anotasyonlar güncellendi
+[33m99a75e0[m refactor: session-recipe state isolated, viewer polling extracted
+[33m203ea99[m feat: measurement package - aggregator eklendi
+[33m7538fca[m feat: measurement package - session ve packager eklendi
+[33mec645da[m[33m ([m[1;32mmaster[m[33m)[m script_editor_tab.py: gereksiz log mesajlari silindi, Turkce mesajlar duzeltildi

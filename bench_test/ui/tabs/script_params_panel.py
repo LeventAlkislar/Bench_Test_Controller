@@ -129,3 +129,12 @@ class ScriptParamsPanel(QWidget):
                         self.wait_spin.setValue(float(time_ms) / 1000.0)
         except Exception:
             pass  # Parse hatası sessizce geçilir, mevcut değerler korunur
+
+    def clear(self):
+        """ScriptParamsPanel'i açılış haline getirir."""
+        self.repeat_spin.setValue(DEFAULT_REPEAT_COUNT)
+        self.wait_spin.setValue(DEFAULT_WAIT_DURATION_SEC)
+        self.method_edit.clear()
+        self.method_edit.setStyleSheet("color: #888; font-style: italic;")
+        self.csv_edit.clear()
+        self.csv_edit.setStyleSheet("color: #888; font-style: italic;")

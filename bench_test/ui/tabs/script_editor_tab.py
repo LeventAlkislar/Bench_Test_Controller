@@ -216,3 +216,8 @@ class ScriptEditorTab(QWidget):
 
     def get_current_scr_path(self) -> str:
         return self._current_path
+
+    def clear(self):
+        """ScriptEditorTab'ı açılış haline getirir."""
+        self._new()  # zaten tüm alanları sıfırlıyor
+        

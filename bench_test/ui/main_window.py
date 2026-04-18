@@ -46,14 +46,25 @@ class MainWindow(QMainWindow):
             tab.log_signal.connect(self.log_tab.append)
 
         self.recipe_tab.log_signal.connect(self.setup_tab.write_to_log)
-
         self.setup_tab.sm.aggregate_done.connect(self.viewer_tab._refresh)
         self.setup_tab.sm.log_signal.connect(self.log_tab.append)
         self.viewer_tab.session_loaded.connect(self._on_session_loaded)
         self.setup_tab.sm.state_changed.connect(
             self.viewer_tab._on_session_state_changed)
+        self.setup_tab.package_panel.clear_session_requested.connect(   # ← YENİ
+            self._on_clear_session)
 
         self.dv_ctrl.start_polling()
+
+    def _on_clear_session(self):
+        """Tüm tabları açılış haline getirir."""
+        self.setup_tab.package_panel.clear()
+        self.recipe_tab.clear()
+        self.setup_tab.method_panel.clear()
+        self.setup_tab.script_panel.clear()
+        self.log_tab.clear()
+        self.viewer_tab.clear()
+        self.log_tab.append("Oturum temizlendi.")
 
     def _on_session_loaded(self, session_dir: str):
         from pathlib import Path

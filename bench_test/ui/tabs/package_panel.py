@@ -40,6 +40,7 @@ class PackagePanel(QWidget):
     log_signal = pyqtSignal(str)
 
     # Diğer panellerin dinleyeceği sinyaller
+    clear_session_requested = pyqtSignal()   # ← YENİ
     part_number_changed = pyqtSignal(str)   # → MethodEditorPanel.set_sensor_sample
     csv_path_changed    = pyqtSignal(str)   # → ScriptParamsPanel.set_csv_path
 
@@ -130,6 +131,13 @@ class PackagePanel(QWidget):
         self.log_edit.setFont(QFont("Consolas", 9))
         log_lay.addWidget(self.log_edit)
         layout.addWidget(log_grp)
+
+        # ── Clear Session ─────────────────────────────────────────
+        self.clear_btn = _btn("🗑  Oturumu Temizle", self._request_clear, "#FF5722")
+        self.clear_btn.setToolTip(
+            "Tüm oturum bilgilerini sıfırlar.\n"
+            "Recipe, script, log ve grafik temizlenir.")
+        layout.addWidget(self.clear_btn)
 
         layout.addStretch()
 
@@ -411,3 +419,56 @@ class PackagePanel(QWidget):
         elif state == IDLE:
             if self._session is not None:
                 self._ask_keep_session()
+
+    def _request_clear(self):
+        """Kullanıcı onayı alarak clear_session sinyalini yayınlar."""
+        if self._session is not None:
+            reply = QMessageBox.question(
+                self, "Oturumu Temizle",
+                "Aktif bir oturum var!\n\n"
+                "Tüm oturum verileri, recipe adımları, log ve grafik temizlenecek.\n"
+                "Devam edilsin mi?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+        else:
+            reply = QMessageBox.question(
+                self, "Oturumu Temizle",
+                "Recipe, script, log ve grafik temizlenecek.\n"
+                "Devam edilsin mi?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+
+        self.clear_session_requested.emit()
+
+    def clear(self):
+        """PackagePanel'i açılış haline getirir."""
+        # Aktif oturum varsa log writer'ı kapat (dosyayı silmiyoruz)
+        self._close_log_writer()
+        self._session = None
+        self._log_writer = None
+        self.sm.reset()
+
+        # Alanları sıfırla
+        self.part_number_edit.clear()
+        self.session_id_edit.clear()
+        # package_root_edit kasıtlı sıfırlanmıyor — disk yolu tercih kalır
+
+        # File references
+        for lbl in (self.tp_lbl, self.scr_lbl, self.recipe_lbl):
+            lbl.setText("—")
+            lbl.setToolTip("")
+            lbl.setStyleSheet("color: #888;")
+
+        # Status
+        self._set_status("Paket oluşturulmadı", _COLOR_NONE)
+        self.session_dir_lbl.setText("")
+        self.aggregate_btn.setEnabled(False)
+
+        # Package log
+        self.log_edit.clear()

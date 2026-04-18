@@ -792,3 +792,25 @@ class ViewerTab(QWidget):
             self._poll_timer.stop()
             self.live_lbl.setText("")
             self._refresh()
+
+    def clear(self):
+        """ViewerTab'ı açılış haline getirir."""
+        self._session = None
+        self._parse_result = None
+        self._marker_items.clear()
+        self._measure_dots.clear()
+        self._measure_range_hooks.clear()
+
+        self._poll_timer.stop()
+        self.live_lbl.setText("")
+        self.session_lbl.setText("Oturum yüklenmedi")
+        self.session_lbl.setStyleSheet("color: #888; font-size: 11px;")
+        self.meta_lbl.setText("—")
+        self.notes_edit.clear()
+        self.sys_edit.clear()
+        self.delete_btn.setEnabled(False)
+
+        if self.plot_widget_top:
+            self.plot_widget_top.clear()
+        if self.plot_widget_bottom:
+            self.plot_widget_bottom.clear()

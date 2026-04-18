@@ -283,3 +283,27 @@ class MethodEditorPanel(QWidget):
 
     def get_current_path(self) -> str:
         return self._current_path
+
+    def clear(self):
+        """MethodEditorPanel'i açılış haline getirir."""
+        self._current_path = ""
+        self.file_lbl.setText("Dosya yuklenmedi")
+        self.file_lbl.setStyleSheet("color: #888; font-size: 11px;")
+        self.file_lbl.setToolTip("")
+
+        self.technic_lbl.setText("Pulsed Amperometric Detection")
+        self.node_lbl.setText("Node 1")
+        self.cellon_lbl.setText("-")
+        self.standbypotential_lbl.setText("-")
+
+        for lbl in self._pre.values():
+            lbl.setText("-")
+        for spin in self._meas.values():
+            spin.setValue(0.0)
+
+        self.sensor_edit.clear()
+        self.sample_edit.clear()
+        self.multi_tech_lbl.setText("-")
+        self.multi_channel_lbl.setText("-")
+        self.multi_current_range_lbl.setText("-")
+        self.multi_ei_spin.setValue(0.0)

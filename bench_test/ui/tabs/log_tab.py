@@ -66,3 +66,7 @@ class LogTab(QWidget):
                 self.log.append(line.rstrip())
         sb = self.log.verticalScrollBar()
         sb.setValue(0)
+
+    def clear(self):
+        """LogTab'ı açılış haline getirir."""
+        self.log.clear()
