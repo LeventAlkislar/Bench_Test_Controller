@@ -323,7 +323,7 @@ class ViewerTab(QWidget):
             return
 
         # Aggregate başarılı — grafiği güncelle
-        self._refresh()
+        self._refresh(reset_view=False)
 
     # ── Session yükleme ───────────────────────────────────────────
 
@@ -377,11 +377,11 @@ class ViewerTab(QWidget):
             self.live_lbl.setText("")
             self.delete_btn.setEnabled(True)
 
-        self._refresh()
+        self._refresh(reset_view=True)
 
     # ── Yenileme ──────────────────────────────────────────────────
 
-    def _refresh(self):
+    def _refresh(self, reset_view: bool = False):
         """Veriyi yeniden okur ve grafiği günceller."""
         if not self._session:
             return
@@ -397,7 +397,7 @@ class ViewerTab(QWidget):
 
         self._update_meta()
         self._load_log()
-        self._plot_data()
+        self._plot_data(reset_view=reset_view)
 
     def _update_meta(self):
         """Session meta bilgilerini annotation paneline yazar."""
@@ -468,9 +468,13 @@ class ViewerTab(QWidget):
 
     # ── Grafik çizimi ─────────────────────────────────────────────
 
-    def _plot_data(self):
+    def _plot_data(self, reset_view: bool = False):
         if not self.plot_widget_top:
             return
+
+        preserved_top_range = None
+        if not reset_view:
+            preserved_top_range = self.plot_widget_top.getViewBox().viewRange()
 
         self.plot_widget_top.clear()
         if self.plot_widget_bottom:
@@ -522,10 +526,16 @@ class ViewerTab(QWidget):
             self._draw_markers(timestamps)
 
         # Measure dot'larını doğru konuma yerleştir.
-        # Veri çizildikten sonra auto-range kesinleşsin, sonra dot'lar güncellensin.
+        # Yeni session yüklenince auto-range uygulanır; normal refresh'te ise
+        # kullanıcının mevcut zoom/pan görünümü korunur.
         top_view_box = self.plot_widget_top.getViewBox()
-        top_view_box.enableAutoRange()
-        top_view_box.autoRange()
+        if reset_view or preserved_top_range is None:
+            top_view_box.enableAutoRange()
+            top_view_box.autoRange()
+        else:
+            top_view_box.disableAutoRange()
+            x_range, y_range = preserved_top_range
+            top_view_box.setRange(xRange=x_range, yRange=y_range, padding=0)
         self._update_measure_dots_for_plot(self.plot_widget_top)
         if self.plot_widget_bottom:
             # Alt grafik Y eksenini ust grafikten linked olarak aliyor;
