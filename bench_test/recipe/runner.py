@@ -26,7 +26,8 @@ class RecipeRunner(threading.Thread):
     def __init__(self, controller_a, controller_b, recipe: Recipe,
                  status_queue: queue.Queue, stop_event: threading.Event,
                  dropview_ctrl: Optional[DropViewController] = None,
-                 session_scr_path: str = ""):
+                 session_scr_path: str = "",
+                 simulation_mode: bool = False):
         super().__init__(daemon=True)
         self.controller_a     = controller_a
         self.controller_b     = controller_b
@@ -35,6 +36,7 @@ class RecipeRunner(threading.Thread):
         self.stop_event       = stop_event
         self.dropview_ctrl    = dropview_ctrl
         self.session_scr_path = session_scr_path
+        self.simulation_mode  = simulation_mode
         self.pause_event      = threading.Event()
         self.pause_event.set()
 
@@ -109,6 +111,8 @@ class RecipeRunner(threading.Thread):
                     return False
             time.sleep(0.3)
             self.controller_a.wait_for_completion(timeout=20.0)
+        elif step.port > 0 and self.simulation_mode:
+            self._log(f"SIMULATED: Valve A -> Port {step.port} (bağlantı yok, atlandı)")
 
         # ── Valf B ────────────────────────────────────────────
         if step.valve_b_state > 0 and self.controller_b and self.controller_b.is_connected():
@@ -122,6 +126,9 @@ class RecipeRunner(threading.Thread):
                     return False
             time.sleep(0.3)
             self.controller_b.wait_for_completion(timeout=20.0)
+        elif step.valve_b_state > 0 and self.simulation_mode:
+            state_name = InjectorValveController.STATE_NAMES.get(step.valve_b_state, "")
+            self._log(f"SIMULATED: Valve B -> {state_name} (bağlantı yok, atlandı)")
 
         if step.duration_minutes <= 0:
             return True

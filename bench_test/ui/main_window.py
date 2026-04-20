@@ -1,5 +1,6 @@
 # bench_test/ui/main_window.py
-from PyQt6.QtWidgets import QMainWindow, QTabWidget, QMessageBox
+from PyQt6.QtWidgets import QMainWindow, QTabWidget, QMessageBox, QLabel, QVBoxLayout, QWidget
+from PyQt6.QtCore import Qt
 
 from bench_test.valve.multiport import ValveController
 from bench_test.valve.injector import InjectorValveController
@@ -22,12 +23,31 @@ class MainWindow(QMainWindow):
         self.ctrl_b  = InjectorValveController()
         self.dv_ctrl = DropViewController(self)
 
+        # Ana layout (banner + tabs)
+        _central = QWidget()
+        _layout  = QVBoxLayout(_central)
+        _layout.setContentsMargins(0, 0, 0, 0)
+        _layout.setSpacing(0)
+        self.setCentralWidget(_central)
+
+        self.sim_banner = QLabel(
+            "⚠️  SİMÜLASYON MODU  —  Valf bağlantısı yok, valf adımları atlanıyor"
+        )
+        self.sim_banner.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.sim_banner.setStyleSheet(
+            "background-color: #E65100; color: white; "
+            "font-weight: bold; font-size: 13px; padding: 6px;"
+        )
+        self.sim_banner.setVisible(False)
+        _layout.addWidget(self.sim_banner)
+
         tabs = QTabWidget()
-        self.setCentralWidget(tabs)
+        _layout.addWidget(tabs)
 
         self.conn_tab   = ConnectionTab(self.ctrl_a, self.ctrl_b, self.dv_ctrl)
         self.manual_tab = ManualControlTab(self.ctrl_a, self.ctrl_b, self.dv_ctrl)
         self.recipe_tab = RecipeTab(self.ctrl_a, self.ctrl_b, self.dv_ctrl)
+        self.recipe_tab._main_window = self
         self.setup_tab  = MeasurementSetupTab(recipe_tab=self.recipe_tab)
         self.viewer_tab = ViewerTab(self.setup_tab.package_panel)
         self.log_tab    = LogTab()
@@ -74,6 +94,15 @@ class MainWindow(QMainWindow):
         self.log_tab.restore_from_session(path)
         self.recipe_tab.restore_from_session(path)
         self.setup_tab.restore_from_session(path)
+
+    def set_simulation_mode(self, active: bool, missing: str = ""):
+        self.sim_banner.setVisible(active)
+        if active:
+            self.setWindowTitle(
+                f"Bench Test Controller v1.0  [⚠️ SİMÜLASYON — {missing} yok]"
+            )
+        else:
+            self.setWindowTitle("Bench Test Controller v1.0")
 
     def closeEvent(self, event):
         if self.recipe_tab.recipe_runner and self.recipe_tab.recipe_runner.is_alive():

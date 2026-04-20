@@ -512,7 +512,7 @@ def step_start_dropview(config: dict, log_fn=None):
         raise RuntimeError(
             "DropSens bağlantı sinyali alındı ancak son doğrulama başarısız. "
             "Lütfen tekrar deneyin."
-        )Fstep_exit
+        )
 
 def step_start_measure(config: dict):
     dv_hwnd = find_window(DROPVIEW_WINDOW_NAME, timeout=10)

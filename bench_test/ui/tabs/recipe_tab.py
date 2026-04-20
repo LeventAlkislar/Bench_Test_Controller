@@ -122,6 +122,9 @@ class RecipeTab(QWidget):
         self._ignoring_changes = False
         self._current_recipe_path = ""                        # ← YENİ
 
+        self._simulation_mode = False
+        self._main_window = None
+
         self._build()
 
         self._poll_timer = QTimer(self)
@@ -530,8 +533,36 @@ class RecipeTab(QWidget):
         if self.package_tab and self.package_tab.get_session():
             self._refresh_table()
 
-        if not self.ctrl_a.is_connected() and not self.ctrl_b.is_connected():
-            QMessageBox.warning(self, "Warning", "No valves connected"); return
+        valve_a_ok = self.ctrl_a.is_connected()
+        valve_b_ok = self.ctrl_b.is_connected()
+        if not valve_a_ok or not valve_b_ok:
+            missing = []
+            if not valve_a_ok: missing.append("Valve A")
+            if not valve_b_ok: missing.append("Valve B")
+            missing_str = " ve ".join(missing)
+            if not valve_a_ok and not valve_b_ok:
+                reply = QMessageBox.warning(
+                    self, "Valf Bağlantısı Yok",
+                    f"{missing_str} bağlı değil.\n\n"
+                    f"Simülasyon modunda devam edilsin mi?\n"
+                    f"(Valf adımları atlanır, diğer adımlar çalışır)",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No
+                )
+                if reply != QMessageBox.StandardButton.Yes:
+                    return
+                self._simulation_mode = True
+                if self._main_window:
+                    self._main_window.set_simulation_mode(True, missing_str)
+                self.log_signal.emit("⚠️ SİMÜLASYON MODU AKTİF — valf adımları atlanıyor")
+            else:
+                # Sadece biri eksik — uyar ama devam et
+                QMessageBox.warning(
+                    self, "Kısmi Bağlantı",
+                    f"{missing_str} bağlı değil.\n"
+                    f"O valve'e ait adımlar atlanacak."
+                )
+                self._simulation_mode = False
         if not self.recipe_steps:
             QMessageBox.warning(self, "Warning", "No recipe steps"); return
 
@@ -547,7 +578,8 @@ class RecipeTab(QWidget):
 
         self.recipe_runner = RecipeRunner(
             self.ctrl_a, self.ctrl_b, recipe, self.status_queue, self.stop_event,
-            self.dv_ctrl, session_scr_path=session_scr)
+            self.dv_ctrl, session_scr_path=session_scr,
+            simulation_mode=self._simulation_mode)
         self.recipe_runner.start()
         if self.package_tab:
             self.package_tab.sm.start()
@@ -571,6 +603,9 @@ class RecipeTab(QWidget):
         self.progress.setValue(0); self.progress_lbl.setText("0%")
         if self.package_tab:                                  # ← YENİ
             self.package_tab.on_recipe_aborted()              # ← YENİ
+        self._simulation_mode = False
+        if self._main_window:
+            self._main_window.set_simulation_mode(False)
         self.log_signal.emit("Recipe stopped")
 
     def _poll_queue(self):
@@ -608,6 +643,9 @@ class RecipeTab(QWidget):
                     self.start_btn.setEnabled(True)
                     self.pause_btn.setEnabled(False)
                     self.stop_btn.setEnabled(False)
+                    self._simulation_mode = False
+                    if self._main_window:
+                        self._main_window.set_simulation_mode(False)
                     if self.package_tab:                      # ← YENİ
                         self.package_tab.on_recipe_completed()  # ← YENİ
                     QMessageBox.information(self, "Recipe Complete", str(data))
@@ -622,6 +660,9 @@ class RecipeTab(QWidget):
                     self.stop_btn.setEnabled(False)
                     if self.package_tab:                      # ← YENİ
                         self.package_tab.on_recipe_aborted()  # ← YENİ
+                    self._simulation_mode = False
+                    if self._main_window:
+                        self._main_window.set_simulation_mode(False)
                     QMessageBox.critical(self, "Recipe Error", str(data))
                     self.log_signal.emit(f"Recipe error: {data}")
                 elif msg_type == "warning":

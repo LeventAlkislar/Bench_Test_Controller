@@ -21,7 +21,7 @@ SLEEP_AFTER_LAUNCH     = 2.0   # exe başlatıldıktan sonra pencere için
 
 # ── Timeout'lar (saniye) ───────────────────────────────────────
 TIMEOUT_WINDOW_OPEN    = 60    # pencere görünene kadar
-TIMEOUT_CONNECT        = 30    # DropSens bağlantısı
+TIMEOUT_CONNECT        = 60    # DropSens bağlantısı
 TIMEOUT_STOP_MEASURE   = 60    # sarı nokta kaybolana kadar
 TIMEOUT_CLOSE_WINDOW   = 10    # pencere kapanana kadar
 TIMEOUT_VALVE          = 20    # valf hareketi tamamlanana kadar
