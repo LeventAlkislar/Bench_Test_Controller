@@ -19,6 +19,9 @@ from bench_test.config import (
     TIMEOUT_WINDOW_OPEN, TIMEOUT_CONNECT, TIMEOUT_STOP_MEASURE, TIMEOUT_CLOSE_WINDOW,
     POLL_INTERVAL_NORMAL, POLL_INTERVAL_SLOW, DROPVIEW_EXE_CANDIDATES,
     PYAUTOGUI_FAILSAFE, PYAUTOGUI_PAUSE,
+    TARGET_DROPSENS_COM, DROPSENS_COM_PORTS,
+    MANUAL_CONNECTION_WINDOW, ERROR_WINDOW,
+    MSG_NO_DEVICE, MSG_POTENTIOSTAT_NOT_FOUND,
 )
 from bench_test.dropview.vision import (
     find_on_screen, match_score_on_screen,
@@ -44,8 +47,12 @@ _IMG = {k: os.path.join(_IMG_DIR, v) for k, v in {
     "loaded_scripts":      "loaded_scripts_label.png",
     "yellow_dot_selected": "yellow_dot_selected.png",
     "green_dot_selected":  "green_dot_selected.png",
-    "connected":           "connected_status.png",
-    "disconnected":        "disconnected_status.png",
+    "connected":                    "connected_status.png",
+    "disconnected":                 "disconnected_status.png",
+    "manual_conn_com3":             "manual_connection_com3.png",
+    "manual_conn_com10":            "manual_connection_com10.png",
+    "manual_conn_connect_btn":      "manual_connection_connect_btn.png",
+    "manual_conn_dropdown_arrow":   "manual_connection_dropdown_arrow.png",
 }.items()}
 
 
@@ -159,6 +166,125 @@ def close_owned_dialogs(owner_hwnd, log_fn=None) -> int:
             if log_fn:
                 log_fn(f"│    HATA (dialog kapatılırken): {e}")
     return closed
+
+
+def _read_error_window_text(hwnd) -> str:
+    """
+    Error penceresinin içindeki static text child'ını okur.
+    Pencere içeriğine göre hata türünü ayırt etmek için kullanılır.
+    """
+    texts = []
+
+    def _cb(child_hwnd, _):
+        cls = win32gui.GetClassName(child_hwnd)
+        if cls == "Static":
+            text = win32gui.GetWindowText(child_hwnd)
+            if text:
+                texts.append(text)
+
+    try:
+        win32gui.EnumChildWindows(hwnd, _cb, None)
+    except Exception:
+        pass
+    return " ".join(texts)
+
+
+def _wait_for_connection_result(timeout=30, poll_interval=0.5) -> str:
+    """
+    Bağlantı girişimi sonucunu bekler ve döner.
+    Dönüş değerleri:
+        'connected'              - Bağlantı başarılı
+        'no_device_connected'    - Cihaz bulunamadı
+        'potentiostat_not_found' - Potentiostat bulunamadı
+        'unknown_error'          - Tanınmayan hata penceresi
+        'timeout'                - Zaman aşımı
+    """
+    start = time.time()
+    while time.time() - start < timeout:
+        if not window_exists(CONNECTING_DIALOG):
+            if window_exists(ERROR_WINDOW):
+                err_hwnd = find_window(ERROR_WINDOW, timeout=3)
+                text = _read_error_window_text(err_hwnd)
+                try:
+                    win32gui.SetForegroundWindow(err_hwnd)
+                    time.sleep(SLEEP_AFTER_CLICK)
+                    pyautogui.press("enter")
+                    time.sleep(SLEEP_AFTER_FOCUS)
+                except Exception:
+                    pass
+                if MSG_NO_DEVICE in text:
+                    return "no_device_connected"
+                if MSG_POTENTIOSTAT_NOT_FOUND in text:
+                    return "potentiostat_not_found"
+                return "unknown_error"
+            if _is_dropview_connected():
+                return "connected"
+        time.sleep(poll_interval)
+    return "timeout"
+
+
+def _connect_manual(dv_hwnd, target_com: str, log_fn=None) -> str:
+    """
+    Alt+D → M ile Manual Connection penceresini açar,
+    hedef COM portunu seçer ve Connect butonuna basar.
+    Dönüş değeri: 'connected' / 'no_device_connected' /
+                  'potentiostat_not_found' / 'unknown_error' / 'timeout'
+    """
+    def _log(msg):
+        if log_fn:
+            log_fn(msg)
+
+    if target_com not in DROPSENS_COM_PORTS:
+        _log(f"│  UYARI: Desteklenmeyen COM portu: {target_com}")
+        return "timeout"
+
+    win32gui.SetForegroundWindow(dv_hwnd)
+    time.sleep(SLEEP_AFTER_FOCUS)
+    pyautogui.hotkey("alt", "d")
+    time.sleep(SLEEP_AFTER_FOCUS)
+    pyautogui.press("m")
+    time.sleep(SLEEP_AFTER_FOCUS)
+
+    try:
+        find_window(MANUAL_CONNECTION_WINDOW, timeout=10)
+    except TimeoutError:
+        _log("│  UYARI: Manual Connection penceresi açılmadı.")
+        return "timeout"
+
+    time.sleep(SLEEP_AFTER_FOCUS)
+
+    try:
+        dx, dy = find_on_screen(_IMG["manual_conn_dropdown_arrow"], threshold=THRESHOLD_MID)
+        pyautogui.click(dx, dy)
+        time.sleep(SLEEP_AFTER_CLICK)
+    except Exception as e:
+        _log(f"│  UYARI: COM port dropdown açılamadı: {e}")
+        return "timeout"
+
+    com_key = "manual_conn_com3" if target_com == "COM3" else "manual_conn_com10"
+    try:
+        cx, cy = find_on_screen(_IMG[com_key], threshold=THRESHOLD_MID)
+        pyautogui.click(cx, cy)
+        time.sleep(SLEEP_AFTER_CLICK)
+    except Exception as e:
+        _log(f"│  UYARI: {target_com} görseli bulunamadı: {e}")
+        return "timeout"
+
+    try:
+        bx, by = find_on_screen(_IMG["manual_conn_connect_btn"], threshold=THRESHOLD_MID)
+        pyautogui.click(bx, by)
+        time.sleep(SLEEP_AFTER_COMMAND)
+    except Exception as e:
+        _log(f"│  UYARI: Connect butonu bulunamadı: {e}")
+        return "timeout"
+
+    try:
+        wait_for_window_close(MANUAL_CONNECTION_WINDOW, timeout=10)
+    except TimeoutError:
+        _log("│  UYARI: Manual Connection penceresi kapanmadı.")
+        return "timeout"
+
+    return _wait_for_connection_result(timeout=TIMEOUT_CONNECT)
 
 # ── Bağlantı durumu ────────────────────────────────────────────
 
@@ -488,23 +614,42 @@ def step_start_dropview(config: dict, log_fn=None):
         win32gui.ShowWindow(dv_hwnd, win32con.SW_RESTORE)
         time.sleep(SLEEP_AFTER_FOCUS)
 
-    win32gui.SetForegroundWindow(dv_hwnd)
-    time.sleep(SLEEP_AFTER_CLICK)
-    win32api.keybd_event(win32con.VK_CONTROL, 0, 0, 0)
-    win32api.keybd_event(ord('C'), 0, 0, 0)
-    win32api.keybd_event(ord('C'), 0, win32con.KEYEVENTF_KEYUP, 0)
-    win32api.keybd_event(win32con.VK_CONTROL, 0, win32con.KEYEVENTF_KEYUP, 0)
-    time.sleep(SLEEP_AFTER_COMMAND)
+    manual_attempts = []
+    result = "timeout"
+    for target_com in DROPSENS_COM_PORTS:
+        _log(f"│  Manuel bağlantı deneniyor: {target_com}...")
+        result = _connect_manual(dv_hwnd, target_com, log_fn=log_fn)
+        manual_attempts.append((target_com, result))
+        if result == "connected":
+            _log(f"│  DropSens bağlandı (manuel: {target_com}).")
+            break
+        _log(f"│  Manuel bağlantı başarısız ({target_com}: {result}).")
 
-    if window_exists(CONNECTING_DIALOG):
-        wait_for_window_close(CONNECTING_DIALOG, timeout=TIMEOUT_WINDOW_OPEN)
+    if result == "connected":
+        pass
+    elif result in ("no_device_connected", "potentiostat_not_found", "unknown_error", "timeout"):
+        attempts_str = ", ".join(f"{port}={status}" for port, status in manual_attempts)
+        _log(f"│  Manuel bağlantılar başarısız ({attempts_str}), Ctrl+C ile tekrar deneniyor...")
+        win32gui.SetForegroundWindow(dv_hwnd)
+        time.sleep(SLEEP_AFTER_CLICK)
+        win32api.keybd_event(win32con.VK_CONTROL, 0, 0, 0)
+        win32api.keybd_event(ord('C'), 0, 0, 0)
+        win32api.keybd_event(ord('C'), 0, win32con.KEYEVENTF_KEYUP, 0)
+        win32api.keybd_event(win32con.VK_CONTROL, 0, win32con.KEYEVENTF_KEYUP, 0)
+        time.sleep(SLEEP_AFTER_COMMAND)
 
-    try:
-        wait_until_connected(timeout=TIMEOUT_CONNECT)
-    except TimeoutError:
+        fallback_result = _wait_for_connection_result(timeout=TIMEOUT_CONNECT)
+        if fallback_result != "connected":
+            raise RuntimeError(
+                f"DropSens bağlantısı kurulamadı (manuel: {attempts_str}, "
+                f"Ctrl+C: {fallback_result}). Cihazın bağlı ve "
+                f"DropView'in hazır durumda olduğundan emin olun."
+            )
+        _log("│  DropSens bağlandı (Ctrl+C fallback).")
+    else:
         raise RuntimeError(
-            "DropSens bağlantısı kurulamadı: Cihazın fiziksel olarak bağlı "
-            "olduğundan ve DropView'in hazır durumda olduğundan emin olun."
+            "DropSens bağlantısı zaman aşımına uğradı. "
+            "Cihazın bağlı olduğundan emin olun."
         )
 
     time.sleep(SLEEP_AFTER_FOCUS)
@@ -542,6 +687,7 @@ def step_start_measure(config: dict):
         )
 
     wait_for_image(_IMG["scripts_menu"], timeout=TIMEOUT_WINDOW_OPEN, poll_interval=POLL_INTERVAL_SLOW)
+    time.sleep(SLEEP_AFTER_FOCUS)
     pyautogui.hotkey("alt", "s")
     time.sleep(SLEEP_AFTER_FOCUS)
     pyautogui.press("s")

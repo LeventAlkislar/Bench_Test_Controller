@@ -45,3 +45,11 @@ AGGREGATE_INTERVAL_MS = 10_000   # Periyodik aggregate aralığı (ms)
 # ── script ayarları ─────────────────────────────────────────
 DEFAULT_REPEAT_COUNT      = 1440
 DEFAULT_WAIT_DURATION_SEC = 47.5
+
+# ── Manuel DropSens bağlantı ayarları ─────────────────────────
+TARGET_DROPSENS_COM        = "COM3"
+DROPSENS_COM_PORTS         = ["COM3", "COM10"]
+MANUAL_CONNECTION_WINDOW   = "Manual Connection"
+ERROR_WINDOW               = "Error"
+MSG_NO_DEVICE              = "No device connected"
+MSG_POTENTIOSTAT_NOT_FOUND = "Potentiostat not found"
