@@ -82,11 +82,11 @@ class DropViewController(QObject):
                 if log_fn: log_fn(f"Launch hatası: {e}")
         threading.Thread(target=_run, daemon=True).start()
 
-    def do_connect_dropsens(self, log_fn=None):
-        """Sadece Ctrl+C ile bağlanır."""
+    def do_connect_dropsens(self, com_port=None, log_fn=None):
+        """Manuel COM port seçimi ile bağlanır; başarısız olursa Ctrl+C fallback."""
         def _run():
             try:
-                automator.step_connect_dropsens()
+                automator.step_connect_dropsens(target_com=com_port, log_fn=log_fn)
                 self._last_connected = True
                 self.status_changed.emit(True)
                 if log_fn: log_fn("DropSens bağlandı.")
@@ -109,7 +109,7 @@ class DropViewController(QObject):
     def do_start_dropview(self, log_fn=None) -> bool:
         """Recipe için: exe başlat + bağlan."""
         try:
-            automator.step_start_dropview({})
+            automator.step_start_dropview({}, log_fn=log_fn)
             self._last_connected = True
             self.status_changed.emit(True)
             if log_fn: log_fn("DropView başlatıldı ve DropSens bağlandı.")

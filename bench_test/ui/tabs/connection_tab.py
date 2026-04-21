@@ -28,6 +28,11 @@ class ConnectionTab(QWidget):
         self.ctrl_a = ctrl_a; self.ctrl_b = ctrl_b; self.dv_ctrl = dv_ctrl
         self._build()
         self._refresh_ports()
+        # Kaydedilmiş Valve A/B portlarını geri yükle
+        saved_a = get_last("valve_a_port", "")
+        saved_b = get_last("valve_b_port", "")
+        if saved_a: self.port_a.setCurrentText(saved_a)
+        if saved_b: self.port_b.setCurrentText(saved_b)
         dv_ctrl.status_changed.connect(self._on_dv_status)
         dv_ctrl.status_changed.connect(self._on_dv_status_summary)
         dv_ctrl.action_done.connect(self._on_dv_action_done)
@@ -56,9 +61,12 @@ class ConnectionTab(QWidget):
         row_a.addWidget(QLabel("Baud:"))
         self.baud_a = QComboBox()
         self.baud_a.addItems(["9600","19200","38400","57600","115200"])
+        saved_baud_a = get_last("valve_a_baud", "9600")
+        if saved_baud_a in ["9600","19200","38400","57600","115200"]:
+            self.baud_a.setCurrentText(saved_baud_a)
         row_a.addWidget(self.baud_a)
         row_a.addWidget(QLabel("Addr (hex):"))
-        self.addr_a = QLineEdit("00"); self.addr_a.setMaximumWidth(40)
+        self.addr_a = QLineEdit(get_last("valve_a_addr", "00")); self.addr_a.setMaximumWidth(40)
         row_a.addWidget(self.addr_a)
         row_a.addStretch()
         fla.addLayout(row_a)
@@ -85,9 +93,12 @@ class ConnectionTab(QWidget):
         row_b.addWidget(QLabel("Baud:"))
         self.baud_b = QComboBox()
         self.baud_b.addItems(["9600","19200","38400","57600","115200"])
+        saved_baud_b = get_last("valve_b_baud", "9600")
+        if saved_baud_b in ["9600","19200","38400","57600","115200"]:
+            self.baud_b.setCurrentText(saved_baud_b)
         row_b.addWidget(self.baud_b)
         row_b.addWidget(QLabel("Addr (hex):"))
-        self.addr_b = QLineEdit("00"); self.addr_b.setMaximumWidth(40)
+        self.addr_b = QLineEdit(get_last("valve_b_addr", "00")); self.addr_b.setMaximumWidth(40)
         row_b.addWidget(self.addr_b)
         row_b.addStretch()
         flb.addLayout(row_b)
@@ -144,6 +155,13 @@ class ConnectionTab(QWidget):
         gd = QGroupBox("DropSens - DropView 8400M")
         fld = QVBoxLayout(gd)
 
+        row_dv = QHBoxLayout()
+        row_dv.addWidget(QLabel("COM Port:"))
+        self.port_dv = QComboBox(); self.port_dv.setMinimumWidth(100)
+        row_dv.addWidget(self.port_dv)
+        row_dv.addStretch()
+        fld.addLayout(row_dv)
+
         row_prog = QHBoxLayout()
         self.dv_launch_btn = _btn("Start DropView", self._dv_launch, "#3F51B5", 130)
         self.dv_connect_btn    = _btn("Connect",    self._dv_connect,    "#4CAF50", 130)
@@ -179,11 +197,17 @@ class ConnectionTab(QWidget):
 
     def _refresh_ports(self):
         ports = [p.device for p in serial.tools.list_ports.comports()]
-        for combo in [self.port_a, self.port_b]:
+        for combo in [self.port_a, self.port_b, self.port_dv]:
             current = combo.currentText()
             combo.clear()
             combo.addItems(ports)
-            if current in ports: combo.setCurrentText(current)
+            if current in ports:
+                combo.setCurrentText(current)
+        # Kaydedilmiş port yoksa default olarak COM3 seç
+        if not self.port_dv.currentText():
+            saved = get_last("dropsens_com", "COM3")
+            if saved in ports:
+                self.port_dv.setCurrentText(saved)
 
     def _connect_a(self):
         try:
@@ -193,6 +217,9 @@ class ConnectionTab(QWidget):
             self.conn_a_btn.setEnabled(False); self.disc_a_btn.setEnabled(True)
             self.test_a_btn.setEnabled(True);  self.set_spd_btn.setEnabled(True)
             self.set_perm_btn.setEnabled(True); self.qry_spd_btn.setEnabled(True)
+            remember("valve_a_port", self.port_a.currentText())
+            remember("valve_a_baud", self.baud_a.currentText())
+            remember("valve_a_addr", self.addr_a.text())
             self.log_signal.emit(f"Valve A connected to {self.port_a.currentText()}")
             self._update_summary(); self._query_speed()
         except Exception as e:
@@ -251,6 +278,9 @@ class ConnectionTab(QWidget):
             self.status_b.setText("● Connected"); self.status_b.setStyleSheet("color:#4CAF50;")
             self.conn_b_btn.setEnabled(False); self.disc_b_btn.setEnabled(True)
             self.test_b_btn.setEnabled(True)
+            remember("valve_b_port", self.port_b.currentText())
+            remember("valve_b_baud", self.baud_b.currentText())
+            remember("valve_b_addr", self.addr_b.text())
             self.log_signal.emit(f"Valve B connected to {self.port_b.currentText()}")
             self._update_summary()
         except Exception as e:
@@ -278,7 +308,12 @@ class ConnectionTab(QWidget):
         self.dv_status.setText("● Bağlanıyor...")
         self.dv_status.setStyleSheet("color:#FF9800;")
         self.log_signal.emit("DropSens bağlanıyor...")
-        self.dv_ctrl.do_connect_dropsens(log_fn=lambda msg: self.log_signal.emit(msg))
+        com = self.port_dv.currentText()
+        remember("dropsens_com", com)
+        self.dv_ctrl.do_connect_dropsens(
+            com_port=com,
+            log_fn=lambda msg: self.log_signal.emit(msg)
+        )
 
     def _dv_disconnect(self):
         self.dv_status.setText("● Bağlantı kesiliyor...")

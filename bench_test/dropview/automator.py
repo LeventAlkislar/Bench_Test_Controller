@@ -406,8 +406,12 @@ def step_launch_dropview():
     time.sleep(SLEEP_AFTER_LAUNCH)
 
 
-def step_connect_dropsens():
-    """Sadece Ctrl+C ile DropSens'e bağlanır."""
+def step_connect_dropsens(target_com: str = None, log_fn=None):
+    """Manuel COM port seçimi ile DropSens'e bağlanır; başarısız olursa Ctrl+C fallback."""
+    def _log(msg):
+        if log_fn:
+            log_fn(msg)
+
     if _is_dropview_connected():
         return
     if not window_exists(DROPVIEW_WINDOW_NAME):
@@ -418,6 +422,17 @@ def step_connect_dropsens():
         win32gui.ShowWindow(dv_hwnd, win32con.SW_RESTORE)
         time.sleep(SLEEP_AFTER_FOCUS)
 
+    com = target_com or TARGET_DROPSENS_COM
+
+    _log(f"│  Manuel bağlantı deneniyor: {com}...")
+    result = _connect_manual(dv_hwnd, com, log_fn=log_fn)
+
+    if result == "connected":
+        _log("│  DropSens bağlandı (manuel).")
+        return
+
+    _log(f"│  Manuel bağlantı başarısız ({result}), Ctrl+C ile tekrar deneniyor...")
+
     win32gui.SetForegroundWindow(dv_hwnd)
     time.sleep(SLEEP_AFTER_CLICK)
     win32api.keybd_event(win32con.VK_CONTROL, 0, 0, 0)
@@ -426,16 +441,14 @@ def step_connect_dropsens():
     win32api.keybd_event(win32con.VK_CONTROL, 0, win32con.KEYEVENTF_KEYUP, 0)
     time.sleep(SLEEP_AFTER_COMMAND)
 
-    if window_exists(CONNECTING_DIALOG):
-        wait_for_window_close(CONNECTING_DIALOG, timeout=TIMEOUT_WINDOW_OPEN)
-
-    try:
-        wait_until_connected(timeout=TIMEOUT_CONNECT)
-    except TimeoutError:
+    fallback_result = _wait_for_connection_result(timeout=TIMEOUT_CONNECT)
+    if fallback_result != "connected":
         raise RuntimeError(
-            "DropSens bağlantısı kurulamadı: Cihazın fiziksel olarak bağlı "
-            "olduğundan ve DropView'in hazır durumda olduğundan emin olun."
+            f"DropSens bağlantısı kurulamadı (manuel: {result}, "
+            f"Ctrl+C: {fallback_result}). Cihazın bağlı ve "
+            f"DropView'in hazır durumda olduğundan emin olun."
         )
+    _log("│  DropSens bağlandı (Ctrl+C fallback).")
 
     time.sleep(SLEEP_AFTER_FOCUS)
     if not _is_dropview_connected():
