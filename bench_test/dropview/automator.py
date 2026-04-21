@@ -19,7 +19,7 @@ from bench_test.config import (
     TIMEOUT_WINDOW_OPEN, TIMEOUT_CONNECT, TIMEOUT_STOP_MEASURE, TIMEOUT_CLOSE_WINDOW,
     POLL_INTERVAL_NORMAL, POLL_INTERVAL_SLOW, DROPVIEW_EXE_CANDIDATES,
     PYAUTOGUI_FAILSAFE, PYAUTOGUI_PAUSE,
-    TARGET_DROPSENS_COM, DROPSENS_COM_PORTS,
+    DROPSENS_COM_PORTS,
     MANUAL_CONNECTION_WINDOW, ERROR_WINDOW,
     MSG_NO_DEVICE, MSG_POTENTIOSTAT_NOT_FOUND,
 )
@@ -28,7 +28,7 @@ from bench_test.dropview.vision import (
     wait_for_image, wait_for_image_gone,
     _grab_region, _images_equal,
 )
-from bench_test.utils.paths import BASE_DIR, ASSETS_DIR, get_last, remember
+from bench_test.utils.paths import BASE_DIR, ASSETS_DIR, get_last, remember, get_value, remember_value
 
 # pyautogui ayarları
 pyautogui.FAILSAFE = PYAUTOGUI_FAILSAFE
@@ -221,6 +221,24 @@ def _wait_for_connection_result(timeout=30, poll_interval=0.5) -> str:
                 return "connected"
         time.sleep(poll_interval)
     return "timeout"
+
+
+def _resolve_target_dropsens_ports(preferred_port=None) -> list[str]:
+    """
+    Denenecek COM portlarını öncelik sırasıyla döner.
+    Sıralama:
+        1. preferred_port (varsa)
+        2. get_value("dropsens_com") ile kaydedilmiş port (varsa)
+        3. DROPSENS_COM_PORTS listesindeki kalanlar
+    Tekrarlar korunmaz.
+    """
+    seen = set()
+    ports = []
+    for p in [preferred_port, get_value("dropsens_com", "")] + DROPSENS_COM_PORTS:
+        if p and p not in seen:
+            seen.add(p)
+            ports.append(p)
+    return ports
 
 
 def _connect_manual(dv_hwnd, target_com: str, log_fn=None) -> str:
@@ -422,16 +440,20 @@ def step_connect_dropsens(target_com: str = None, log_fn=None):
         win32gui.ShowWindow(dv_hwnd, win32con.SW_RESTORE)
         time.sleep(SLEEP_AFTER_FOCUS)
 
-    com = target_com or TARGET_DROPSENS_COM
+    manual_attempts = []
+    result = "timeout"
+    for com in _resolve_target_dropsens_ports(preferred_port=target_com):
+        _log(f"│  Manuel bağlantı deneniyor: {com}...")
+        result = _connect_manual(dv_hwnd, com, log_fn=log_fn)
+        manual_attempts.append((com, result))
+        if result == "connected":
+            _log(f"│  DropSens bağlandı (manuel: {com}).")
+            remember_value("dropsens_com", com)
+            return
+        _log(f"│  Manuel bağlantı başarısız ({com}: {result}).")
 
-    _log(f"│  Manuel bağlantı deneniyor: {com}...")
-    result = _connect_manual(dv_hwnd, com, log_fn=log_fn)
-
-    if result == "connected":
-        _log("│  DropSens bağlandı (manuel).")
-        return
-
-    _log(f"│  Manuel bağlantı başarısız ({result}), Ctrl+C ile tekrar deneniyor...")
+    attempts_str = ", ".join(f"{p}={s}" for p, s in manual_attempts)
+    _log(f"│  Manuel bağlantılar başarısız ({attempts_str}), Ctrl+C ile tekrar deneniyor...")
 
     win32gui.SetForegroundWindow(dv_hwnd)
     time.sleep(SLEEP_AFTER_CLICK)
@@ -629,12 +651,13 @@ def step_start_dropview(config: dict, log_fn=None):
 
     manual_attempts = []
     result = "timeout"
-    for target_com in DROPSENS_COM_PORTS:
+    for target_com in _resolve_target_dropsens_ports():
         _log(f"│  Manuel bağlantı deneniyor: {target_com}...")
         result = _connect_manual(dv_hwnd, target_com, log_fn=log_fn)
         manual_attempts.append((target_com, result))
         if result == "connected":
             _log(f"│  DropSens bağlandı (manuel: {target_com}).")
+            remember_value("dropsens_com", target_com)
             break
         _log(f"│  Manuel bağlantı başarısız ({target_com}: {result}).")
 

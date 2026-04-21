@@ -14,7 +14,7 @@ from PyQt6.QtGui import QColor, QFont
 from bench_test.valve.multiport import ValveController, SV01Protocol
 from bench_test.valve.injector import InjectorValveController
 from bench_test.dropview.controller import DropViewController
-from bench_test.utils.paths import get_last, remember
+from bench_test.utils.paths import get_last, remember, get_value, remember_value
 
 from bench_test.ui.widgets import _btn, _lbl, _status_lbl
 
@@ -29,10 +29,14 @@ class ConnectionTab(QWidget):
         self._build()
         self._refresh_ports()
         # Kaydedilmiş Valve A/B portlarını geri yükle
-        saved_a = get_last("valve_a_port", "")
-        saved_b = get_last("valve_b_port", "")
+        saved_a = get_value("valve_a_port", "")
+        saved_b = get_value("valve_b_port", "")
+        saved_dv = get_value("dropsens_com", "")
         if saved_a: self.port_a.setCurrentText(saved_a)
         if saved_b: self.port_b.setCurrentText(saved_b)
+        if saved_dv and self.port_dv.findText(saved_dv) >= 0:
+            self.port_dv.setCurrentText(saved_dv)
+
         dv_ctrl.status_changed.connect(self._on_dv_status)
         dv_ctrl.status_changed.connect(self._on_dv_status_summary)
         dv_ctrl.action_done.connect(self._on_dv_action_done)
@@ -61,12 +65,12 @@ class ConnectionTab(QWidget):
         row_a.addWidget(QLabel("Baud:"))
         self.baud_a = QComboBox()
         self.baud_a.addItems(["9600","19200","38400","57600","115200"])
-        saved_baud_a = get_last("valve_a_baud", "9600")
+        saved_baud_a = get_value("valve_a_baud", "9600")
         if saved_baud_a in ["9600","19200","38400","57600","115200"]:
             self.baud_a.setCurrentText(saved_baud_a)
         row_a.addWidget(self.baud_a)
         row_a.addWidget(QLabel("Addr (hex):"))
-        self.addr_a = QLineEdit(get_last("valve_a_addr", "00")); self.addr_a.setMaximumWidth(40)
+        self.addr_a = QLineEdit(get_value("valve_a_addr", "00")); self.addr_a.setMaximumWidth(40)
         row_a.addWidget(self.addr_a)
         row_a.addStretch()
         fla.addLayout(row_a)
@@ -93,12 +97,12 @@ class ConnectionTab(QWidget):
         row_b.addWidget(QLabel("Baud:"))
         self.baud_b = QComboBox()
         self.baud_b.addItems(["9600","19200","38400","57600","115200"])
-        saved_baud_b = get_last("valve_b_baud", "9600")
+        saved_baud_b = get_value("valve_b_baud", "9600")
         if saved_baud_b in ["9600","19200","38400","57600","115200"]:
             self.baud_b.setCurrentText(saved_baud_b)
         row_b.addWidget(self.baud_b)
         row_b.addWidget(QLabel("Addr (hex):"))
-        self.addr_b = QLineEdit(get_last("valve_b_addr", "00")); self.addr_b.setMaximumWidth(40)
+        self.addr_b = QLineEdit(get_value("valve_b_addr", "00")); self.addr_b.setMaximumWidth(40)
         row_b.addWidget(self.addr_b)
         row_b.addStretch()
         flb.addLayout(row_b)
@@ -197,17 +201,20 @@ class ConnectionTab(QWidget):
 
     def _refresh_ports(self):
         ports = [p.device for p in serial.tools.list_ports.comports()]
-        for combo in [self.port_a, self.port_b, self.port_dv]:
+        for combo in [self.port_a, self.port_b]:
             current = combo.currentText()
             combo.clear()
             combo.addItems(ports)
             if current in ports:
                 combo.setCurrentText(current)
-        # Kaydedilmiş port yoksa default olarak COM3 seç
-        if not self.port_dv.currentText():
-            saved = get_last("dropsens_com", "COM3")
-            if saved in ports:
-                self.port_dv.setCurrentText(saved)
+        # port_dv ayrı işlenir: kaydedilmiş port öncelikli
+        saved_dv = get_value("dropsens_com", "")
+        current_dv = self.port_dv.currentText()
+        self.port_dv.clear()
+        self.port_dv.addItems(ports)
+        preferred = saved_dv or current_dv
+        if preferred and self.port_dv.findText(preferred) >= 0:
+            self.port_dv.setCurrentText(preferred)
 
     def _connect_a(self):
         try:
@@ -217,9 +224,9 @@ class ConnectionTab(QWidget):
             self.conn_a_btn.setEnabled(False); self.disc_a_btn.setEnabled(True)
             self.test_a_btn.setEnabled(True);  self.set_spd_btn.setEnabled(True)
             self.set_perm_btn.setEnabled(True); self.qry_spd_btn.setEnabled(True)
-            remember("valve_a_port", self.port_a.currentText())
-            remember("valve_a_baud", self.baud_a.currentText())
-            remember("valve_a_addr", self.addr_a.text())
+            remember_value("valve_a_port", self.port_a.currentText())
+            remember_value("valve_a_baud", self.baud_a.currentText())
+            remember_value("valve_a_addr", self.addr_a.text())
             self.log_signal.emit(f"Valve A connected to {self.port_a.currentText()}")
             self._update_summary(); self._query_speed()
         except Exception as e:
@@ -278,9 +285,9 @@ class ConnectionTab(QWidget):
             self.status_b.setText("● Connected"); self.status_b.setStyleSheet("color:#4CAF50;")
             self.conn_b_btn.setEnabled(False); self.disc_b_btn.setEnabled(True)
             self.test_b_btn.setEnabled(True)
-            remember("valve_b_port", self.port_b.currentText())
-            remember("valve_b_baud", self.baud_b.currentText())
-            remember("valve_b_addr", self.addr_b.text())
+            remember_value("valve_b_port", self.port_b.currentText())
+            remember_value("valve_b_baud", self.baud_b.currentText())
+            remember_value("valve_b_addr", self.addr_b.text())
             self.log_signal.emit(f"Valve B connected to {self.port_b.currentText()}")
             self._update_summary()
         except Exception as e:
@@ -309,7 +316,7 @@ class ConnectionTab(QWidget):
         self.dv_status.setStyleSheet("color:#FF9800;")
         self.log_signal.emit("DropSens bağlanıyor...")
         com = self.port_dv.currentText()
-        remember("dropsens_com", com)
+        remember_value("dropsens_com", com)
         self.dv_ctrl.do_connect_dropsens(
             com_port=com,
             log_fn=lambda msg: self.log_signal.emit(msg)

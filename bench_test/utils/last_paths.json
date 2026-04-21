@@ -9,5 +9,6 @@
   "scr_save_dir": "C:\\UNAM DRIVE\\TUSEB\\SGI Prototip Gelistirme\\1B Sistem Muhendisligi\\Bench Tests\\CGM Measurements\\Measurement Parameters\\Scripts",
   "browse_session": "G:\\Diğer bilgisayarlar\\Bench Test\\CGM Measurements\\Bench Measurements\\PAD Discrete Measurements\\UNAM-M2-Only Redox+GOx\\20260418_141335",
   "response_delay_min": 22,
-  "response_delay_sec": 0
+  "response_delay_sec": 0,
+  "dropsens_com": "COM10"
 }
