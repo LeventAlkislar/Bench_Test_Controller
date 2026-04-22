@@ -168,6 +168,34 @@ def close_owned_dialogs(owner_hwnd, log_fn=None) -> int:
     return closed
 
 
+def _dismiss_warning_if_present(window_title: str, wait: float = 3.0) -> bool:
+    """
+    Belirtilen başlıktaki uyarı penceresini kısa bir süre boyunca yoklar.
+    Diyalog görünürse öne alır, Enter ile kapatır ve kapandığını doğrular.
+    Bulamazsa sessizce geçer.
+    """
+    deadline = time.time() + wait
+    while time.time() < deadline:
+        if window_exists(window_title):
+            try:
+                warn_hwnd = find_window(window_title, timeout=0.5, poll_interval=0.1)
+                win32gui.SetForegroundWindow(warn_hwnd)
+            except Exception:
+                warn_hwnd = None
+
+            time.sleep(0.3)
+            pyautogui.press("enter")
+            try:
+                wait_for_window_close(window_title, timeout=2, poll_interval=0.1)
+            except TimeoutError:
+                time.sleep(SLEEP_AFTER_FOCUS)
+            else:
+                time.sleep(SLEEP_AFTER_FOCUS)
+            return True
+        time.sleep(0.2)
+    return False
+
+
 def _read_error_window_text(hwnd) -> str:
     """
     Error penceresinin içindeki static text child'ını okur.
@@ -781,9 +809,8 @@ def step_start_measure(config: dict):
     pyautogui.click(rx, ry)
     time.sleep(SLEEP_AFTER_COMMAND)
 
-    if window_exists(WARNING_UNSAVED):
-        pyautogui.press("enter")
-        time.sleep(SLEEP_AFTER_FOCUS)
+    # "Some curves have not been saved" diyalogu Run sonrası gecikmeli açılabiliyor.
+    _dismiss_warning_if_present(WARNING_UNSAVED, wait=3.0)
 
     wait_for_image(_IMG["yellow_dot_selected"], timeout=30,
                    poll_interval=POLL_INTERVAL_SLOW, threshold=THRESHOLD_HIGH)

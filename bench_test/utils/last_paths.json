@@ -7,8 +7,8 @@
   "recipe_dir": "C:\\UNAM DRIVE\\TUSEB\\SGI Prototip Gelistirme\\1B Sistem Muhendisligi\\Bench Tests\\CGM Measurements\\Measurement Parameters\\Scenarios",
   "package_root": "C:\\UNAM DRIVE\\TUSEB\\SGI Prototip Gelistirme\\1B Sistem Muhendisligi\\Bench Tests\\CGM Measurements\\PAD Discrete Measurements",
   "scr_save_dir": "C:\\UNAM DRIVE\\TUSEB\\SGI Prototip Gelistirme\\1B Sistem Muhendisligi\\Bench Tests\\CGM Measurements\\Measurement Parameters\\Scripts",
-  "browse_session": "G:\\Diğer bilgisayarlar\\Bench Test\\CGM Measurements\\Bench Measurements\\PAD Discrete Measurements\\UNAM-M2-Only Redox+GOx\\20260418_141335",
-  "response_delay_min": 22,
+  "browse_session": "C:\\UNAM DRIVE\\TUSEB\\SGI Prototip Gelistirme\\1B Sistem Muhendisligi\\Bench Tests\\CGM Measurements\\PAD Discrete Measurements\\UNAM-PET-58\\20260421_171051",
+  "response_delay_min": 9,
   "response_delay_sec": 0,
   "dropsens_com": "COM10"
 }
