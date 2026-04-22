@@ -2,6 +2,7 @@
 import os
 import sys
 import time
+import threading
 import subprocess
 
 import psutil
@@ -54,6 +55,15 @@ _IMG = {k: os.path.join(_IMG_DIR, v) for k, v in {
     "manual_conn_connect_btn":      "manual_connection_connect_btn.png",
     "manual_conn_dropdown_arrow":   "manual_connection_dropdown_arrow.png",
 }.items()}
+
+
+_WATCHDOG_POLL_INTERVAL = 0.2
+_dialog_watchdog_lock = threading.Lock()
+_dialog_watchdog_thread = None
+_dialog_watchdog_stop = None
+_dialog_watchdog_log_fn = None
+_dialog_watchdog_seen = {}
+_dialog_watchdog_autodismiss = {WARNING_UNSAVED}
 
 
 # ── Pencere yardımcıları ───────────────────────────────────────
@@ -166,6 +176,169 @@ def close_owned_dialogs(owner_hwnd, log_fn=None) -> int:
             if log_fn:
                 log_fn(f"│    HATA (dialog kapatılırken): {e}")
     return closed
+
+
+def _watchdog_log(message: str):
+    print(message)
+    log_fn = _dialog_watchdog_log_fn
+    if log_fn:
+        log_fn(message)
+
+
+def _describe_dialog(hwnd) -> tuple[str, str]:
+    title = win32gui.GetWindowText(hwnd) or "(untitled)"
+    detail = ""
+    if title == ERROR_WINDOW:
+        detail = _read_error_window_text(hwnd)
+    return title, detail
+
+
+def _get_dialog_owner_info(hwnd) -> tuple[str, int | None]:
+    owner_title = "unknown"
+    owner_hwnd = None
+    try:
+        owner_hwnd = win32gui.GetWindow(hwnd, win32con.GW_OWNER)
+    except Exception:
+        owner_hwnd = None
+
+    if owner_hwnd and win32gui.IsWindow(owner_hwnd):
+        try:
+            owner_title = win32gui.GetWindowText(owner_hwnd) or "(untitled)"
+        except Exception:
+            owner_title = "unknown"
+    else:
+        try:
+            dialog_pid = get_window_pid(hwnd)
+            for candidate in (DROPVIEW_WINDOW_NAME, MULTISCRIPT_WINDOW):
+                if not window_exists(candidate):
+                    continue
+                candidate_hwnd = find_window(candidate, timeout=0.2, poll_interval=0.05)
+                if get_window_pid(candidate_hwnd) == dialog_pid:
+                    owner_hwnd = candidate_hwnd
+                    owner_title = win32gui.GetWindowText(candidate_hwnd) or candidate
+                    break
+        except Exception:
+            pass
+
+    return owner_title, owner_hwnd
+
+
+def _iter_dropview_dialogs() -> list[int]:
+    hwnds = set()
+    if window_exists(DROPVIEW_WINDOW_NAME):
+        try:
+            dv_hwnd = find_window(DROPVIEW_WINDOW_NAME, timeout=0.2, poll_interval=0.05)
+            hwnds.update(find_owned_dialogs(dv_hwnd))
+        except Exception:
+            pass
+    if window_exists(MULTISCRIPT_WINDOW):
+        try:
+            ms_hwnd = find_window(MULTISCRIPT_WINDOW, timeout=0.2, poll_interval=0.05)
+            hwnds.update(find_owned_dialogs(ms_hwnd))
+        except Exception:
+            pass
+    return list(hwnds)
+
+
+def _log_dialog_detected(hwnd, title: str, detail: str):
+    kind = "error" if title == ERROR_WINDOW else "warning"
+    pid = get_window_pid(hwnd)
+    owner_title, owner_hwnd = _get_dialog_owner_info(hwnd)
+    suffix = f" | {detail}" if detail else ""
+    _watchdog_log(
+        f"│  Dialog algılandı: '{title}' [{kind}] "
+        f"(hwnd={hwnd}, pid={pid}, owner='{owner_title}', owner_hwnd={owner_hwnd}){suffix}"
+    )
+    _dialog_watchdog_seen[hwnd] = {
+        "title": title,
+        "detail": detail,
+        "pid": pid,
+        "owner_title": owner_title,
+        "owner_hwnd": owner_hwnd,
+    }
+
+
+def _log_dialog_closed(hwnd):
+    info = _dialog_watchdog_seen.pop(hwnd, None)
+    if not info:
+        return
+    title = info.get("title", "(untitled)")
+    pid = info.get("pid")
+    owner_title = info.get("owner_title", "unknown")
+    owner_hwnd = info.get("owner_hwnd")
+    _watchdog_log(
+        f"│  Dialog kapandı: '{title}' "
+        f"(hwnd={hwnd}, pid={pid}, owner='{owner_title}', owner_hwnd={owner_hwnd})"
+    )
+
+
+def _auto_dismiss_dialog(hwnd, title: str):
+    try:
+        pid = get_window_pid(hwnd)
+        owner_title, owner_hwnd = _get_dialog_owner_info(hwnd)
+        win32gui.SetForegroundWindow(hwnd)
+        time.sleep(SLEEP_AFTER_CLICK)
+        pyautogui.press("enter")
+        _watchdog_log(
+            f"│  Dialog otomatik kapatılıyor: '{title}' "
+            f"(hwnd={hwnd}, pid={pid}, owner='{owner_title}', owner_hwnd={owner_hwnd})"
+        )
+    except Exception as e:
+        _watchdog_log(f"│  UYARI: Dialog otomatik kapatılamadı ('{title}'): {e}")
+
+
+def _dialog_watchdog_loop():
+    while not _dialog_watchdog_stop.is_set():
+        try:
+            current_hwnds = set(_iter_dropview_dialogs())
+            for hwnd in list(_dialog_watchdog_seen):
+                if hwnd not in current_hwnds or not win32gui.IsWindow(hwnd) or not win32gui.IsWindowVisible(hwnd):
+                    _log_dialog_closed(hwnd)
+
+            for hwnd in current_hwnds:
+                if hwnd not in _dialog_watchdog_seen:
+                    title, detail = _describe_dialog(hwnd)
+                    _log_dialog_detected(hwnd, title, detail)
+                    if title in _dialog_watchdog_autodismiss:
+                        _auto_dismiss_dialog(hwnd, title)
+        except Exception:
+            pass
+        time.sleep(_WATCHDOG_POLL_INTERVAL)
+
+
+def ensure_dialog_watchdog(log_fn=None):
+    global _dialog_watchdog_thread, _dialog_watchdog_stop, _dialog_watchdog_log_fn
+    with _dialog_watchdog_lock:
+        if log_fn is not None:
+            _dialog_watchdog_log_fn = log_fn
+        if _dialog_watchdog_thread and _dialog_watchdog_thread.is_alive():
+            return
+        _dialog_watchdog_seen.clear()
+        _dialog_watchdog_stop = threading.Event()
+        _dialog_watchdog_thread = threading.Thread(
+            target=_dialog_watchdog_loop,
+            name="dropview-dialog-watchdog",
+            daemon=True,
+        )
+        _dialog_watchdog_thread.start()
+        _watchdog_log("│  Dialog watchdog başlatıldı.")
+
+
+def stop_dialog_watchdog():
+    global _dialog_watchdog_thread, _dialog_watchdog_stop
+    with _dialog_watchdog_lock:
+        thread = _dialog_watchdog_thread
+        stop_event = _dialog_watchdog_stop
+        if not thread or not thread.is_alive():
+            return
+        stop_event.set()
+    thread.join(timeout=1.0)
+    with _dialog_watchdog_lock:
+        for hwnd in list(_dialog_watchdog_seen):
+            _log_dialog_closed(hwnd)
+        _dialog_watchdog_thread = None
+        _dialog_watchdog_stop = None
+    _watchdog_log("│  Dialog watchdog durduruldu.")
 
 
 def _dismiss_warning_if_present(window_title: str, wait: float = 3.0) -> bool:
@@ -524,8 +697,9 @@ def step_disconnect_dropsens():
     time.sleep(SLEEP_AFTER_COMMAND)
     wait_until_disconnected(timeout=TIMEOUT_CLOSE_WINDOW)
 
-def step_stop_measure():
+def step_stop_measure(log_fn=None):
     """Stop butonuna basar, ölçümün durmasını bekler, Exit ile Multiscript Editor'ü kapatır."""
+    ensure_dialog_watchdog(log_fn=log_fn)
     if not window_exists(MULTISCRIPT_WINDOW):
         return
 
@@ -548,6 +722,8 @@ def step_stop_measure():
     time.sleep(SLEEP_AFTER_FOCUS)
 
     wait_for_window_close(MULTISCRIPT_WINDOW, timeout=TIMEOUT_CLOSE_WINDOW)
+    if log_fn:
+        log_fn("│  Multiscript Editor kapandı.")
 
 def step_exit_dropview(config: dict, log_fn=None):
     """Ctrl+D ile bağlantıyı kes + Alt+F4 ile DropView'i kapat."""
@@ -556,88 +732,103 @@ def step_exit_dropview(config: dict, log_fn=None):
         if log_fn:
             log_fn(msg)
 
-    # Process yoksa pencere de yoktur, erken çık
-    if _get_dropview_pid() is None and not window_exists(DROPVIEW_WINDOW_NAME):
-        _log("│  DropView zaten kapalı.")
-        return
+    try:
+        # Process yoksa pencere de yoktur, erken çık
+        if _get_dropview_pid() is None and not window_exists(DROPVIEW_WINDOW_NAME):
+            _log("│  DropView zaten kapalı.")
+            return
 
-    dv_hwnd = find_window(DROPVIEW_WINDOW_NAME, timeout=10)
+        dv_hwnd = find_window(DROPVIEW_WINDOW_NAME, timeout=10)
 
-    # Multiscript Editor hâlâ açıksa Alt+F4 onu kapatır, DropView'i değil
-    if window_exists(MULTISCRIPT_WINDOW):
-        _log("│  Multiscript Editor hâlâ açık, önce kapatılıyor...")
-        try:
-            step_stop_measure()
-        except Exception as e:
-            raise RuntimeError(
-                f"DropView kapatılamadı: Multiscript Editor önce kapatılamadı: {e}"
-            ) from e
+        # Multiscript Editor hâlâ açıksa Alt+F4 onu kapatır, DropView'i değil
+        if window_exists(MULTISCRIPT_WINDOW):
+            _log("│  Multiscript Editor hâlâ açık, önce kapatılıyor...")
+            try:
+                step_stop_measure(log_fn=_log)
+            except Exception as e:
+                raise RuntimeError(
+                    f"DropView kapatılamadı: Multiscript Editor önce kapatılamadı: {e}"
+                ) from e
 
-    # Owned dialog'ları temizle (içeriğe bağımsız)
-    closed = close_owned_dialogs(dv_hwnd, log_fn=_log)
-    if closed:
-        _log(f"│  {closed} dialog kapatıldı.")
+        # Owned dialog'ları temizle (içeriğe bağımsız)
+        closed = close_owned_dialogs(dv_hwnd, log_fn=_log)
+        if closed:
+            _log(f"│  {closed} dialog kapatıldı.")
 
-    if _is_dropview_connected():
+        if _is_dropview_connected():
+            win32gui.SetForegroundWindow(dv_hwnd)
+            time.sleep(SLEEP_AFTER_CLICK)
+            win32api.keybd_event(win32con.VK_CONTROL, 0, 0, 0)
+            win32api.keybd_event(ord('D'), 0, 0, 0)
+            win32api.keybd_event(ord('D'), 0, win32con.KEYEVENTF_KEYUP, 0)
+            win32api.keybd_event(win32con.VK_CONTROL, 0, win32con.KEYEVENTF_KEYUP, 0)
+            time.sleep(SLEEP_AFTER_COMMAND)
+            close_owned_dialogs(dv_hwnd, log_fn=_log)
+            wait_until_disconnected(timeout=TIMEOUT_CLOSE_WINDOW)
+            _log("│  DropSens bağlantısı kesildi.")
+        else:
+            _log("│  DropSens zaten bağlı değil.")
+
+        # Alt+F4
+        dv_hwnd = find_window(DROPVIEW_WINDOW_NAME, timeout=5)
         win32gui.SetForegroundWindow(dv_hwnd)
         time.sleep(SLEEP_AFTER_CLICK)
-        win32api.keybd_event(win32con.VK_CONTROL, 0, 0, 0)
-        win32api.keybd_event(ord('D'), 0, 0, 0)
-        win32api.keybd_event(ord('D'), 0, win32con.KEYEVENTF_KEYUP, 0)
-        win32api.keybd_event(win32con.VK_CONTROL, 0, win32con.KEYEVENTF_KEYUP, 0)
+        win32api.keybd_event(win32con.VK_MENU, 0, 0, 0)
+        win32api.keybd_event(win32con.VK_F4, 0, 0, 0)
+        win32api.keybd_event(win32con.VK_F4, 0, win32con.KEYEVENTF_KEYUP, 0)
+        win32api.keybd_event(win32con.VK_MENU, 0, win32con.KEYEVENTF_KEYUP, 0)
         time.sleep(SLEEP_AFTER_COMMAND)
+
+        # Alt+F4 sonrası çıkabilecek dialog'ları kapat
         close_owned_dialogs(dv_hwnd, log_fn=_log)
-        wait_until_disconnected(timeout=TIMEOUT_CLOSE_WINDOW)
-        _log("│  DropSens bağlantısı kesildi.")
-    else:
-        _log("│  DropSens zaten bağlı değil.")
 
-    # Alt+F4
-    dv_hwnd = find_window(DROPVIEW_WINDOW_NAME, timeout=5)
-    win32gui.SetForegroundWindow(dv_hwnd)
-    time.sleep(SLEEP_AFTER_CLICK)
-    win32api.keybd_event(win32con.VK_MENU, 0, 0, 0)
-    win32api.keybd_event(win32con.VK_F4, 0, 0, 0)
-    win32api.keybd_event(win32con.VK_F4, 0, win32con.KEYEVENTF_KEYUP, 0)
-    win32api.keybd_event(win32con.VK_MENU, 0, win32con.KEYEVENTF_KEYUP, 0)
-    time.sleep(SLEEP_AFTER_COMMAND)
+        # Pencere kapandı mı doğrula
+        window_closed = False
+        try:
+            wait_for_window_close(DROPVIEW_WINDOW_NAME, timeout=10)
+            _log("│  DropView penceresi kapandı.")
+            window_closed = True
+        except TimeoutError:
+            _log("│  UYARI: DropView penceresi kapanmadı.")
 
-    # Alt+F4 sonrası çıkabilecek dialog'ları kapat
-    close_owned_dialogs(dv_hwnd, log_fn=_log)
-
-    # Pencere kapandı mı doğrula
-    try:
-        wait_for_window_close(DROPVIEW_WINDOW_NAME, timeout=10)
-        _log("│  DropView penceresi kapandı.")
-    except TimeoutError:
-        _log("│  UYARI: DropView penceresi kapanmadı, zorla kapatılıyor...")
-
-    # Process kapandı mı doğrula
-    try:
-        _wait_for_dropview_process_exit(timeout=10)
-        _log("│  DropView kapatıldı.")
-    except TimeoutError:
-        _log("│  UYARI: Process kapanmadı, zorla öldürülüyor...")
-        pid = _get_dropview_pid()
-        if pid:
+        # Process kapandı mı doğrula; pencere kapanmadıysa doğrudan kill'e geç
+        process_exited = False
+        if window_closed:
             try:
-                psutil.Process(pid).kill()
-                _wait_for_dropview_process_exit(timeout=5)
-                _log("│  DropView zorla kapatıldı.")
-            except Exception as kill_err:
-                raise RuntimeError(
-                    f"DropView kapatılamadı: {kill_err}"
-                ) from kill_err
-        else:
-            raise RuntimeError(
-                "DropView process'i kapanmadı ve PID bulunamadı."
-            )
+                _wait_for_dropview_process_exit(timeout=10)
+                _log("│  DropView process'i kapandı.")
+                process_exited = True
+            except TimeoutError:
+                _log("│  UYARI: Process kapanmadı.")
+
+        if not process_exited:
+            pid = get_window_pid(dv_hwnd) or _get_dropview_pid()
+            if pid:
+                _log(f"│  DropView zorla kapatılıyor (PID={pid})...")
+                try:
+                    psutil.Process(pid).kill()
+                    _wait_for_dropview_process_exit(timeout=5)
+                    _log("│  DropView zorla kapatıldı.")
+                except Exception as kill_err:
+                    raise RuntimeError(
+                        f"DropView kapatılamadı: {kill_err}"
+                    ) from kill_err
+            else:
+                if not window_closed:
+                    raise RuntimeError(
+                        "DropView penceresi kapanmadı ve PID bulunamadı."
+                    )
+                _log("│  DropView process zaten sonlanmış.")
+    finally:
+        stop_dialog_watchdog()
 
 def step_start_dropview(config: dict, log_fn=None):
     def _log(msg):
         print(msg)
         if log_fn:
             log_fn(msg)
+
+    ensure_dialog_watchdog(log_fn=log_fn)
 
     # Pencere var mı kontrol et; varsa sağlıklı mı diye bak
     if window_exists(DROPVIEW_WINDOW_NAME):
@@ -655,7 +846,25 @@ def step_start_dropview(config: dict, log_fn=None):
                 except Exception as e:
                     _log(f"│  UYARI: Eski instance kapatılamadı: {e}")
         elif _is_dropview_connected():
-            return  # Sağlıklı ve bağlı, devam et
+            hwnd_pid = get_window_pid(dv_hwnd)
+            if not hwnd_pid:
+                _log("│  UYARI: Bağlı görünüyor ama pencere PID'si alınamadı, yeniden başlatılacak.")
+                try:
+                    win32gui.PostMessage(dv_hwnd, win32con.WM_CLOSE, 0, 0)
+                    wait_for_window_close(DROPVIEW_WINDOW_NAME, timeout=3, poll_interval=0.2)
+                    _log("│  Şüpheli DropView penceresi kapatıldı.")
+                except Exception:
+                    _log("│  UYARI: Şüpheli DropView penceresi kapatılamadı, yeniden başlatma denenecek.")
+            else:
+                try:
+                    proc = psutil.Process(hwnd_pid)
+                    if not proc.is_running():
+                        _log(f"│  UYARI: Bağlı görünüyor ama process çalışmıyor (PID={hwnd_pid}), yeniden başlatılacak.")
+                    else:
+                        _log(f"│  DropView sağlıklı ve bağlı (PID={hwnd_pid}), devam ediliyor.")
+                        return
+                except Exception as e:
+                    _log(f"│  UYARI: DropView process sağlığı doğrulanamadı (PID={hwnd_pid}): {e}")
     else:
         # Pencere yok ama zombie process olabilir
         pid = _get_dropview_pid()
@@ -723,7 +932,8 @@ def step_start_dropview(config: dict, log_fn=None):
             "Lütfen tekrar deneyin."
         )
 
-def step_start_measure(config: dict):
+def step_start_measure(config: dict, log_fn=None):
+    ensure_dialog_watchdog(log_fn=log_fn)
     dv_hwnd = find_window(DROPVIEW_WINDOW_NAME, timeout=10)
     if win32gui.IsIconic(dv_hwnd):
         win32gui.ShowWindow(dv_hwnd, win32con.SW_RESTORE)
@@ -758,6 +968,8 @@ def step_start_measure(config: dict):
     time.sleep(1.2)
 
     ms_hwnd = find_window(MULTISCRIPT_WINDOW, timeout=15)
+    if log_fn:
+        log_fn(f"│  Multiscript Editor açıldı (hwnd={ms_hwnd}).")
     time.sleep(SLEEP_AFTER_FOCUS)
 
     lbl_x, lbl_y = find_on_screen(_IMG["loaded_scripts"], threshold=THRESHOLD_HIGH)
@@ -814,3 +1026,4 @@ def step_start_measure(config: dict):
 
     wait_for_image(_IMG["yellow_dot_selected"], timeout=30,
                    poll_interval=POLL_INTERVAL_SLOW, threshold=THRESHOLD_HIGH)
+    stop_dialog_watchdog()

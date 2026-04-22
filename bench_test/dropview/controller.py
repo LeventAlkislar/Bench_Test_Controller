@@ -125,7 +125,7 @@ class DropViewController(QObject):
         try:
             config = {"script_path": scr_path}
             if log_fn: log_fn(f"Script yükleniyor: {scr_path}")
-            automator.step_start_measure(config)
+            automator.step_start_measure(config, log_fn=log_fn)
             if log_fn: log_fn("Ölçüm başlatıldı.")
             return True
         except Exception as e:
@@ -134,7 +134,7 @@ class DropViewController(QObject):
 
     def do_stop_measure(self, log_fn=None) -> bool:
         try:
-            automator.step_stop_measure()
+            automator.step_stop_measure(log_fn=log_fn)
             if log_fn: log_fn("Ölçüm durduruldu.")
             return True
         except Exception as e:
