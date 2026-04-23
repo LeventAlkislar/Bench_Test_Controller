@@ -337,7 +337,20 @@ class ViewerTab(QWidget):
             QMessageBox.information(self, "Viewer",
                 "Aktif oturum yok.\nÖnce bir recipe başlatın.")
             return
+        mw = self._get_main_window()
+        if mw:
+            mw.switch_display(session, "active")
+            return
         self._load_session(session)
+
+    def _get_main_window(self):
+        """MainWindow referansini parent zincirinden bul."""
+        w = self.parent()
+        while w:
+            if hasattr(w, "switch_display"):
+                return w
+            w = w.parent() if hasattr(w, "parent") else None
+        return None
 
     def _browse_session(self):
         """Geçmiş session dizinini kullanıcı seçer."""
@@ -380,6 +393,16 @@ class ViewerTab(QWidget):
         self._refresh(reset_view=True)
 
     # ── Yenileme ──────────────────────────────────────────────────
+
+    def render_session(self, session: MeasurementSession, live: bool = False) -> None:
+        """
+        MainWindow.switch_display() tarafindan cagrilir.
+        live=True ise poll_timer baslatilir.
+        """
+        self._load_session(session)
+        if live and not self._poll_timer.isActive():
+            self._poll_timer.start()
+            self.live_lbl.setText(f"⟳ Canlı mod ({POLL_INTERVAL_MS // 1000}sn)")
 
     def _refresh(self, reset_view: bool = False):
         """Veriyi yeniden okur ve grafiği günceller."""

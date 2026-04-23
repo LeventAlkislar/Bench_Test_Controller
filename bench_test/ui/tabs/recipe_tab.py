@@ -20,6 +20,7 @@ from PyQt6.QtGui import QColor, QFont
 from bench_test.valve.multiport import ValveController
 from bench_test.valve.injector import InjectorValveController
 from bench_test.dropview.controller import DropViewController
+from bench_test.measurement.session import SessionStatus
 from bench_test.recipe.models import Recipe, RecipeStep, StepLoop
 from bench_test.recipe.runner import RecipeRunner, DROPVIEW_ACTIONS, DROPVIEW_LABELS, DROPVIEW_ZERO_DURATION_OK
 from bench_test.utils.paths import open_file, save_file, get_last, remember
@@ -510,19 +511,38 @@ class RecipeTab(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load: {e}")
 
+    def render_session(self, session) -> None:
+        """
+        MainWindow.switch_display() tarafindan cagrilir.
+        Session snapshot'indaki recipe.json'dan recipe'yi yukler.
+        Aktif recipe runner'a dokunmaz.
+        """
+        recipe_path = session.get_file_path("recipe")
+        if not recipe_path:
+            candidate = os.path.join(
+                session.session_dir, "measurement_parameters", "recipe.json"
+            )
+            recipe_path = candidate if os.path.isfile(candidate) else None
+
+        if recipe_path and os.path.isfile(recipe_path):
+            self._load_recipe_from_path(recipe_path)
+
+        is_active = session.status == SessionStatus.IN_PROGRESS
+        self.start_btn.setEnabled(is_active)
+        self.pause_btn.setEnabled(False)
+        self.stop_btn.setEnabled(is_active)
+        if not is_active:
+            self.status_lbl.setText(f"[{session.status.value}] {session.part_number}")
+
     def restore_from_session(self, session_dir):
-        from pathlib import Path
-        import json as _json
-        path = Path(session_dir)
+        """Geriye donuk uyumluluk - render_session'a yonlendir."""
+        from bench_test.measurement.session import MeasurementSession
+
         try:
-            with open(path / "session.json", encoding="utf-8") as f:
-                data = _json.load(f)
-            rel = data.get("files", {}).get("recipe", "")
-            recipe_path = path / rel if rel else path / "measurement_parameters" / "recipe.json"
+            session = MeasurementSession.load(session_dir)
+            self.render_session(session)
         except Exception:
-            recipe_path = path / "measurement_parameters" / "recipe.json"
-        if recipe_path.is_file():
-            self._load_recipe_from_path(str(recipe_path))
+            pass
 
     def _start_recipe(self):
         # ── Paketi oluştur ────────────────────────────────────
@@ -670,10 +690,10 @@ class RecipeTab(QWidget):
         except queue.Empty:
             pass
 
-    def clear(self):
+    def clear(self, stop_runner: bool = True):
         """RecipeTab'ı açılış haline getirir."""
         # Çalışan recipe varsa durdur
-        if self.recipe_runner and self.recipe_runner.is_alive():
+        if stop_runner and self.recipe_runner and self.recipe_runner.is_alive():
             self.stop_event.set()
 
         self.recipe_steps.clear()

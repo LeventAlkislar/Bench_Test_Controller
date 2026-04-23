@@ -11,8 +11,10 @@ Mevcut PackageTab mantığını taşır; script_tab / recipe_tab
 referansları yerine MeasurementSetupTab sinyalleriyle beslenir.
 """
 
+import json
 import os
 import shutil
+import tempfile
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
@@ -294,11 +296,20 @@ class PackagePanel(QWidget):
             else:
                 self._log("⚠ recipe dosyası bulunamadı, atlandı.")
 
+            effective_recipe_path = self._write_effective_recipe_snapshot(
+                recipe_path, packager
+            )
+            if effective_recipe_path:
+                self._log("Efektif recipe snapshot yazildi.")
+            else:
+                self._log("Recipe snapshot yazilamadi, atlandi.")
+
             packager.finalize()
 
             # Referansları güncelle
             self.set_scr_ref(packager.get_packed_scr_path())
             self.set_tp_ref(self._session.tp_path if hasattr(self._session, "tp_path") else tp_path)
+            self.set_recipe_ref(effective_recipe_path)
 
             session_name = os.path.basename(self._session.session_dir)
             self._set_status(f"Aktif: {part_number} / {session_name}", _COLOR_RUNNING)
@@ -329,6 +340,55 @@ class PackagePanel(QWidget):
             return False
 
     # ── Recipe yaşam döngüsü ──────────────────────────────────────
+
+    def _write_effective_recipe_snapshot(self, fallback_path: str, packager) -> str:
+        """
+        Bellekteki guncel recipe'yi session'a snapshot olarak yazar.
+        recipe_tab referansi varsa ondan alir; yoksa fallback_path'i kopyalar.
+        Yazilan dosyanin tam yolunu doner, basarisizsa "".
+        """
+        from dataclasses import asdict
+
+        recipe_tab = None
+        parent = self.parent()
+        while parent:
+            if hasattr(parent, "recipe_tab"):
+                recipe_tab = parent.recipe_tab
+                break
+            parent = parent.parent() if hasattr(parent, "parent") else None
+
+        if recipe_tab and hasattr(recipe_tab, "recipe_steps"):
+            from bench_test.recipe.models import Recipe
+
+            recipe = Recipe(
+                name=recipe_tab.name_edit.text(),
+                steps=recipe_tab.recipe_steps.copy(),
+                loop_count=recipe_tab.loop_spin.value(),
+                step_loops=recipe_tab.step_loops.copy(),
+            )
+            tmp_path = ""
+            try:
+                with tempfile.NamedTemporaryFile(
+                    suffix=".json", delete=False, mode="w", encoding="utf-8"
+                ) as tmp:
+                    tmp_path = tmp.name
+                    json.dump(asdict(recipe), tmp, ensure_ascii=False, indent=2)
+                return packager.pack_recipe(tmp_path) or ""
+            except Exception as e:
+                self._log(f"Efektif recipe snapshot hatasi: {e}")
+            finally:
+                if tmp_path and os.path.isfile(tmp_path):
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
+
+        if fallback_path and os.path.isfile(fallback_path):
+            try:
+                return packager.pack_recipe(fallback_path) or ""
+            except Exception:
+                pass
+        return ""
 
     def write_to_log(self, msg: str):
         if self._log_writer and self._log_writer.is_open:
@@ -405,6 +465,19 @@ class PackagePanel(QWidget):
 
     def get_session(self) -> MeasurementSession:
         return self._session
+
+    def clear_display(self):
+        """Sadece ekranda gorunen session alanlarini temizler."""
+        self.part_number_edit.clear()
+        self.session_id_edit.clear()
+        for lbl in (self.tp_lbl, self.scr_lbl, self.recipe_lbl):
+            lbl.setText("—")
+            lbl.setToolTip("")
+            lbl.setStyleSheet("color: #888;")
+        self._set_status("Paket oluşturulmadı", _COLOR_NONE)
+        self.session_dir_lbl.setText("")
+        self.aggregate_btn.setEnabled(False)
+        self.log_edit.clear()
 
     # ── Log ───────────────────────────────────────────────────────
 

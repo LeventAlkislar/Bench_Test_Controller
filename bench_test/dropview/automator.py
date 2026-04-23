@@ -54,6 +54,8 @@ _IMG = {k: os.path.join(_IMG_DIR, v) for k, v in {
     "manual_conn_com10":            "manual_connection_com10.png",
     "manual_conn_connect_btn":      "manual_connection_connect_btn.png",
     "manual_conn_dropdown_arrow":   "manual_connection_dropdown_arrow.png",
+    "error_no_device_text":         "No device connected küçük.png",
+    "error_potentiostat_text":      "Potentiostat not found küçük.png",
 }.items()}
 
 
@@ -390,7 +392,32 @@ def _read_error_window_text(hwnd) -> str:
     return " ".join(texts)
 
 
-def _wait_for_connection_result(timeout=30, poll_interval=0.5) -> str:
+def _classify_error_dialog_by_template(log_fn=None) -> str | None:
+    """
+    Error metni Win32 child text'ten okunamazsa, ekrandaki metin template'lerine
+    bakarak hatayı sınıflandırır.
+    """
+    def _log(msg):
+        if log_fn:
+            log_fn(msg)
+
+    score_no_device = match_score_on_screen(_IMG["error_no_device_text"])
+    score_pot_not_found = match_score_on_screen(_IMG["error_potentiostat_text"])
+    threshold = THRESHOLD_MID
+
+    _log(
+        "│  Error template skorları: "
+        f"no_device={score_no_device:.2f}, potentiostat_not_found={score_pot_not_found:.2f}"
+    )
+
+    if score_no_device >= threshold or score_pot_not_found >= threshold:
+        if score_no_device >= score_pot_not_found:
+            return "no_device_connected"
+        return "potentiostat_not_found"
+    return None
+
+
+def _wait_for_connection_result(timeout=30, poll_interval=0.5, log_fn=None) -> str:
     """
     Bağlantı girişimi sonucunu bekler ve döner.
     Dönüş değerleri:
@@ -400,12 +427,18 @@ def _wait_for_connection_result(timeout=30, poll_interval=0.5) -> str:
         'unknown_error'          - Tanınmayan hata penceresi
         'timeout'                - Zaman aşımı
     """
+    def _log(msg):
+        if log_fn:
+            log_fn(msg)
+
     start = time.time()
     while time.time() - start < timeout:
         if not window_exists(CONNECTING_DIALOG):
             if window_exists(ERROR_WINDOW):
                 err_hwnd = find_window(ERROR_WINDOW, timeout=3)
                 text = _read_error_window_text(err_hwnd)
+                shown_text = text if text else "(metin okunamadı)"
+                _log(f"│  DropView Error dialog metni: {shown_text}")
                 try:
                     win32gui.SetForegroundWindow(err_hwnd)
                     time.sleep(SLEEP_AFTER_CLICK)
@@ -414,9 +447,21 @@ def _wait_for_connection_result(timeout=30, poll_interval=0.5) -> str:
                 except Exception:
                     pass
                 if MSG_NO_DEVICE in text:
+                    _log("│  DropView bağlantı hatası sınıflandırıldı: no_device_connected")
                     return "no_device_connected"
                 if MSG_POTENTIOSTAT_NOT_FOUND in text:
+                    _log("│  DropView bağlantı hatası sınıflandırıldı: potentiostat_not_found")
                     return "potentiostat_not_found"
+
+                template_result = _classify_error_dialog_by_template(log_fn=log_fn)
+                if template_result == "no_device_connected":
+                    _log("│  DropView bağlantı hatası template ile sınıflandırıldı: no_device_connected")
+                    return "no_device_connected"
+                if template_result == "potentiostat_not_found":
+                    _log("│  DropView bağlantı hatası template ile sınıflandırıldı: potentiostat_not_found")
+                    return "potentiostat_not_found"
+
+                _log(f"│  UYARI: Tanımsız DropView Error dialog metni: {shown_text}")
                 return "unknown_error"
             if _is_dropview_connected():
                 return "connected"
@@ -503,7 +548,7 @@ def _connect_manual(dv_hwnd, target_com: str, log_fn=None) -> str:
         _log("│  UYARI: Manual Connection penceresi kapanmadı.")
         return "timeout"
 
-    return _wait_for_connection_result(timeout=TIMEOUT_CONNECT)
+    return _wait_for_connection_result(timeout=TIMEOUT_CONNECT, log_fn=log_fn)
 
 # ── Bağlantı durumu ────────────────────────────────────────────
 
@@ -664,7 +709,7 @@ def step_connect_dropsens(target_com: str = None, log_fn=None):
     win32api.keybd_event(win32con.VK_CONTROL, 0, win32con.KEYEVENTF_KEYUP, 0)
     time.sleep(SLEEP_AFTER_COMMAND)
 
-    fallback_result = _wait_for_connection_result(timeout=TIMEOUT_CONNECT)
+    fallback_result = _wait_for_connection_result(timeout=TIMEOUT_CONNECT, log_fn=log_fn)
     if fallback_result != "connected":
         raise RuntimeError(
             f"DropSens bağlantısı kurulamadı (manuel: {result}, "
@@ -802,6 +847,21 @@ def step_exit_dropview(config: dict, log_fn=None):
                 _log("│  UYARI: Process kapanmadı.")
 
         if not process_exited:
+            # Kill öncesi koşulsuz Ctrl+D — COM portu düzgün serbest bırakılsın
+            _log("│  Kill öncesi Ctrl+D gönderiliyor...")
+            try:
+                dv_hwnd_kill = find_window(DROPVIEW_WINDOW_NAME, timeout=3)
+                win32gui.SetForegroundWindow(dv_hwnd_kill)
+                time.sleep(SLEEP_AFTER_CLICK)
+                win32api.keybd_event(win32con.VK_CONTROL, 0, 0, 0)
+                win32api.keybd_event(ord('D'), 0, 0, 0)
+                win32api.keybd_event(ord('D'), 0, win32con.KEYEVENTF_KEYUP, 0)
+                win32api.keybd_event(win32con.VK_CONTROL, 0, win32con.KEYEVENTF_KEYUP, 0)
+                time.sleep(SLEEP_AFTER_COMMAND + 0.5)
+                _log("│  Ctrl+D gönderildi.")
+            except Exception as e:
+                _log(f"│  UYARI: Kill öncesi Ctrl+D başarısız: {e}")
+
             pid = get_window_pid(dv_hwnd) or _get_dropview_pid()
             if pid:
                 _log(f"│  DropView zorla kapatılıyor (PID={pid})...")
@@ -813,6 +873,17 @@ def step_exit_dropview(config: dict, log_fn=None):
                     raise RuntimeError(
                         f"DropView kapatılamadı: {kill_err}"
                     ) from kill_err
+
+                # Kill sonrası COM port / driver serbest bırakma payı
+                _log("│  COM port serbest bırakılması bekleniyor...")
+                time.sleep(3.0)
+
+                # Process gerçekten gitti mi son doğrulama
+                if _get_dropview_pid() is not None:
+                    raise RuntimeError(
+                        "DropView kill sonrası process hâlâ çalışıyor."
+                    )
+                _log("│  DropView process doğrulandı: kapalı.")
             else:
                 if not window_closed:
                     raise RuntimeError(
@@ -911,7 +982,7 @@ def step_start_dropview(config: dict, log_fn=None):
         win32api.keybd_event(win32con.VK_CONTROL, 0, win32con.KEYEVENTF_KEYUP, 0)
         time.sleep(SLEEP_AFTER_COMMAND)
 
-        fallback_result = _wait_for_connection_result(timeout=TIMEOUT_CONNECT)
+        fallback_result = _wait_for_connection_result(timeout=TIMEOUT_CONNECT, log_fn=log_fn)
         if fallback_result != "connected":
             raise RuntimeError(
                 f"DropSens bağlantısı kurulamadı (manuel: {attempts_str}, "

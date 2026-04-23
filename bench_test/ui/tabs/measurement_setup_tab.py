@@ -30,6 +30,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import pyqtSignal
 
+from bench_test.measurement.session import SessionStatus
 from bench_test.ui.tabs.package_panel       import PackagePanel
 from bench_test.ui.tabs.method_editor_panel import MethodEditorPanel
 from bench_test.ui.tabs.script_params_panel import ScriptParamsPanel
@@ -196,3 +197,51 @@ class MeasurementSetupTab(QWidget):
             scr_abs = path / scr_rel
             if scr_abs.is_file():
                 self.script_panel.restore_from_scr(str(scr_abs))
+
+    def render_session(self, session) -> None:
+        """
+        MainWindow.switch_display() tarafindan cagrilir.
+        Session snapshot'indan panelleri doldurur.
+        """
+        import os
+
+        self.package_panel.part_number_edit.setText(session.part_number)
+        self.package_panel.session_id_edit.setText(
+            os.path.basename(session.session_dir)
+        )
+        self.package_panel.session_dir_lbl.setText(session.session_dir)
+
+        tp_path = session.get_file_path("tp")
+        if not tp_path:
+            candidate = os.path.join(
+                session.session_dir, "measurement_parameters", "method.tp"
+            )
+            tp_path = candidate if os.path.isfile(candidate) else ""
+        if tp_path and os.path.isfile(tp_path):
+            self.method_panel.load_from_path(tp_path)
+
+        scr_path = session.get_file_path("script")
+        if not scr_path:
+            candidate = os.path.join(
+                session.session_dir, "measurement_parameters", "dropview_script.scr"
+            )
+            scr_path = candidate if os.path.isfile(candidate) else ""
+        if scr_path and os.path.isfile(scr_path):
+            self.script_panel.restore_from_scr(scr_path)
+
+        self.package_panel.set_tp_ref(tp_path or "")
+        self.package_panel.set_scr_ref(scr_path or "")
+        recipe_path = session.get_file_path("recipe") or ""
+        self.package_panel.set_recipe_ref(recipe_path)
+
+        if session.status == SessionStatus.IN_PROGRESS:
+            self.package_panel._set_status(
+                f"Aktif: {session.part_number} / {os.path.basename(session.session_dir)}",
+                "#2196F3",
+            )
+            self.package_panel.aggregate_btn.setEnabled(True)
+        else:
+            self.package_panel._set_status(
+                f"[{session.status.value}] {session.part_number}",
+                "#888888",
+            )
