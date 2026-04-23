@@ -54,8 +54,8 @@ _IMG = {k: os.path.join(_IMG_DIR, v) for k, v in {
     "manual_conn_com10":            "manual_connection_com10.png",
     "manual_conn_connect_btn":      "manual_connection_connect_btn.png",
     "manual_conn_dropdown_arrow":   "manual_connection_dropdown_arrow.png",
-    "error_no_device_text":         "No device connected küçük.png",
-    "error_potentiostat_text":      "Potentiostat not found küçük.png",
+    "error_no_device_text":         "No device connected.png",
+    "error_potentiostat_text":      "Potentiostat not found.png",
 }.items()}
 
 
@@ -126,6 +126,30 @@ def _wait_for_dropview_process_exit(timeout=15, poll_interval=0.5):
     raise TimeoutError(
         f"DropView process'i {timeout}sn içinde kapanmadı."
     )
+
+def _is_dropview_ui_ready(dv_hwnd, timeout=3.0) -> bool:
+    """
+    Quick readiness check for DropView UI before trusting early return.
+    """
+    try:
+        if win32gui.IsIconic(dv_hwnd):
+            win32gui.ShowWindow(dv_hwnd, win32con.SW_RESTORE)
+            time.sleep(SLEEP_AFTER_FOCUS)
+        win32gui.SetForegroundWindow(dv_hwnd)
+        time.sleep(SLEEP_AFTER_CLICK)
+        rect = win32gui.GetWindowRect(dv_hwnd)
+        pyautogui.click((rect[0] + rect[2]) // 2, rect[1] + 10)
+        time.sleep(SLEEP_AFTER_FOCUS)
+        wait_for_image(
+            _IMG["scripts_menu"],
+            timeout=timeout,
+            poll_interval=POLL_INTERVAL_NORMAL,
+            threshold=THRESHOLD_MID,
+        )
+        return True
+    except Exception:
+        return False
+
 
 def get_window_pid(hwnd) -> int | None:
     """Pencere handle'ından process PID'ini döner."""
@@ -403,17 +427,29 @@ def _classify_error_dialog_by_template(log_fn=None) -> str | None:
 
     score_no_device = match_score_on_screen(_IMG["error_no_device_text"])
     score_pot_not_found = match_score_on_screen(_IMG["error_potentiostat_text"])
-    threshold = THRESHOLD_MID
+    min_score = max(THRESHOLD_LOW, 0.55)
+    min_delta = 0.08
 
     _log(
         "│  Error template skorları: "
         f"no_device={score_no_device:.2f}, potentiostat_not_found={score_pot_not_found:.2f}"
     )
+    _log(
+        "│  Error template eşik/delta: "
+        f"min_score={min_score:.2f}, min_delta={min_delta:.2f}"
+    )
 
-    if score_no_device >= threshold or score_pot_not_found >= threshold:
-        if score_no_device >= score_pot_not_found:
-            return "no_device_connected"
-        return "potentiostat_not_found"
+    if score_no_device >= score_pot_not_found:
+        best_label = "no_device_connected"
+        best_score = score_no_device
+        delta = score_no_device - score_pot_not_found
+    else:
+        best_label = "potentiostat_not_found"
+        best_score = score_pot_not_found
+        delta = score_pot_not_found - score_no_device
+
+    if best_score >= min_score and delta >= min_delta:
+        return best_label
     return None
 
 
@@ -890,6 +926,10 @@ def step_exit_dropview(config: dict, log_fn=None):
                         "DropView penceresi kapanmadı ve PID bulunamadı."
                     )
                 _log("│  DropView process zaten sonlanmış.")
+
+        _log("│  DropView kapatıldı.")
+        _log("│  COM port serbest bırakılması bekleniyor...")
+        time.sleep(2.0)
     finally:
         stop_dialog_watchdog()
 
@@ -929,11 +969,32 @@ def step_start_dropview(config: dict, log_fn=None):
             else:
                 try:
                     proc = psutil.Process(hwnd_pid)
+                    if proc.is_running() and not _is_dropview_ui_ready(dv_hwnd, timeout=3.0):
+                        _log(
+                            f"â”‚  UYARI: DropView baÄŸlÄ± gÃ¶rÃ¼nÃ¼yor ama UI hazÄ±r deÄŸil "
+                            f"(PID={hwnd_pid}), yeniden baÅŸlatÄ±lacak."
+                        )
+                        try:
+                            psutil.Process(hwnd_pid).kill()
+                            _wait_for_dropview_process_exit(timeout=5)
+                            _log("â”‚  HazÄ±r olmayan DropView instance'Ä± kapatÄ±ldÄ±.")
+                            proc = psutil.Process(hwnd_pid)
+                        except psutil.NoSuchProcess:
+                            pass
+                        except Exception as e:
+                            _log(f"â”‚  UYARI: HazÄ±r olmayan instance kapatÄ±lamadÄ±: {e}")
                     if not proc.is_running():
                         _log(f"│  UYARI: Bağlı görünüyor ama process çalışmıyor (PID={hwnd_pid}), yeniden başlatılacak.")
                     else:
                         _log(f"│  DropView sağlıklı ve bağlı (PID={hwnd_pid}), devam ediliyor.")
-                        return
+                        time.sleep(0.4)
+                        if not _is_dropview_ui_ready(dv_hwnd, timeout=2.0) or not _is_dropview_connected():
+                            _log(
+                                f"│  UYARI: Erken sağlık kontrolü tutarsız (PID={hwnd_pid}), "
+                                "yeniden başlatılacak."
+                            )
+                        else:
+                            return
                 except Exception as e:
                     _log(f"│  UYARI: DropView process sağlığı doğrulanamadı (PID={hwnd_pid}): {e}")
     else:
@@ -996,8 +1057,24 @@ def step_start_dropview(config: dict, log_fn=None):
             "Cihazın bağlı olduğundan emin olun."
         )
 
-    time.sleep(SLEEP_AFTER_FOCUS)
-    if not _is_dropview_connected():
+    # Final doğrulama: render/race gecikmelerine karşı kısa polling + stabilite kontrolü.
+    time.sleep(SLEEP_AFTER_FOCUS + 0.5)
+    deadline = time.time() + 3.0
+    stable_hits = 0
+    while time.time() < deadline:
+        if window_exists(CONNECTING_DIALOG):
+            stable_hits = 0
+            time.sleep(0.2)
+            continue
+        if _is_dropview_connected():
+            stable_hits += 1
+            if stable_hits >= 2:
+                break
+        else:
+            stable_hits = 0
+        time.sleep(0.2)
+
+    if stable_hits < 2:
         raise RuntimeError(
             "DropSens bağlantı sinyali alındı ancak son doğrulama başarısız. "
             "Lütfen tekrar deneyin."

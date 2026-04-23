@@ -46,6 +46,22 @@ class RecipeRunner(threading.Thread):
     def resume(self):
         self.pause_event.set()
 
+    def _cleanup_dropview(self, step_num: int):
+        """Best-effort cleanup after a failed DropView step."""
+        if self.dropview_ctrl is None:
+            return
+        try:
+            from bench_test.dropview import automator
+            if automator.window_exists(automator.DROPVIEW_WINDOW_NAME):
+                self._log(f"| Adim {step_num} hatasi sonrasi DropView temizleniyor...")
+                ok = self.dropview_ctrl.do_exit_dropview(log_fn=self._log)
+                if ok:
+                    self._log("| DropView cleanup tamamlandi.")
+                else:
+                    self._log("| UYARI: DropView cleanup denendi ancak basarisiz dondu.")
+        except Exception as e:
+            self._log(f"| UYARI: DropView cleanup basarisiz: {e}")
+
     def _log(self, msg):
         self.status_queue.put(("log", msg))
 
@@ -70,6 +86,7 @@ class RecipeRunner(threading.Thread):
             ok = dv.do_start_dropview(log_fn=self._log)
             if not ok:
                 self.status_queue.put(("error", f"Adım {step_num}: Start DropView başarısız."))
+                self._cleanup_dropview(step_num)
                 return False
 
         elif action == "start_measure" and dv:
@@ -77,6 +94,7 @@ class RecipeRunner(threading.Thread):
                 self.status_queue.put(("error",
                     f"Adım {step_num}: DropView bağlantısı yok — ölçüm başlatılamadı. "
                     "Lütfen önce Start DropView adımı ekleyin."))
+                self._cleanup_dropview(step_num)
                 return False
             scr_path = self.session_scr_path or step.dropview_scr
             if scr_path:
@@ -84,6 +102,7 @@ class RecipeRunner(threading.Thread):
             ok = dv.do_start_measure(scr_path, log_fn=self._log)
             if not ok:
                 self.status_queue.put(("error", f"Adım {step_num}: Start Measure başarısız."))
+                self._cleanup_dropview(step_num)
                 return False
 
         elif action == "stop_measure" and dv:
