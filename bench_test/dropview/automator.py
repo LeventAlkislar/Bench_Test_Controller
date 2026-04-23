@@ -806,6 +806,55 @@ def step_stop_measure(log_fn=None):
     if log_fn:
         log_fn("│  Multiscript Editor kapandı.")
 
+
+def _force_close_multiscript(log_fn=None) -> bool:
+    """
+    Multiscript Editor'u buton-gorsel bagimliligi olmadan kapatmayi dener.
+    Basariliysa True, kapanmadiysa False doner.
+    """
+    def _log(msg):
+        print(msg)
+        if log_fn:
+            log_fn(msg)
+
+    if not window_exists(MULTISCRIPT_WINDOW):
+        return True
+
+    try:
+        ms_hwnd = find_window(MULTISCRIPT_WINDOW, timeout=2)
+    except Exception:
+        return not window_exists(MULTISCRIPT_WINDOW)
+
+    # 1) WM_CLOSE
+    try:
+        win32gui.PostMessage(ms_hwnd, win32con.WM_CLOSE, 0, 0)
+        wait_for_window_close(MULTISCRIPT_WINDOW, timeout=2, poll_interval=0.2)
+        _log("│  Multiscript Editor WM_CLOSE ile kapandı.")
+        return True
+    except Exception:
+        pass
+
+    # 2) Alt+F4
+    try:
+        if win32gui.IsIconic(ms_hwnd):
+            win32gui.ShowWindow(ms_hwnd, win32con.SW_RESTORE)
+            time.sleep(SLEEP_AFTER_FOCUS)
+        win32gui.SetForegroundWindow(ms_hwnd)
+        time.sleep(SLEEP_AFTER_CLICK)
+        win32api.keybd_event(win32con.VK_MENU, 0, 0, 0)
+        win32api.keybd_event(win32con.VK_F4, 0, 0, 0)
+        win32api.keybd_event(win32con.VK_F4, 0, win32con.KEYEVENTF_KEYUP, 0)
+        win32api.keybd_event(win32con.VK_MENU, 0, win32con.KEYEVENTF_KEYUP, 0)
+        time.sleep(SLEEP_AFTER_COMMAND)
+        wait_for_window_close(MULTISCRIPT_WINDOW, timeout=3, poll_interval=0.2)
+        _log("│  Multiscript Editor Alt+F4 ile kapandı.")
+        return True
+    except Exception:
+        pass
+
+    _log("│  UYARI: Multiscript Editor hard-fallback ile kapatılamadı.")
+    return False
+
 def step_exit_dropview(config: dict, log_fn=None):
     """Ctrl+D ile bağlantıyı kes + Alt+F4 ile DropView'i kapat."""
     def _log(msg):
@@ -827,9 +876,9 @@ def step_exit_dropview(config: dict, log_fn=None):
             try:
                 step_stop_measure(log_fn=_log)
             except Exception as e:
-                raise RuntimeError(
-                    f"DropView kapatılamadı: Multiscript Editor önce kapatılamadı: {e}"
-                ) from e
+                _log(f"│  UYARI: Normal stop ile Multiscript kapanamadı: {e}")
+                if not _force_close_multiscript(log_fn=_log):
+                    _log("│  UYARI: Multiscript kapanamadı, DropView kapanışı yine de denenecek.")
 
         # Owned dialog'ları temizle (içeriğe bağımsız)
         closed = close_owned_dialogs(dv_hwnd, log_fn=_log)
@@ -1172,6 +1221,30 @@ def step_start_measure(config: dict, log_fn=None):
     # "Some curves have not been saved" diyalogu Run sonrası gecikmeli açılabiliyor.
     _dismiss_warning_if_present(WARNING_UNSAVED, wait=3.0)
 
-    wait_for_image(_IMG["yellow_dot_selected"], timeout=30,
-                   poll_interval=POLL_INTERVAL_SLOW, threshold=THRESHOLD_HIGH)
+    try:
+        wait_for_image(_IMG["yellow_dot_selected"], timeout=30,
+                       poll_interval=POLL_INTERVAL_SLOW, threshold=THRESHOLD_HIGH)
+    except Exception:
+        if log_fn:
+            fg_title = ""
+            try:
+                fg_hwnd = win32gui.GetForegroundWindow()
+                fg_title = win32gui.GetWindowText(fg_hwnd) or "(untitled)"
+            except Exception:
+                fg_title = "(okunamadı)"
+            try:
+                green_score = match_score_on_screen(_IMG["green_dot_selected"])
+            except Exception:
+                green_score = -1.0
+            try:
+                run_score = match_score_on_screen(_IMG["run_btn"])
+            except Exception:
+                run_score = -1.0
+            log_fn(
+                f"│  TANI: yellow_dot timeout | fg='{fg_title}' | "
+                f"dv_open={window_exists(DROPVIEW_WINDOW_NAME)} | "
+                f"ms_open={window_exists(MULTISCRIPT_WINDOW)} | "
+                f"green_score={green_score:.2f} | run_btn_score={run_score:.2f}"
+            )
+        raise
     stop_dialog_watchdog()
