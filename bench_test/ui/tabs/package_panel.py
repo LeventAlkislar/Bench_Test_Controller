@@ -421,6 +421,23 @@ class PackagePanel(QWidget):
 
     # ── Aggregator ────────────────────────────────────────────────
 
+    def discard_unstarted_session(self):
+        """
+        Recipe thread'i başlamadan önce açılmış session'i sessizce temizler.
+        Beklenmedik start hatalarında UI'ın READY/PENDING durumunda takılmasını önler.
+        """
+        if self._session is None or self.sm.state == "running":
+            return
+
+        self._close_log_writer()
+        self._session = None
+        self._log_writer = None
+        self.sm.reset()
+        self.aggregate_btn.setEnabled(False)
+        self.session_dir_lbl.setText("")
+        self.session_id_edit.setText("")
+        self._set_status("Hazır — yeni recipe başlatılabilir", _COLOR_READY)
+
     def _run_aggregator(self):
         if not self._session:
             QMessageBox.warning(self, "Aggregator", "Aktif oturum yok.")

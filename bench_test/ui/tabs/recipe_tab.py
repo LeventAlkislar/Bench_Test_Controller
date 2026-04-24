@@ -561,13 +561,9 @@ class RecipeTab(QWidget):
             pass
 
     def _start_recipe(self):
-        # ── Paketi oluştur ────────────────────────────────────
-        if self.package_tab and not self.package_tab.build_package(
-                recipe_path=self._current_recipe_path or ""):
+        if not self.recipe_steps:
+            QMessageBox.warning(self, "Warning", "No recipe steps")
             return
-        # Session .scr yolu artık hazır — COL_SCR sütununu güncelle
-        if self.package_tab and self.package_tab.get_session():
-            self._refresh_table()
 
         valve_a_ok = self.ctrl_a.is_connected()
         valve_b_ok = self.ctrl_b.is_connected()
@@ -599,8 +595,13 @@ class RecipeTab(QWidget):
                     f"O valve'e ait adımlar atlanacak."
                 )
                 self._simulation_mode = False
-        if not self.recipe_steps:
-            QMessageBox.warning(self, "Warning", "No recipe steps"); return
+        # ── Paketi oluştur ────────────────────────────────────
+        if self.package_tab and not self.package_tab.build_package(
+                recipe_path=self._current_recipe_path or ""):
+            return
+        # Session .scr yolu artık hazır — COL_SCR sütununu güncelle
+        if self.package_tab and self.package_tab.get_session():
+            self._refresh_table()
 
         self.stop_event.clear()
         recipe = Recipe(self.name_edit.text(), self.recipe_steps.copy(),
@@ -612,13 +613,23 @@ class RecipeTab(QWidget):
             if session:
                 session_scr = session.get_file_path("script") or ""
 
-        self.recipe_runner = RecipeRunner(
-            self.ctrl_a, self.ctrl_b, recipe, self.status_queue, self.stop_event,
-            self.dv_ctrl, session_scr_path=session_scr,
-            simulation_mode=self._simulation_mode)
-        self.recipe_runner.start()
-        if self.package_tab:
-            self.package_tab.sm.start()
+        try:
+            self.recipe_runner = RecipeRunner(
+                self.ctrl_a, self.ctrl_b, recipe, self.status_queue, self.stop_event,
+                self.dv_ctrl, session_scr_path=session_scr,
+                simulation_mode=self._simulation_mode)
+            self.recipe_runner.start()
+            if self.package_tab:
+                self.package_tab.sm.start()
+        except Exception as exc:
+            self._simulation_mode = False
+            if self._main_window:
+                self._main_window.set_simulation_mode(False)
+            if self.package_tab:
+                self.package_tab.discard_unstarted_session()
+            QMessageBox.critical(self, "Recipe Error", f"Recipe başlatılamadı:\n{exc}")
+            self.log_signal.emit(f"Recipe start error: {exc}")
+            return
 
         self.start_btn.setEnabled(False); self.pause_btn.setEnabled(True); self.stop_btn.setEnabled(True)
         self.log_signal.emit(f"Recipe started: {recipe.name}")

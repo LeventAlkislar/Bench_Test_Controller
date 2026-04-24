@@ -48,3 +48,5 @@
 8. Sana verdiğim her yeni kod parçası veya güncellenmiş dosya, o konudaki tek 'doğru' (source of truth) kabul et. Eski dosyalardaki yöntemler ile yeni önerdiğim yapılar çelişirse, her zaman en son verdiğim bilgiyi esas al.
 9. Önemli ve karmaşık güncelleme çalışmalarına başlamadan ya da bütün güncellemeleri tamamladıktan sonra git commit etmeyi hatırlat.
 10. Kod incelemelerini yaparken yapısal kötü kokular almaya başladığında refactor yapmayı değerlendirmek üzere öneride bulun.
+11. Patch dosyadaki encoding/karakter farkı yüzünden tam oturmuyor. Bu nedenle ilgili blokları daha dar bağlamla okuyup güvenli şekilde uygula.
+12. Kod içinde alanların yönetildiği yeri ararken rg bu ortamda çalışmadığı için PowerShell ile daha dar kapsamlı bir taramaya geç.

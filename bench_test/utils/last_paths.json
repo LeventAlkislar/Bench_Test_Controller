@@ -10,5 +10,8 @@
   "browse_session": "C:\\UNAM DRIVE\\TUSEB\\SGI Prototip Gelistirme\\1B Sistem Muhendisligi\\Bench Tests\\CGM Measurements\\PAD Discrete Measurements\\UNAM-PET-58-002\\20260422_142116",
   "response_delay_min": 9,
   "response_delay_sec": 0,
-  "dropsens_com": "COM10"
+  "dropsens_com": "COM10",
+  "last_part_number": "UNAM-PET-58-002",
+  "last_method_file": "C:\\UNAM DRIVE\\TUSEB\\SGI Prototip Gelistirme\\1B Sistem Muhendisligi\\Bench Tests\\CGM Measurements\\PAD Discrete Measurements\\UNAM-PET-58-002\\20260422_142116\\measurement_parameters\\UNAM-PET-58-002.tp",
+  "last_recipe_file": "C:\\UNAM DRIVE\\TUSEB\\SGI Prototip Gelistirme\\1B Sistem Muhendisligi\\Bench Tests\\CGM Measurements\\PAD Discrete Measurements\\UNAM-PET-58-002\\20260422_142116\\measurement_parameters\\recipe.json"
 }
