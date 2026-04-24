@@ -127,24 +127,34 @@ def _wait_for_dropview_process_exit(timeout=15, poll_interval=0.5):
         f"DropView process'i {timeout}sn içinde kapanmadı."
     )
 
+def _focus_window(hwnd, click_title=False, restore_if_iconic=True, sleep_after=SLEEP_AFTER_CLICK):
+    """Bring a window to foreground with optional restore, title click and post-focus wait."""
+    if restore_if_iconic and win32gui.IsIconic(hwnd):
+        win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+        time.sleep(SLEEP_AFTER_FOCUS)
+    win32gui.BringWindowToTop(hwnd)
+    win32gui.SetForegroundWindow(hwnd)
+    time.sleep(sleep_after)
+    if win32gui.GetForegroundWindow() != hwnd:
+        print(f"│  UYARI: SetForegroundWindow etkisiz (hwnd={hwnd}), devam ediliyor.")
+    if click_title:
+        rect = win32gui.GetWindowRect(hwnd)
+        pyautogui.click((rect[0] + rect[2]) // 2, rect[1] + 10)
+        time.sleep(SLEEP_AFTER_FOCUS)
+
 def _is_dropview_ui_ready(dv_hwnd, timeout=3.0) -> bool:
     """
     Quick readiness check for DropView UI before trusting early return.
     """
     try:
-        if win32gui.IsIconic(dv_hwnd):
-            win32gui.ShowWindow(dv_hwnd, win32con.SW_RESTORE)
-            time.sleep(SLEEP_AFTER_FOCUS)
-        win32gui.SetForegroundWindow(dv_hwnd)
-        time.sleep(SLEEP_AFTER_CLICK)
-        rect = win32gui.GetWindowRect(dv_hwnd)
-        pyautogui.click((rect[0] + rect[2]) // 2, rect[1] + 10)
-        time.sleep(SLEEP_AFTER_FOCUS)
+        _focus_window(dv_hwnd, click_title=True)
         wait_for_image(
             _IMG["scripts_menu"],
             timeout=timeout,
             poll_interval=POLL_INTERVAL_NORMAL,
             threshold=THRESHOLD_MID,
+            hwnd=dv_hwnd,
+            use_foreground_fallback=False,
         )
         return True
     except Exception:
@@ -191,8 +201,7 @@ def close_owned_dialogs(owner_hwnd, log_fn=None) -> int:
     for dlg_hwnd in find_owned_dialogs(owner_hwnd):
         try:
             title = win32gui.GetWindowText(dlg_hwnd)
-            win32gui.SetForegroundWindow(dlg_hwnd)
-            time.sleep(SLEEP_AFTER_CLICK)
+            _focus_window(dlg_hwnd, restore_if_iconic=False)
             pyautogui.press("enter")
             time.sleep(SLEEP_AFTER_FOCUS)
             closed += 1
@@ -302,8 +311,7 @@ def _auto_dismiss_dialog(hwnd, title: str):
     try:
         pid = get_window_pid(hwnd)
         owner_title, owner_hwnd = _get_dialog_owner_info(hwnd)
-        win32gui.SetForegroundWindow(hwnd)
-        time.sleep(SLEEP_AFTER_CLICK)
+        _focus_window(hwnd, restore_if_iconic=False)
         pyautogui.press("enter")
         _watchdog_log(
             f"│  Dialog otomatik kapatılıyor: '{title}' "
@@ -378,7 +386,7 @@ def _dismiss_warning_if_present(window_title: str, wait: float = 3.0) -> bool:
         if window_exists(window_title):
             try:
                 warn_hwnd = find_window(window_title, timeout=0.5, poll_interval=0.1)
-                win32gui.SetForegroundWindow(warn_hwnd)
+                _focus_window(warn_hwnd, restore_if_iconic=False, sleep_after=0.3)
             except Exception:
                 warn_hwnd = None
 
@@ -416,7 +424,7 @@ def _read_error_window_text(hwnd) -> str:
     return " ".join(texts)
 
 
-def _classify_error_dialog_by_template(log_fn=None) -> str | None:
+def _classify_error_dialog_by_template(log_fn=None, hwnd=None, use_foreground_fallback=False) -> str | None:
     """
     Error metni Win32 child text'ten okunamazsa, ekrandaki metin template'lerine
     bakarak hatayı sınıflandırır.
@@ -425,8 +433,16 @@ def _classify_error_dialog_by_template(log_fn=None) -> str | None:
         if log_fn:
             log_fn(msg)
 
-    score_no_device = match_score_on_screen(_IMG["error_no_device_text"])
-    score_pot_not_found = match_score_on_screen(_IMG["error_potentiostat_text"])
+    score_no_device = match_score_on_screen(
+        _IMG["error_no_device_text"],
+        hwnd=hwnd,
+        use_foreground_fallback=use_foreground_fallback,
+    )
+    score_pot_not_found = match_score_on_screen(
+        _IMG["error_potentiostat_text"],
+        hwnd=hwnd,
+        use_foreground_fallback=use_foreground_fallback,
+    )
     min_score = max(THRESHOLD_LOW, 0.55)
     min_delta = 0.08
 
@@ -476,8 +492,7 @@ def _wait_for_connection_result(timeout=30, poll_interval=0.5, log_fn=None) -> s
                 shown_text = text if text else "(metin okunamadı)"
                 _log(f"│  DropView Error dialog metni: {shown_text}")
                 try:
-                    win32gui.SetForegroundWindow(err_hwnd)
-                    time.sleep(SLEEP_AFTER_CLICK)
+                    _focus_window(err_hwnd, restore_if_iconic=False)
                     pyautogui.press("enter")
                     time.sleep(SLEEP_AFTER_FOCUS)
                 except Exception:
@@ -489,7 +504,11 @@ def _wait_for_connection_result(timeout=30, poll_interval=0.5, log_fn=None) -> s
                     _log("│  DropView bağlantı hatası sınıflandırıldı: potentiostat_not_found")
                     return "potentiostat_not_found"
 
-                template_result = _classify_error_dialog_by_template(log_fn=log_fn)
+                template_result = _classify_error_dialog_by_template(
+                    log_fn=log_fn,
+                    hwnd=err_hwnd,
+                    use_foreground_fallback=False,
+                )
                 if template_result == "no_device_connected":
                     _log("│  DropView bağlantı hatası template ile sınıflandırıldı: no_device_connected")
                     return "no_device_connected"
@@ -538,15 +557,14 @@ def _connect_manual(dv_hwnd, target_com: str, log_fn=None) -> str:
         _log(f"│  UYARI: Desteklenmeyen COM portu: {target_com}")
         return "timeout"
 
-    win32gui.SetForegroundWindow(dv_hwnd)
-    time.sleep(SLEEP_AFTER_FOCUS)
+    _focus_window(dv_hwnd, restore_if_iconic=False, sleep_after=SLEEP_AFTER_FOCUS)
     pyautogui.hotkey("alt", "d")
     time.sleep(SLEEP_AFTER_FOCUS)
     pyautogui.press("m")
     time.sleep(SLEEP_AFTER_FOCUS)
 
     try:
-        find_window(MANUAL_CONNECTION_WINDOW, timeout=10)
+        manual_hwnd = find_window(MANUAL_CONNECTION_WINDOW, timeout=10)
     except TimeoutError:
         _log("│  UYARI: Manual Connection penceresi açılmadı.")
         return "timeout"
@@ -554,7 +572,12 @@ def _connect_manual(dv_hwnd, target_com: str, log_fn=None) -> str:
     time.sleep(SLEEP_AFTER_FOCUS)
 
     try:
-        dx, dy = find_on_screen(_IMG["manual_conn_dropdown_arrow"], threshold=THRESHOLD_MID)
+        dx, dy = find_on_screen(
+            _IMG["manual_conn_dropdown_arrow"],
+            threshold=THRESHOLD_MID,
+            hwnd=manual_hwnd,
+            use_foreground_fallback=False,
+        )
         pyautogui.click(dx, dy)
         time.sleep(SLEEP_AFTER_CLICK)
     except Exception as e:
@@ -563,7 +586,12 @@ def _connect_manual(dv_hwnd, target_com: str, log_fn=None) -> str:
 
     com_key = "manual_conn_com3" if target_com == "COM3" else "manual_conn_com10"
     try:
-        cx, cy = find_on_screen(_IMG[com_key], threshold=THRESHOLD_MID)
+        cx, cy = find_on_screen(
+            _IMG[com_key],
+            threshold=THRESHOLD_MID,
+            hwnd=manual_hwnd,
+            use_foreground_fallback=False,
+        )
         pyautogui.click(cx, cy)
         time.sleep(SLEEP_AFTER_CLICK)
     except Exception as e:
@@ -571,7 +599,12 @@ def _connect_manual(dv_hwnd, target_com: str, log_fn=None) -> str:
         return "timeout"
 
     try:
-        bx, by = find_on_screen(_IMG["manual_conn_connect_btn"], threshold=THRESHOLD_MID)
+        bx, by = find_on_screen(
+            _IMG["manual_conn_connect_btn"],
+            threshold=THRESHOLD_MID,
+            hwnd=manual_hwnd,
+            use_foreground_fallback=False,
+        )
         pyautogui.click(bx, by)
         time.sleep(SLEEP_AFTER_COMMAND)
     except Exception as e:
@@ -591,8 +624,9 @@ def _connect_manual(dv_hwnd, target_com: str, log_fn=None) -> str:
 def wait_until_connected(timeout=30, poll_interval=1.0):
     start = time.time()
     while time.time() - start < timeout:
-        conn_sc = match_score_on_screen(_IMG["connected"])
-        disc_sc = match_score_on_screen(_IMG["disconnected"])
+        dv_hwnd = find_window(DROPVIEW_WINDOW_NAME, timeout=0.2, poll_interval=0.05) if window_exists(DROPVIEW_WINDOW_NAME) else None
+        conn_sc = match_score_on_screen(_IMG["connected"], hwnd=dv_hwnd, use_foreground_fallback=False)
+        disc_sc = match_score_on_screen(_IMG["disconnected"], hwnd=dv_hwnd, use_foreground_fallback=False)
         if (conn_sc > THRESHOLD_LOW or disc_sc > THRESHOLD_LOW) and conn_sc > disc_sc:
             return
         time.sleep(poll_interval)
@@ -602,8 +636,9 @@ def wait_until_connected(timeout=30, poll_interval=1.0):
 def wait_until_disconnected(timeout=10, poll_interval=1.0):
     start = time.time()
     while time.time() - start < timeout:
-        conn_sc = match_score_on_screen(_IMG["connected"])
-        disc_sc = match_score_on_screen(_IMG["disconnected"])
+        dv_hwnd = find_window(DROPVIEW_WINDOW_NAME, timeout=0.2, poll_interval=0.05) if window_exists(DROPVIEW_WINDOW_NAME) else None
+        conn_sc = match_score_on_screen(_IMG["connected"], hwnd=dv_hwnd, use_foreground_fallback=False)
+        disc_sc = match_score_on_screen(_IMG["disconnected"], hwnd=dv_hwnd, use_foreground_fallback=False)
         if (conn_sc > THRESHOLD_LOW or disc_sc > THRESHOLD_LOW) and disc_sc > conn_sc:
             return
         time.sleep(poll_interval)
@@ -612,8 +647,9 @@ def wait_until_disconnected(timeout=10, poll_interval=1.0):
 def _is_dropview_connected() -> bool:
     if not window_exists(DROPVIEW_WINDOW_NAME):
         return False
-    conn_sc = match_score_on_screen(_IMG["connected"])
-    disc_sc = match_score_on_screen(_IMG["disconnected"])
+    dv_hwnd = find_window(DROPVIEW_WINDOW_NAME, timeout=0.2, poll_interval=0.05)
+    conn_sc = match_score_on_screen(_IMG["connected"], hwnd=dv_hwnd, use_foreground_fallback=False)
+    disc_sc = match_score_on_screen(_IMG["disconnected"], hwnd=dv_hwnd, use_foreground_fallback=False)
     if conn_sc < THRESHOLD_LOW and disc_sc < THRESHOLD_LOW:
         return False
     return conn_sc > disc_sc
@@ -623,10 +659,11 @@ def get_dropview_connection_scores() -> dict:
     dv_open = window_exists(DROPVIEW_WINDOW_NAME)
     if not dv_open:
         return {"dv_open": False, "connected_score": 0.0, "disconnected_score": 0.0}
+    dv_hwnd = find_window(DROPVIEW_WINDOW_NAME, timeout=0.2, poll_interval=0.05)
     return {
         "dv_open": True,
-        "connected_score":    match_score_on_screen(_IMG["connected"]),
-        "disconnected_score": match_score_on_screen(_IMG["disconnected"]),
+        "connected_score":    match_score_on_screen(_IMG["connected"], hwnd=dv_hwnd, use_foreground_fallback=False),
+        "disconnected_score": match_score_on_screen(_IMG["disconnected"], hwnd=dv_hwnd, use_foreground_fallback=False),
     }
 
 
@@ -690,7 +727,12 @@ def _delete_scripts_above(ms_hwnd, listbox_x, listbox_y, count):
     for i in range(count):
         pyautogui.press("up")
         time.sleep(SLEEP_AFTER_CLICK)
-        dx, dy = find_on_screen(_IMG["delete_btn"], threshold=THRESHOLD_MID)
+        dx, dy = find_on_screen(
+            _IMG["delete_btn"],
+            threshold=THRESHOLD_MID,
+            hwnd=ms_hwnd,
+            use_foreground_fallback=False,
+        )
         pyautogui.click(dx, dy)
         time.sleep(0.4)
 
@@ -718,9 +760,7 @@ def step_connect_dropsens(target_com: str = None, log_fn=None):
         raise RuntimeError("DropView penceresi açık değil.")
 
     dv_hwnd = find_window(DROPVIEW_WINDOW_NAME, timeout=10)
-    if win32gui.IsIconic(dv_hwnd):
-        win32gui.ShowWindow(dv_hwnd, win32con.SW_RESTORE)
-        time.sleep(SLEEP_AFTER_FOCUS)
+    _focus_window(dv_hwnd)
 
     manual_attempts = []
     result = "timeout"
@@ -736,9 +776,7 @@ def step_connect_dropsens(target_com: str = None, log_fn=None):
 
     attempts_str = ", ".join(f"{p}={s}" for p, s in manual_attempts)
     _log(f"│  Manuel bağlantılar başarısız ({attempts_str}), Ctrl+C ile tekrar deneniyor...")
-
-    win32gui.SetForegroundWindow(dv_hwnd)
-    time.sleep(SLEEP_AFTER_CLICK)
+    _focus_window(dv_hwnd)
     win32api.keybd_event(win32con.VK_CONTROL, 0, 0, 0)
     win32api.keybd_event(ord('C'), 0, 0, 0)
     win32api.keybd_event(ord('C'), 0, win32con.KEYEVENTF_KEYUP, 0)
@@ -769,8 +807,7 @@ def step_disconnect_dropsens():
         return
 
     dv_hwnd = find_window(DROPVIEW_WINDOW_NAME, timeout=10)
-    win32gui.SetForegroundWindow(dv_hwnd)
-    time.sleep(SLEEP_AFTER_CLICK)
+    _focus_window(dv_hwnd)
     win32api.keybd_event(win32con.VK_CONTROL, 0, 0, 0)
     win32api.keybd_event(ord('D'), 0, 0, 0)
     win32api.keybd_event(ord('D'), 0, win32con.KEYEVENTF_KEYUP, 0)
@@ -785,20 +822,41 @@ def step_stop_measure(log_fn=None):
         return
 
     ms_hwnd = find_window(MULTISCRIPT_WINDOW, timeout=5)
-    win32gui.SetForegroundWindow(ms_hwnd)
-    time.sleep(SLEEP_AFTER_FOCUS)
+    _focus_window(ms_hwnd, restore_if_iconic=False, sleep_after=SLEEP_AFTER_FOCUS)
 
-    sx, sy = find_on_screen(_IMG["stop_btn"], threshold=THRESHOLD_HIGH)
+    sx, sy = find_on_screen(
+        _IMG["stop_btn"],
+        threshold=THRESHOLD_HIGH,
+        hwnd=ms_hwnd,
+        use_foreground_fallback=False,
+    )
     pyautogui.click(sx, sy)
     time.sleep(SLEEP_AFTER_COMMAND)
 
-    wait_for_image_gone(_IMG["yellow_dot_selected"], timeout=TIMEOUT_STOP_MEASURE,
-                        poll_interval=POLL_INTERVAL_SLOW, threshold=THRESHOLD_HIGH)
+    wait_for_image_gone(
+        _IMG["yellow_dot_selected"],
+        timeout=TIMEOUT_STOP_MEASURE,
+        poll_interval=POLL_INTERVAL_SLOW,
+        threshold=THRESHOLD_HIGH,
+        hwnd=ms_hwnd,
+        use_foreground_fallback=False,
+    )
 
-    wait_for_image(_IMG["green_dot_selected"], timeout=15,
-                   poll_interval=POLL_INTERVAL_NORMAL, threshold=THRESHOLD_HIGH)
+    wait_for_image(
+        _IMG["green_dot_selected"],
+        timeout=15,
+        poll_interval=POLL_INTERVAL_NORMAL,
+        threshold=THRESHOLD_HIGH,
+        hwnd=ms_hwnd,
+        use_foreground_fallback=False,
+    )
 
-    ex, ey = find_on_screen(_IMG["exit_btn"], threshold=THRESHOLD_HIGH)
+    ex, ey = find_on_screen(
+        _IMG["exit_btn"],
+        threshold=THRESHOLD_HIGH,
+        hwnd=ms_hwnd,
+        use_foreground_fallback=False,
+    )
     pyautogui.click(ex, ey)
     time.sleep(SLEEP_AFTER_FOCUS)
 
@@ -836,11 +894,7 @@ def _force_close_multiscript(log_fn=None) -> bool:
 
     # 2) Alt+F4
     try:
-        if win32gui.IsIconic(ms_hwnd):
-            win32gui.ShowWindow(ms_hwnd, win32con.SW_RESTORE)
-            time.sleep(SLEEP_AFTER_FOCUS)
-        win32gui.SetForegroundWindow(ms_hwnd)
-        time.sleep(SLEEP_AFTER_CLICK)
+        _focus_window(ms_hwnd)
         win32api.keybd_event(win32con.VK_MENU, 0, 0, 0)
         win32api.keybd_event(win32con.VK_F4, 0, 0, 0)
         win32api.keybd_event(win32con.VK_F4, 0, win32con.KEYEVENTF_KEYUP, 0)
@@ -886,8 +940,7 @@ def step_exit_dropview(config: dict, log_fn=None):
             _log(f"│  {closed} dialog kapatıldı.")
 
         if _is_dropview_connected():
-            win32gui.SetForegroundWindow(dv_hwnd)
-            time.sleep(SLEEP_AFTER_CLICK)
+            _focus_window(dv_hwnd)
             win32api.keybd_event(win32con.VK_CONTROL, 0, 0, 0)
             win32api.keybd_event(ord('D'), 0, 0, 0)
             win32api.keybd_event(ord('D'), 0, win32con.KEYEVENTF_KEYUP, 0)
@@ -901,8 +954,7 @@ def step_exit_dropview(config: dict, log_fn=None):
 
         # Alt+F4
         dv_hwnd = find_window(DROPVIEW_WINDOW_NAME, timeout=5)
-        win32gui.SetForegroundWindow(dv_hwnd)
-        time.sleep(SLEEP_AFTER_CLICK)
+        _focus_window(dv_hwnd)
         win32api.keybd_event(win32con.VK_MENU, 0, 0, 0)
         win32api.keybd_event(win32con.VK_F4, 0, 0, 0)
         win32api.keybd_event(win32con.VK_F4, 0, win32con.KEYEVENTF_KEYUP, 0)
@@ -936,8 +988,7 @@ def step_exit_dropview(config: dict, log_fn=None):
             _log("│  Kill öncesi Ctrl+D gönderiliyor...")
             try:
                 dv_hwnd_kill = find_window(DROPVIEW_WINDOW_NAME, timeout=3)
-                win32gui.SetForegroundWindow(dv_hwnd_kill)
-                time.sleep(SLEEP_AFTER_CLICK)
+                _focus_window(dv_hwnd_kill)
                 win32api.keybd_event(win32con.VK_CONTROL, 0, 0, 0)
                 win32api.keybd_event(ord('D'), 0, 0, 0)
                 win32api.keybd_event(ord('D'), 0, win32con.KEYEVENTF_KEYUP, 0)
@@ -1063,9 +1114,7 @@ def step_start_dropview(config: dict, log_fn=None):
         time.sleep(SLEEP_AFTER_LAUNCH)
 
     dv_hwnd = find_window(DROPVIEW_WINDOW_NAME, timeout=10)
-    if win32gui.IsIconic(dv_hwnd):
-        win32gui.ShowWindow(dv_hwnd, win32con.SW_RESTORE)
-        time.sleep(SLEEP_AFTER_FOCUS)
+    _focus_window(dv_hwnd)
 
     manual_attempts = []
     result = "timeout"
@@ -1084,8 +1133,7 @@ def step_start_dropview(config: dict, log_fn=None):
     elif result in ("no_device_connected", "potentiostat_not_found", "unknown_error", "timeout"):
         attempts_str = ", ".join(f"{port}={status}" for port, status in manual_attempts)
         _log(f"│  Manuel bağlantılar başarısız ({attempts_str}), Ctrl+C ile tekrar deneniyor...")
-        win32gui.SetForegroundWindow(dv_hwnd)
-        time.sleep(SLEEP_AFTER_CLICK)
+        _focus_window(dv_hwnd)
         win32api.keybd_event(win32con.VK_CONTROL, 0, 0, 0)
         win32api.keybd_event(ord('C'), 0, 0, 0)
         win32api.keybd_event(ord('C'), 0, win32con.KEYEVENTF_KEYUP, 0)
@@ -1132,17 +1180,7 @@ def step_start_dropview(config: dict, log_fn=None):
 def step_start_measure(config: dict, log_fn=None):
     ensure_dialog_watchdog(log_fn=log_fn)
     dv_hwnd = find_window(DROPVIEW_WINDOW_NAME, timeout=10)
-    if win32gui.IsIconic(dv_hwnd):
-        win32gui.ShowWindow(dv_hwnd, win32con.SW_RESTORE)
-        time.sleep(SLEEP_AFTER_FOCUS)
-
-    win32gui.SetForegroundWindow(dv_hwnd)
-    time.sleep(SLEEP_AFTER_CLICK)
-    rect = win32gui.GetWindowRect(dv_hwnd)
-    title_x = (rect[0] + rect[2]) // 2
-    title_y = rect[1] + 10
-    pyautogui.click(title_x, title_y)
-    time.sleep(SLEEP_AFTER_FOCUS)
+    _focus_window(dv_hwnd, click_title=True)
 
     # Alt+S S öncesi: DropView enabled ve modal yok mu doğrula
     if not win32gui.IsWindowEnabled(dv_hwnd):
@@ -1157,7 +1195,13 @@ def step_start_measure(config: dict, log_fn=None):
             f"Start Measure hatası: DropView'e ait açık dialog var: {titles}"
         )
 
-    wait_for_image(_IMG["scripts_menu"], timeout=TIMEOUT_WINDOW_OPEN, poll_interval=POLL_INTERVAL_SLOW)
+    wait_for_image(
+        _IMG["scripts_menu"],
+        timeout=TIMEOUT_WINDOW_OPEN,
+        poll_interval=POLL_INTERVAL_SLOW,
+        hwnd=dv_hwnd,
+        use_foreground_fallback=False,
+    )
     time.sleep(SLEEP_AFTER_FOCUS)
     pyautogui.hotkey("alt", "s")
     time.sleep(SLEEP_AFTER_FOCUS)
@@ -1169,11 +1213,20 @@ def step_start_measure(config: dict, log_fn=None):
         log_fn(f"│  Multiscript Editor açıldı (hwnd={ms_hwnd}).")
     time.sleep(SLEEP_AFTER_FOCUS)
 
-    lbl_x, lbl_y = find_on_screen(_IMG["loaded_scripts"], threshold=THRESHOLD_HIGH)
+    lbl_x, lbl_y = find_on_screen(
+        _IMG["loaded_scripts"],
+        threshold=THRESHOLD_HIGH,
+        hwnd=ms_hwnd,
+        use_foreground_fallback=False,
+    )
     listbox_x = lbl_x
     listbox_y = lbl_y + 100
 
-    lx, ly = find_on_screen(_IMG["load_btn"])
+    lx, ly = find_on_screen(
+        _IMG["load_btn"],
+        hwnd=ms_hwnd,
+        use_foreground_fallback=False,
+    )
     pyautogui.click(lx, ly)
     time.sleep(SLEEP_AFTER_FOCUS)
 
@@ -1181,8 +1234,7 @@ def step_start_measure(config: dict, log_fn=None):
     open_hwnd = find_window("Open", timeout=10)
     time.sleep(SLEEP_AFTER_FOCUS)
 
-    win32gui.SetForegroundWindow(open_hwnd)
-    time.sleep(SLEEP_AFTER_FOCUS)
+    _focus_window(open_hwnd, restore_if_iconic=False, sleep_after=SLEEP_AFTER_FOCUS)
 
     win32clipboard.OpenClipboard()
     win32clipboard.EmptyClipboard()
@@ -1209,12 +1261,16 @@ def step_start_measure(config: dict, log_fn=None):
     time.sleep(0.8)
 
     ms_hwnd = find_window(MULTISCRIPT_WINDOW, timeout=10)
-    win32gui.SetForegroundWindow(ms_hwnd)
-    time.sleep(SLEEP_AFTER_FOCUS)
+    _focus_window(ms_hwnd, restore_if_iconic=False, sleep_after=SLEEP_AFTER_FOCUS)
     before_count = _count_and_clear_scripts(ms_hwnd, listbox_x, listbox_y)
     _delete_scripts_above(ms_hwnd, listbox_x, listbox_y, before_count)
 
-    rx, ry = find_on_screen(_IMG["run_btn"], threshold=THRESHOLD_MID)
+    rx, ry = find_on_screen(
+        _IMG["run_btn"],
+        threshold=THRESHOLD_MID,
+        hwnd=ms_hwnd,
+        use_foreground_fallback=False,
+    )
     pyautogui.click(rx, ry)
     time.sleep(SLEEP_AFTER_COMMAND)
 
@@ -1222,8 +1278,14 @@ def step_start_measure(config: dict, log_fn=None):
     _dismiss_warning_if_present(WARNING_UNSAVED, wait=3.0)
 
     try:
-        wait_for_image(_IMG["yellow_dot_selected"], timeout=30,
-                       poll_interval=POLL_INTERVAL_SLOW, threshold=THRESHOLD_HIGH)
+        wait_for_image(
+            _IMG["yellow_dot_selected"],
+            timeout=30,
+            poll_interval=POLL_INTERVAL_SLOW,
+            threshold=THRESHOLD_HIGH,
+            hwnd=ms_hwnd,
+            use_foreground_fallback=False,
+        )
     except Exception:
         if log_fn:
             fg_title = ""
@@ -1233,11 +1295,19 @@ def step_start_measure(config: dict, log_fn=None):
             except Exception:
                 fg_title = "(okunamadı)"
             try:
-                green_score = match_score_on_screen(_IMG["green_dot_selected"])
+                green_score = match_score_on_screen(
+                    _IMG["green_dot_selected"],
+                    hwnd=ms_hwnd,
+                    use_foreground_fallback=False,
+                )
             except Exception:
                 green_score = -1.0
             try:
-                run_score = match_score_on_screen(_IMG["run_btn"])
+                run_score = match_score_on_screen(
+                    _IMG["run_btn"],
+                    hwnd=ms_hwnd,
+                    use_foreground_fallback=False,
+                )
             except Exception:
                 run_score = -1.0
             log_fn(

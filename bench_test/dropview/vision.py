@@ -5,33 +5,87 @@ import time
 import cv2
 import mss
 import numpy as np
+import pyautogui
+import win32api
+import win32con
+import win32gui
 from PIL import Image
 
 
-def _grab_screen() -> np.ndarray:
-    """DPI-aware tam ekran görüntüsü alır (BGR)."""
-    with mss.mss() as sct:
-        monitor = sct.monitors[0]  # tum sanal masaustu
-        raw = sct.grab(monitor)
-        img = np.array(raw)
-        return cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
-
-
-def find_on_screen(image_path, threshold=0.7):
+def _get_active_monitor(sct) -> dict:
     """
-    Ekranda image_path görüntüsünü arar.
-    Bulunan konumun merkez (x, y) koordinatını döndürür.
+    Returns the monitor where the mouse cursor is located.
+    Falls back to the primary monitor (monitors[1]) if no match is found.
+    """
+    cx, cy = pyautogui.position()
+    for mon in sct.monitors[1:]:
+        if mon["left"] <= cx < mon["left"] + mon["width"] and mon["top"] <= cy < mon["top"] + mon["height"]:
+            return mon
+    return sct.monitors[1]
+
+
+def _match_monitor_by_rect(sct, rect) -> dict | None:
+    left, top, right, bottom = rect
+    width = right - left
+    height = bottom - top
+    for mon in sct.monitors[1:]:
+        if (
+            mon["left"] == left
+            and mon["top"] == top
+            and mon["width"] == width
+            and mon["height"] == height
+        ):
+            return mon
+    return None
+
+
+def _get_monitor_for_hwnd(sct, hwnd) -> dict | None:
+    """
+    Returns the MSS monitor corresponding to the given window handle.
+    Returns None on any lookup/mapping failure.
+    """
+    try:
+        if not hwnd or not win32gui.IsWindow(hwnd):
+            return None
+        hmon = win32api.MonitorFromWindow(hwnd, win32con.MONITOR_DEFAULTTONEAREST)
+        info = win32api.GetMonitorInfo(hmon)
+        return _match_monitor_by_rect(sct, info["Monitor"])
+    except Exception:
+        return None
+
+
+def _grab_screen(hwnd=None, use_foreground_fallback=True) -> np.ndarray:
+    """Grabs a DPI-aware monitor screenshot as BGR."""
+    with mss.mss() as sct:
+        monitor = _get_monitor_for_hwnd(sct, hwnd)
+        if monitor is None and use_foreground_fallback:
+            fg_hwnd = None
+            try:
+                fg_hwnd = win32gui.GetForegroundWindow()
+            except Exception:
+                fg_hwnd = None
+            monitor = _get_monitor_for_hwnd(sct, fg_hwnd)
+        if monitor is None:
+            monitor = _get_active_monitor(sct)
+
+        raw = sct.grab(monitor)
+        return cv2.cvtColor(np.array(raw), cv2.COLOR_BGRA2BGR)
+
+
+def find_on_screen(image_path, threshold=0.7, hwnd=None, use_foreground_fallback=True):
+    """
+    Searches for image_path on screen and returns center (x, y).
     """
     needle_pil = Image.open(image_path).convert("RGB")
-    needle     = cv2.cvtColor(np.array(needle_pil), cv2.COLOR_RGB2BGR)
-    screen = _grab_screen()
+    needle = cv2.cvtColor(np.array(needle_pil), cv2.COLOR_RGB2BGR)
+    screen = _grab_screen(hwnd=hwnd, use_foreground_fallback=use_foreground_fallback)
 
     result = cv2.matchTemplate(screen, needle, cv2.TM_CCOEFF_NORMED)
     _, max_val, _, max_loc = cv2.minMaxLoc(result)
 
     if max_val < threshold:
         raise RuntimeError(
-            f"Görüntü ekranda bulunamadı (eslesme: {max_val:.2f} < {threshold}). "
+            f"Goruntu ekranda bulunamadi (eslesme: {max_val:.2f} < {threshold}). "
             f"Dosya: {os.path.basename(image_path)}"
         )
 
@@ -39,27 +93,39 @@ def find_on_screen(image_path, threshold=0.7):
     return max_loc[0] + w // 2, max_loc[1] + h // 2
 
 
-def match_score_on_screen(image_path) -> float:
+def match_score_on_screen(image_path, hwnd=None, use_foreground_fallback=True) -> float:
     """
-    Ekranda image_path görüntüsünün en yüksek korelasyon skorunu döndürür.
+    Returns best template match score for image_path on screen.
     """
     try:
         needle_pil = Image.open(image_path).convert("RGB")
-        needle     = cv2.cvtColor(np.array(needle_pil), cv2.COLOR_RGB2BGR)
-        screen     = _grab_screen()
-        result     = cv2.matchTemplate(screen, needle, cv2.TM_CCOEFF_NORMED)
+        needle = cv2.cvtColor(np.array(needle_pil), cv2.COLOR_RGB2BGR)
+        screen = _grab_screen(hwnd=hwnd, use_foreground_fallback=use_foreground_fallback)
+        result = cv2.matchTemplate(screen, needle, cv2.TM_CCOEFF_NORMED)
         _, max_val, _, _ = cv2.minMaxLoc(result)
         return float(max_val)
     except Exception:
         return 0.0
 
 
-def wait_for_image(image_path, timeout=60, poll_interval=1.0, threshold=0.7):
-    """Ekranda image_path görüntüsü görünene kadar bekler."""
+def wait_for_image(
+    image_path,
+    timeout=60,
+    poll_interval=1.0,
+    threshold=0.7,
+    hwnd=None,
+    use_foreground_fallback=True,
+):
+    """Waits until image_path appears on screen."""
     start = time.time()
     while time.time() - start < timeout:
         try:
-            find_on_screen(image_path, threshold=threshold)
+            find_on_screen(
+                image_path,
+                threshold=threshold,
+                hwnd=hwnd,
+                use_foreground_fallback=use_foreground_fallback,
+            )
             return
         except RuntimeError:
             time.sleep(poll_interval)
@@ -68,12 +134,24 @@ def wait_for_image(image_path, timeout=60, poll_interval=1.0, threshold=0.7):
     )
 
 
-def wait_for_image_gone(image_path, timeout=60, poll_interval=1.0, threshold=0.7):
-    """Ekrandaki image_path görüntüsü kaybolana kadar bekler."""
+def wait_for_image_gone(
+    image_path,
+    timeout=60,
+    poll_interval=1.0,
+    threshold=0.7,
+    hwnd=None,
+    use_foreground_fallback=True,
+):
+    """Waits until image_path disappears from screen."""
     start = time.time()
     while time.time() - start < timeout:
         try:
-            find_on_screen(image_path, threshold=threshold)
+            find_on_screen(
+                image_path,
+                threshold=threshold,
+                hwnd=hwnd,
+                use_foreground_fallback=use_foreground_fallback,
+            )
             time.sleep(poll_interval)
         except RuntimeError:
             return
