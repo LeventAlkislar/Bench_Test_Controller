@@ -3,8 +3,18 @@ import os
 import time
 
 import cv2
+import mss
 import numpy as np
-from PIL import ImageGrab, Image
+from PIL import Image
+
+
+def _grab_screen() -> np.ndarray:
+    """DPI-aware tam ekran görüntüsü alır (BGR)."""
+    with mss.mss() as sct:
+        monitor = sct.monitors[0]  # tum sanal masaustu
+        raw = sct.grab(monitor)
+        img = np.array(raw)
+        return cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
 
 
 def find_on_screen(image_path, threshold=0.7):
@@ -14,8 +24,7 @@ def find_on_screen(image_path, threshold=0.7):
     """
     needle_pil = Image.open(image_path).convert("RGB")
     needle     = cv2.cvtColor(np.array(needle_pil), cv2.COLOR_RGB2BGR)
-    screen_pil = ImageGrab.grab()
-    screen     = cv2.cvtColor(np.array(screen_pil), cv2.COLOR_RGB2BGR)
+    screen = _grab_screen()
 
     result = cv2.matchTemplate(screen, needle, cv2.TM_CCOEFF_NORMED)
     _, max_val, _, max_loc = cv2.minMaxLoc(result)
@@ -37,8 +46,7 @@ def match_score_on_screen(image_path) -> float:
     try:
         needle_pil = Image.open(image_path).convert("RGB")
         needle     = cv2.cvtColor(np.array(needle_pil), cv2.COLOR_RGB2BGR)
-        screen_pil = ImageGrab.grab()
-        screen     = cv2.cvtColor(np.array(screen_pil), cv2.COLOR_RGB2BGR)
+        screen     = _grab_screen()
         result     = cv2.matchTemplate(screen, needle, cv2.TM_CCOEFF_NORMED)
         _, max_val, _, _ = cv2.minMaxLoc(result)
         return float(max_val)
@@ -75,7 +83,9 @@ def wait_for_image_gone(image_path, timeout=60, poll_interval=1.0, threshold=0.7
 
 
 def _grab_region(x, y, w, h):
-    return ImageGrab.grab(bbox=(x, y, x + w, y + h))
+    with mss.mss() as sct:
+        raw = sct.grab({"left": x, "top": y, "width": w, "height": h})
+        return Image.frombytes("RGB", raw.size, raw.bgra, "raw", "BGRX")
 
 
 def _images_equal(img1, img2):
