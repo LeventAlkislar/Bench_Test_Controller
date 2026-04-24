@@ -18,6 +18,7 @@ ViewerTab
 
 import os
 import shutil
+from bisect import bisect_left
 from datetime import datetime
 from typing import Optional, List
 
@@ -69,6 +70,7 @@ _SYSTEM_COLORS = {
 }
 
 _C_MEASURE_LINE = (33, 150, 243)
+_HOVER_DISTANCE_PX = 14
 
 POLL_INTERVAL_MS = 10_000   # 10 saniye
 
@@ -87,6 +89,14 @@ class ViewerTab(QWidget):
 
         self._measure_dots : list = []
         self._measure_range_hooks: dict = {}
+        self._saved_top_view_range: Optional[dict] = None
+        self._manual_top_view_active = False
+        self._applying_top_view_state = False
+        self._top_view_tracking_connected = False
+        self._hover_hooks: dict = {}
+        self._hover_points: dict = {}
+        self._hover_labels: dict = {}
+        self._hover_state: dict = {}
         self.plot_widget_top = None
         self.plot_widget_bottom = None
 
@@ -244,6 +254,8 @@ class ViewerTab(QWidget):
 
         self.plot_widget_top.getViewBox().setMouseMode(
             pg.ViewBox.RectMode)   # sürükle = zoom rect; sağ tık = pan
+        self._ensure_top_view_tracking()
+        self._ensure_hover_tracking(self.plot_widget_top)
 
         # Legend
         self.legend = self.plot_widget_top.addLegend(offset=(10, 10))
@@ -274,6 +286,7 @@ class ViewerTab(QWidget):
         self.plot_widget_bottom.getViewBox().setMouseMode(
             pg.ViewBox.RectMode
         )
+        self._ensure_hover_tracking(self.plot_widget_bottom)
 
         # Üst grafik ile aynı eksen davranışı
         self.plot_widget_bottom.setXLink(self.plot_widget_top)
@@ -495,21 +508,37 @@ class ViewerTab(QWidget):
         if not self.plot_widget_top:
             return
 
-        preserved_top_range = None
-        if not reset_view:
-            preserved_top_range = self.plot_widget_top.getViewBox().viewRange()
+        if reset_view:
+            self._manual_top_view_active = False
+            self._saved_top_view_range = None
+        elif self._saved_top_view_range is None:
+            self._save_current_top_view_range()
 
         self.plot_widget_top.clear()
         if self.plot_widget_bottom:
             self.plot_widget_bottom.clear()
         self._marker_items.clear()
         self._measure_dots.clear()
+        self._clear_hover_data()
 
         timestamps, currents = self._read_measurement_data()
 
         if not timestamps:
             self._show_no_data_msg()
             return
+
+        self._set_hover_data(self.plot_widget_top, timestamps, currents)
+        bottom_timestamps, bottom_currents = self._build_mean_series(
+            timestamps,
+            currents,
+            group_size=5,
+        )
+        if self.plot_widget_bottom:
+            self._set_hover_data(
+                self.plot_widget_bottom,
+                bottom_timestamps,
+                bottom_currents,
+            )
 
         # Ana seri — Current (uA) -> sadece point, çizgi yok
         self.top_curve = self.plot_widget_top.plot(
@@ -527,21 +556,14 @@ class ViewerTab(QWidget):
         # ── Bottom grafik: downsample edilmiş veri ─────────────────
         if self.plot_widget_bottom:
             self.bottom_curve = self.plot_widget_bottom.plot(
-                timestamps,
-                currents,
+                bottom_timestamps,
+                bottom_currents,
                 pen=None,  # çizgi çizme
                 symbol="o",
                 symbolSize=5,
                 symbolBrush=pg.mkBrush(_C_DATA_LINE),
                 symbolPen=pg.mkPen(color=_C_DATA_LINE, width=1),
                 name="Mean Current (uA)"
-            )
-
-            # 🔥 Downsample (GUI'deki: 5x Subsample)
-            self.bottom_curve.setDownsampling(
-                ds=5,
-                auto=False,
-                method='mean'
             )
 
         # Marker çizgileri
@@ -551,14 +573,10 @@ class ViewerTab(QWidget):
         # Measure dot'larını doğru konuma yerleştir.
         # Yeni session yüklenince auto-range uygulanır; normal refresh'te ise
         # kullanıcının mevcut zoom/pan görünümü korunur.
-        top_view_box = self.plot_widget_top.getViewBox()
-        if reset_view or preserved_top_range is None:
-            top_view_box.enableAutoRange()
-            top_view_box.autoRange()
+        if reset_view or self._saved_top_view_range is None:
+            self._auto_fit_top_view()
         else:
-            top_view_box.disableAutoRange()
-            x_range, y_range = preserved_top_range
-            top_view_box.setRange(xRange=x_range, yRange=y_range, padding=0)
+            self._apply_saved_top_view_range()
         self._update_measure_dots_for_plot(self.plot_widget_top)
         if self.plot_widget_bottom:
             # Alt grafik Y eksenini ust grafikten linked olarak aliyor;
@@ -587,6 +605,25 @@ class ViewerTab(QWidget):
 
         # xlsx yoksa CSV'lerden oku (canlı mod)
         return self._read_csvs()
+
+    def _build_mean_series(self, timestamps, currents, group_size: int = 5):
+        """Alt grafik için grup ortalamalı seri üretir."""
+        if not timestamps or not currents or group_size <= 1:
+            return list(timestamps), list(currents)
+
+        mean_timestamps = []
+        mean_currents = []
+        total = min(len(timestamps), len(currents))
+
+        for start in range(0, total, group_size):
+            chunk_times = timestamps[start:start + group_size]
+            chunk_currents = currents[start:start + group_size]
+            if not chunk_times or not chunk_currents:
+                continue
+            mean_timestamps.append(sum(chunk_times) / len(chunk_times))
+            mean_currents.append(sum(chunk_currents) / len(chunk_currents))
+
+        return mean_timestamps, mean_currents
 
     def _read_xlsx(self, path: str):
         """xlsx'ten Time/Current kolonlarını okur."""
@@ -778,6 +815,65 @@ class ViewerTab(QWidget):
         vb.sigRangeChanged.connect(_on_range_changed)
         self._measure_range_hooks[plot_widget] = _on_range_changed
 
+    def _ensure_top_view_tracking(self):
+        """Üst grafik aralığını kaydeder; kullanıcı zoom/pan yaptığında manual moda geçer."""
+        if not self.plot_widget_top or self._top_view_tracking_connected:
+            return
+
+        vb = self.plot_widget_top.getViewBox()
+
+        def _on_top_range_changed(*_):
+            if self._applying_top_view_state:
+                return
+            self._save_current_top_view_range(manual=True)
+
+        vb.sigRangeChanged.connect(_on_top_range_changed)
+        self._top_view_tracking_connected = True
+
+    def _save_current_top_view_range(self, manual: bool = False):
+        """Üst grafiğin mevcut view aralığını state olarak saklar."""
+        if not self.plot_widget_top:
+            return
+
+        x_range, y_range = self.plot_widget_top.getViewBox().viewRange()
+        self._saved_top_view_range = {
+            "x": [x_range[0], x_range[1]],
+            "y": [y_range[0], y_range[1]],
+        }
+        if manual:
+            self._manual_top_view_active = True
+
+    def _apply_saved_top_view_range(self):
+        """Kayıtlı üst grafik aralığını yeniden uygular."""
+        if not self.plot_widget_top or not self._saved_top_view_range:
+            return
+
+        top_view_box = self.plot_widget_top.getViewBox()
+        self._applying_top_view_state = True
+        try:
+            top_view_box.disableAutoRange()
+            top_view_box.setRange(
+                xRange=self._saved_top_view_range["x"],
+                yRange=self._saved_top_view_range["y"],
+                padding=0,
+            )
+        finally:
+            self._applying_top_view_state = False
+
+    def _auto_fit_top_view(self):
+        """Üst grafiğe kontrollü bir kez auto-fit uygular ve sonucu saklar."""
+        if not self.plot_widget_top:
+            return
+
+        top_view_box = self.plot_widget_top.getViewBox()
+        self._applying_top_view_state = True
+        try:
+            top_view_box.enableAutoRange()
+            top_view_box.autoRange()
+        finally:
+            self._applying_top_view_state = False
+        self._save_current_top_view_range(manual=False)
+
     def _update_measure_dots_for_plot(self, plot_widget):
         """Measure noktalarini mevcut gorunur Y araligina gore konumlar."""
         if not plot_widget:
@@ -846,6 +942,7 @@ class ViewerTab(QWidget):
             self.plot_widget_top.clear()
         if self.plot_widget_bottom:
             self.plot_widget_bottom.clear()
+        self._clear_hover_data()
 
     def _show_no_data_msg(self):
         """Veri yoksa grafik alanına mesaj yazar."""
@@ -856,6 +953,170 @@ class ViewerTab(QWidget):
             color=(150, 150, 150), anchor=(0.5, 0.5))
         self.plot_widget_top.addItem(text)
         text.setPos(0, 0)
+
+    def _ensure_hover_tracking(self, plot_widget):
+        """Grafikte fare hareketini izleyip yakın noktalar için tooltip gösterir."""
+        if not plot_widget or plot_widget in self._hover_hooks:
+            return
+
+        def _on_mouse_moved(pos):
+            self._handle_plot_hover(plot_widget, pos)
+
+        proxy = pg.SignalProxy(
+            plot_widget.scene().sigMouseMoved,
+            rateLimit=60,
+            slot=_on_mouse_moved,
+        )
+        self._hover_hooks[plot_widget] = proxy
+
+    def _set_hover_data(self, plot_widget, timestamps, currents):
+        """Hover için kullanılacak veri serisini saklar."""
+        if not plot_widget:
+            return
+        self._hover_points[plot_widget] = {
+            "x": list(timestamps),
+            "y": list(currents),
+        }
+        self._hover_state[plot_widget] = {
+            "index": None,
+            "text": None,
+        }
+        self._ensure_hover_label(plot_widget)
+
+    def _clear_hover_data(self):
+        """Eski session verisine ait hover bilgisini temizler."""
+        self._hover_points.clear()
+        self._hover_state.clear()
+        for label in self._hover_labels.values():
+            if label:
+                label.hide()
+        self._hover_labels.clear()
+
+    def _ensure_hover_label(self, plot_widget):
+        """Grafik viewport'u üzerinde opak hover etiketini oluşturur."""
+        if not plot_widget or plot_widget in self._hover_labels:
+            return
+
+        label = QLabel(plot_widget.viewport())
+        label.setStyleSheet(
+            "background-color: rgb(255, 255, 225);"
+            "color: rgb(0, 0, 0);"
+            "border: 1px solid rgb(120, 120, 120);"
+            "padding: 4px 6px;"
+        )
+        label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        label.setWordWrap(False)
+        label.adjustSize()
+        label.hide()
+        label.raise_()
+        self._hover_labels[plot_widget] = label
+
+    def _handle_plot_hover(self, plot_widget, evt):
+        """Fare konumuna en yakın veri noktasını bulup sabit etiketi günceller."""
+        if not plot_widget:
+            return
+
+        pos = evt[0] if isinstance(evt, tuple) else evt
+        view_box = plot_widget.getViewBox()
+        plot_rect = view_box.sceneBoundingRect()
+
+        if not plot_rect.contains(pos):
+            self._hide_hover_label(plot_widget)
+            return
+
+        point_data = self._hover_points.get(plot_widget)
+        if not point_data or not point_data["x"]:
+            self._hide_hover_label(plot_widget)
+            return
+
+        nearest_index = self._find_nearest_point_index(plot_widget, pos, point_data)
+        if nearest_index is None:
+            self._hide_hover_label(plot_widget)
+            return
+
+        x_value = point_data["x"][nearest_index]
+        y_value = point_data["y"][nearest_index]
+        ts_text = datetime.fromtimestamp(x_value).strftime("%Y-%m-%d %H:%M:%S")
+        label_text = f"Time: {ts_text}\nCurrent: {y_value:.3f} uA"
+        self._show_hover_label(plot_widget, nearest_index, label_text, pos)
+
+    def _show_hover_label(self, plot_widget, point_index: int,
+                          label_text: str, scene_pos):
+        """Ayni noktadaysa etiketi yeniden çizmeden görünür tutar."""
+        label = self._hover_labels.get(plot_widget)
+        state = self._hover_state.get(plot_widget)
+        if not label or state is None:
+            return
+
+        state_changed = state["index"] != point_index or state["text"] != label_text
+        if state_changed:
+            label.setText(label_text.replace("\n", "<br>"))
+            label.adjustSize()
+            state["index"] = point_index
+            state["text"] = label_text
+
+        label_x, label_y = self._calc_hover_label_pos(plot_widget, scene_pos, label)
+        label.move(label_x, label_y)
+        if not label.isVisible():
+            label.show()
+
+    def _hide_hover_label(self, plot_widget):
+        """Hover etiketi görünmeyecekse gizler."""
+        label = self._hover_labels.get(plot_widget)
+        state = self._hover_state.get(plot_widget)
+        if label:
+            label.hide()
+        if state is not None:
+            state["index"] = None
+            state["text"] = None
+
+    def _calc_hover_label_pos(self, plot_widget, scene_pos, label):
+        """Hover etiketini viewport sınırları içinde konumlar."""
+        viewport = plot_widget.viewport()
+        cursor_pos = plot_widget.mapFromScene(scene_pos)
+
+        offset_x = 14
+        offset_y = -14
+        x_pos = cursor_pos.x() + offset_x
+        y_pos = cursor_pos.y() + offset_y - label.height()
+
+        max_x = max(0, viewport.width() - label.width())
+        max_y = max(0, viewport.height() - label.height())
+        x_pos = max(0, min(x_pos, max_x))
+        y_pos = max(0, min(y_pos, max_y))
+        return x_pos, y_pos
+
+    def _find_nearest_point_index(self, plot_widget, scene_pos, point_data):
+        """Piksel eşiği içindeki en yakın veri noktasının indeksini döner."""
+        x_values = point_data["x"]
+        y_values = point_data["y"]
+        if not x_values:
+            return None
+
+        mouse_point = plot_widget.getViewBox().mapSceneToView(scene_pos)
+        insert_at = bisect_left(x_values, mouse_point.x())
+
+        best_index = None
+        best_distance = None
+        candidate_start = max(0, insert_at - 3)
+        candidate_end = min(len(x_values), insert_at + 3)
+
+        for idx in range(candidate_start, candidate_end):
+            scene_point = plot_widget.getViewBox().mapViewToScene(
+                pg.Point(x_values[idx], y_values[idx])
+            )
+            distance = (scene_point.x() - scene_pos.x()) ** 2 + (
+                scene_point.y() - scene_pos.y()
+            ) ** 2
+            if best_distance is None or distance < best_distance:
+                best_distance = distance
+                best_index = idx
+
+        if best_distance is None:
+            return None
+        if best_distance > _HOVER_DISTANCE_PX ** 2:
+            return None
+        return best_index
 
     def _on_session_state_changed(self, state: str):
         """MainWindow state_changed bağlantısı için."""
@@ -877,6 +1138,8 @@ class ViewerTab(QWidget):
         self._marker_items.clear()
         self._measure_dots.clear()
         self._measure_range_hooks.clear()
+        self._saved_top_view_range = None
+        self._manual_top_view_active = False
 
         self._poll_timer.stop()
         self.live_lbl.setText("")
