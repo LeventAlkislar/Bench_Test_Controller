@@ -58,6 +58,7 @@ class MeasurementSetupTab(QWidget):
 
         self._connect_signals()
         self._build_ui()
+        self._sync_restored_state()
 
     # ── UI ────────────────────────────────────────────────────────
 
@@ -111,6 +112,26 @@ class MeasurementSetupTab(QWidget):
         # recipe_tab referansı varsa recipe dosyasını izle
         if self.recipe_tab and hasattr(self.recipe_tab, "scr_changed"):
             pass  # gerekirse ileride eklenir
+
+    def _sync_restored_state(self):
+        """Acilista constructor'larda yuklenen alanlari tekrar senkronize eder."""
+        part_number = self.package_panel.part_number_edit.text().strip()
+        if part_number:
+            self.method_panel.set_sensor_sample(sensor="", sample=part_number)
+
+        self.package_panel._update_csv_path()
+        self.package_panel._refresh_status()
+
+        tp_path = self.method_panel.get_current_path()
+        if tp_path:
+            self.script_panel.set_method_path(tp_path)
+            self.package_panel.set_tp_ref(tp_path)
+
+        recipe_path = ""
+        if self.recipe_tab:
+            recipe_path = getattr(self.recipe_tab, "_current_recipe_path", "") or ""
+        if recipe_path:
+            self.package_panel.set_recipe_ref(recipe_path)
 
     # ── RecipeTab arayüzü ─────────────────────────────────────────
 

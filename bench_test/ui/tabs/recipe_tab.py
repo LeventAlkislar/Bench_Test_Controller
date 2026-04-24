@@ -543,9 +543,17 @@ class RecipeTab(QWidget):
         if recipe_path and os.path.isfile(recipe_path):
             self._load_recipe_from_path(recipe_path)
 
+        current_session = self.package_tab.get_session() if self.package_tab else None
         is_active = session.status == SessionStatus.IN_PROGRESS
+        if (
+            not is_active
+            and current_session is not None
+            and current_session.session_dir == session.session_dir
+            and self.package_tab.sm.state == "running"
+        ):
+            is_active = True
         self.start_btn.setEnabled(is_active)
-        self.pause_btn.setEnabled(False)
+        self.pause_btn.setEnabled(is_active)
         self.stop_btn.setEnabled(is_active)
         if not is_active:
             self.status_lbl.setText(f"[{session.status.value}] {session.part_number}")

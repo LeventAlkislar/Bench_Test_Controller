@@ -98,6 +98,8 @@ class SessionStateMachine(QObject):
         if self._state != READY:
             self._log(f"⚠ start() geçersiz state'de çağrıldı: {self._state}")
             return
+        if self._session:
+            self._session.set_status(SessionStatus.IN_PROGRESS)
         self._timer.start()
         self._transition(RUNNING)
 
