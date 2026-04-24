@@ -61,6 +61,10 @@ class MainWindow(QMainWindow):
         tabs.addTab(self.viewer_tab, "Graphics Viewer")
 
         self.recipe_tab.package_tab = self.setup_tab
+        if self.recipe_tab._current_recipe_path:
+            self.setup_tab.package_panel.set_recipe_ref(
+                self.recipe_tab._current_recipe_path
+            )
 
         for tab in [
             self.conn_tab,

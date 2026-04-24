@@ -23,7 +23,14 @@ from bench_test.dropview.controller import DropViewController
 from bench_test.measurement.session import SessionStatus
 from bench_test.recipe.models import Recipe, RecipeStep, StepLoop
 from bench_test.recipe.runner import RecipeRunner, DROPVIEW_ACTIONS, DROPVIEW_LABELS, DROPVIEW_ZERO_DURATION_OK
-from bench_test.utils.paths import open_file, save_file, get_last, remember
+from bench_test.utils.paths import (
+    get_value,
+    open_file,
+    save_file,
+    get_last,
+    remember,
+    remember_value,
+)
 from bench_test.ui.widgets import _btn, _lbl
 
 _DV_COMBO_LABELS = [
@@ -127,6 +134,7 @@ class RecipeTab(QWidget):
         self._main_window = None
 
         self._build()
+        self._restore_last_recipe()
 
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(100)
@@ -481,6 +489,7 @@ class RecipeTab(QWidget):
                     "step_loops": [asdict(l) for l in self.step_loops]}
             with open(path, "w") as f: json.dump(data, f, indent=2)
             self._current_recipe_path = path                  # ← YENİ
+            remember_value("last_recipe_file", path)
             if self.package_tab:
                 self.package_tab.package_panel.set_recipe_ref(path)  # ← güncellendi
             self.log_signal.emit(f"Recipe saved: {path}")
@@ -505,11 +514,18 @@ class RecipeTab(QWidget):
             self._update_loops_display();
             self._update_total_time()
             self._current_recipe_path = path
+            remember_value("last_recipe_file", path)
             if self.package_tab:
                 self.package_tab.package_panel.set_recipe_ref(path)
             self.log_signal.emit(f"Recipe loaded: {path}")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load: {e}")
+
+    def _restore_last_recipe(self):
+        path = get_value("last_recipe_file", "")
+        if not path or not os.path.isfile(path):
+            return
+        self._load_recipe_from_path(path)
 
     def render_session(self, session) -> None:
         """

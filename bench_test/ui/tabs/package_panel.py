@@ -28,7 +28,13 @@ from bench_test.measurement.packager import Packager, PackagerError
 from bench_test.measurement.aggregator import Aggregator
 from bench_test.measurement.log_writer import LogWriter
 from bench_test.measurement.state_machine import SessionStateMachine, AGGREGATING, IDLE
-from bench_test.utils.paths import get_last, remember, open_dir
+from bench_test.utils.paths import (
+    get_last,
+    get_value,
+    remember,
+    remember_value,
+    open_dir,
+)
 from bench_test.ui.widgets import _btn
 
 _COLOR_NONE    = "#888888"
@@ -54,6 +60,7 @@ class PackagePanel(QWidget):
         self.sm.log_signal.connect(self._log)
         self.sm.state_changed.connect(self._on_state_changed)
         self._build_ui()
+        self._restore_last_part_number()
 
     def _close_log_writer(self):
         """Açık session.log dosya handle'ını güvenli biçimde kapat."""
@@ -154,9 +161,15 @@ class PackagePanel(QWidget):
 
     def _on_part_number_changed(self, text: str):
         part = text.strip()
+        remember_value("last_part_number", part)
         self.part_number_changed.emit(part)   # → MethodEditorPanel
         self._update_csv_path()
         self._refresh_status()
+
+    def _restore_last_part_number(self):
+        part_number = get_value("last_part_number", "").strip()
+        if part_number:
+            self.part_number_edit.setText(part_number)
 
     def _update_csv_path(self):
         """CSV yolunu hesaplar ve ScriptParamsPanel'e bildirir."""

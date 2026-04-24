@@ -27,7 +27,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import pyqtSignal, Qt
 
-from bench_test.utils.paths import open_file
+from bench_test.utils.paths import get_value, remember_value, open_file
 from bench_test.ui.widgets import _btn
 
 
@@ -38,6 +38,7 @@ class MethodEditorPanel(QWidget):
         super().__init__(parent)
         self._current_path = ""
         self._build_ui()
+        self._restore_last_method()
 
     def _build_ui(self):
         outer = QVBoxLayout(self)
@@ -259,6 +260,7 @@ class MethodEditorPanel(QWidget):
                 self.multi_current_range_lbl.setText("-")
 
             self._current_path = path
+            remember_value("last_method_file", path)
             self.file_lbl.setText(os.path.basename(path))
             self.file_lbl.setStyleSheet("color: #4CAF50; font-size: 11px;")
             self.file_lbl.setToolTip(path)
@@ -266,6 +268,19 @@ class MethodEditorPanel(QWidget):
 
         except Exception as e:
             QMessageBox.critical(self, "Hata", f".tp yuklenemedi:\n{e}")
+
+    def _restore_last_method(self):
+        path = get_value("last_method_file", "")
+        if not path:
+            return
+
+        if os.path.isfile(path):
+            self.load_from_path(path)
+            return
+
+        self.file_lbl.setText(f"Bulunamadi: {os.path.basename(path)}")
+        self.file_lbl.setStyleSheet("color: #F44336; font-size: 11px;")
+        self.file_lbl.setToolTip(path)
 
     def get_tp_data(self) -> dict:
         return {
