@@ -29,6 +29,15 @@ from bench_test.dropview.vision import (
     wait_for_image, wait_for_image_gone,
     _grab_region, _images_equal,
 )
+from bench_test.dropview.window_actions import (
+    safe_click,
+    safe_find_on_screen,
+    safe_hotkey,
+    safe_press,
+    safe_sequence,
+    safe_wait_for_image,
+    safe_wait_for_image_gone,
+)
 from bench_test.utils.paths import BASE_DIR, ASSETS_DIR, get_last, remember, get_value, remember_value
 
 # pyautogui ayarları
@@ -557,11 +566,14 @@ def _connect_manual(dv_hwnd, target_com: str, log_fn=None) -> str:
         _log(f"│  UYARI: Desteklenmeyen COM portu: {target_com}")
         return "timeout"
 
-    _focus_window(dv_hwnd, restore_if_iconic=False, sleep_after=SLEEP_AFTER_FOCUS)
-    pyautogui.hotkey("alt", "d")
-    time.sleep(SLEEP_AFTER_FOCUS)
-    pyautogui.press("m")
-    time.sleep(SLEEP_AFTER_FOCUS)
+    safe_sequence(
+        dv_hwnd,
+        [
+            {"type": "hotkey", "keys": ("alt", "d"), "post_delay": SLEEP_AFTER_FOCUS},
+            {"type": "press", "key": "m", "post_delay": SLEEP_AFTER_FOCUS},
+        ],
+        log_fn=log_fn,
+    )
 
     try:
         manual_hwnd = find_window(MANUAL_CONNECTION_WINDOW, timeout=10)
@@ -776,12 +788,17 @@ def step_connect_dropsens(target_com: str = None, log_fn=None):
 
     attempts_str = ", ".join(f"{p}={s}" for p, s in manual_attempts)
     _log(f"│  Manuel bağlantılar başarısız ({attempts_str}), Ctrl+C ile tekrar deneniyor...")
-    _focus_window(dv_hwnd)
-    win32api.keybd_event(win32con.VK_CONTROL, 0, 0, 0)
-    win32api.keybd_event(ord('C'), 0, 0, 0)
-    win32api.keybd_event(ord('C'), 0, win32con.KEYEVENTF_KEYUP, 0)
-    win32api.keybd_event(win32con.VK_CONTROL, 0, win32con.KEYEVENTF_KEYUP, 0)
-    time.sleep(SLEEP_AFTER_COMMAND)
+    safe_sequence(
+        dv_hwnd,
+        [
+            {
+                "type": "hotkey",
+                "keys": ("ctrl", "c"),
+                "post_delay": SLEEP_AFTER_COMMAND,
+            },
+        ],
+        log_fn=log_fn,
+    )
 
     fallback_result = _wait_for_connection_result(timeout=TIMEOUT_CONNECT, log_fn=log_fn)
     if fallback_result != "connected":
@@ -807,12 +824,17 @@ def step_disconnect_dropsens():
         return
 
     dv_hwnd = find_window(DROPVIEW_WINDOW_NAME, timeout=10)
-    _focus_window(dv_hwnd)
-    win32api.keybd_event(win32con.VK_CONTROL, 0, 0, 0)
-    win32api.keybd_event(ord('D'), 0, 0, 0)
-    win32api.keybd_event(ord('D'), 0, win32con.KEYEVENTF_KEYUP, 0)
-    win32api.keybd_event(win32con.VK_CONTROL, 0, win32con.KEYEVENTF_KEYUP, 0)
-    time.sleep(SLEEP_AFTER_COMMAND)
+    safe_sequence(
+        dv_hwnd,
+        [
+            {
+                "type": "hotkey",
+                "keys": ("ctrl", "d"),
+                "post_delay": SLEEP_AFTER_COMMAND,
+            },
+        ],
+        log_fn=None,
+    )
     wait_until_disconnected(timeout=TIMEOUT_CLOSE_WINDOW)
 
 def step_stop_measure(log_fn=None):
@@ -824,41 +846,39 @@ def step_stop_measure(log_fn=None):
     ms_hwnd = find_window(MULTISCRIPT_WINDOW, timeout=5)
     _focus_window(ms_hwnd, restore_if_iconic=False, sleep_after=SLEEP_AFTER_FOCUS)
 
-    sx, sy = find_on_screen(
+    sx, sy = safe_find_on_screen(
+        ms_hwnd,
         _IMG["stop_btn"],
         threshold=THRESHOLD_HIGH,
-        hwnd=ms_hwnd,
-        use_foreground_fallback=False,
+        log_fn=log_fn,
     )
-    pyautogui.click(sx, sy)
-    time.sleep(SLEEP_AFTER_COMMAND)
+    safe_click(ms_hwnd, sx, sy, log_fn=log_fn, post_delay=SLEEP_AFTER_COMMAND)
 
-    wait_for_image_gone(
+    safe_wait_for_image_gone(
+        ms_hwnd,
         _IMG["yellow_dot_selected"],
         timeout=TIMEOUT_STOP_MEASURE,
         poll_interval=POLL_INTERVAL_SLOW,
         threshold=THRESHOLD_HIGH,
-        hwnd=ms_hwnd,
-        use_foreground_fallback=False,
+        log_fn=log_fn,
     )
 
-    wait_for_image(
+    safe_wait_for_image(
+        ms_hwnd,
         _IMG["green_dot_selected"],
         timeout=15,
         poll_interval=POLL_INTERVAL_NORMAL,
         threshold=THRESHOLD_HIGH,
-        hwnd=ms_hwnd,
-        use_foreground_fallback=False,
+        log_fn=log_fn,
     )
 
-    ex, ey = find_on_screen(
+    ex, ey = safe_find_on_screen(
+        ms_hwnd,
         _IMG["exit_btn"],
         threshold=THRESHOLD_HIGH,
-        hwnd=ms_hwnd,
-        use_foreground_fallback=False,
+        log_fn=log_fn,
     )
-    pyautogui.click(ex, ey)
-    time.sleep(SLEEP_AFTER_FOCUS)
+    safe_click(ms_hwnd, ex, ey, log_fn=log_fn, post_delay=SLEEP_AFTER_FOCUS)
 
     wait_for_window_close(MULTISCRIPT_WINDOW, timeout=TIMEOUT_CLOSE_WINDOW)
     if log_fn:
@@ -894,12 +914,7 @@ def _force_close_multiscript(log_fn=None) -> bool:
 
     # 2) Alt+F4
     try:
-        _focus_window(ms_hwnd)
-        win32api.keybd_event(win32con.VK_MENU, 0, 0, 0)
-        win32api.keybd_event(win32con.VK_F4, 0, 0, 0)
-        win32api.keybd_event(win32con.VK_F4, 0, win32con.KEYEVENTF_KEYUP, 0)
-        win32api.keybd_event(win32con.VK_MENU, 0, win32con.KEYEVENTF_KEYUP, 0)
-        time.sleep(SLEEP_AFTER_COMMAND)
+        safe_sequence(ms_hwnd, [{"type": "hotkey", "keys": ("alt", "f4"), "post_delay": SLEEP_AFTER_COMMAND}], log_fn=log_fn)
         wait_for_window_close(MULTISCRIPT_WINDOW, timeout=3, poll_interval=0.2)
         _log("│  Multiscript Editor Alt+F4 ile kapandı.")
         return True
@@ -940,12 +955,17 @@ def step_exit_dropview(config: dict, log_fn=None):
             _log(f"│  {closed} dialog kapatıldı.")
 
         if _is_dropview_connected():
-            _focus_window(dv_hwnd)
-            win32api.keybd_event(win32con.VK_CONTROL, 0, 0, 0)
-            win32api.keybd_event(ord('D'), 0, 0, 0)
-            win32api.keybd_event(ord('D'), 0, win32con.KEYEVENTF_KEYUP, 0)
-            win32api.keybd_event(win32con.VK_CONTROL, 0, win32con.KEYEVENTF_KEYUP, 0)
-            time.sleep(SLEEP_AFTER_COMMAND)
+            safe_sequence(
+                dv_hwnd,
+                [
+                    {
+                        "type": "hotkey",
+                        "keys": ("ctrl", "d"),
+                        "post_delay": SLEEP_AFTER_COMMAND,
+                    },
+                ],
+                log_fn=_log,
+            )
             close_owned_dialogs(dv_hwnd, log_fn=_log)
             wait_until_disconnected(timeout=TIMEOUT_CLOSE_WINDOW)
             _log("│  DropSens bağlantısı kesildi.")
@@ -954,12 +974,17 @@ def step_exit_dropview(config: dict, log_fn=None):
 
         # Alt+F4
         dv_hwnd = find_window(DROPVIEW_WINDOW_NAME, timeout=5)
-        _focus_window(dv_hwnd)
-        win32api.keybd_event(win32con.VK_MENU, 0, 0, 0)
-        win32api.keybd_event(win32con.VK_F4, 0, 0, 0)
-        win32api.keybd_event(win32con.VK_F4, 0, win32con.KEYEVENTF_KEYUP, 0)
-        win32api.keybd_event(win32con.VK_MENU, 0, win32con.KEYEVENTF_KEYUP, 0)
-        time.sleep(SLEEP_AFTER_COMMAND)
+        safe_sequence(
+            dv_hwnd,
+            [
+                {
+                    "type": "hotkey",
+                    "keys": ("alt", "f4"),
+                    "post_delay": SLEEP_AFTER_COMMAND,
+                },
+            ],
+            log_fn=_log,
+        )
 
         # Alt+F4 sonrası çıkabilecek dialog'ları kapat
         close_owned_dialogs(dv_hwnd, log_fn=_log)
@@ -988,12 +1013,7 @@ def step_exit_dropview(config: dict, log_fn=None):
             _log("│  Kill öncesi Ctrl+D gönderiliyor...")
             try:
                 dv_hwnd_kill = find_window(DROPVIEW_WINDOW_NAME, timeout=3)
-                _focus_window(dv_hwnd_kill)
-                win32api.keybd_event(win32con.VK_CONTROL, 0, 0, 0)
-                win32api.keybd_event(ord('D'), 0, 0, 0)
-                win32api.keybd_event(ord('D'), 0, win32con.KEYEVENTF_KEYUP, 0)
-                win32api.keybd_event(win32con.VK_CONTROL, 0, win32con.KEYEVENTF_KEYUP, 0)
-                time.sleep(SLEEP_AFTER_COMMAND + 0.5)
+                safe_sequence(dv_hwnd_kill, [{"type": "hotkey", "keys": ("ctrl", "d"), "post_delay": SLEEP_AFTER_COMMAND + 0.5}], log_fn=_log)
                 _log("│  Ctrl+D gönderildi.")
             except Exception as e:
                 _log(f"│  UYARI: Kill öncesi Ctrl+D başarısız: {e}")
@@ -1133,13 +1153,7 @@ def step_start_dropview(config: dict, log_fn=None):
     elif result in ("no_device_connected", "potentiostat_not_found", "unknown_error", "timeout"):
         attempts_str = ", ".join(f"{port}={status}" for port, status in manual_attempts)
         _log(f"│  Manuel bağlantılar başarısız ({attempts_str}), Ctrl+C ile tekrar deneniyor...")
-        _focus_window(dv_hwnd)
-        win32api.keybd_event(win32con.VK_CONTROL, 0, 0, 0)
-        win32api.keybd_event(ord('C'), 0, 0, 0)
-        win32api.keybd_event(ord('C'), 0, win32con.KEYEVENTF_KEYUP, 0)
-        win32api.keybd_event(win32con.VK_CONTROL, 0, win32con.KEYEVENTF_KEYUP, 0)
-        time.sleep(SLEEP_AFTER_COMMAND)
-
+        safe_sequence(dv_hwnd, [{"type": "hotkey", "keys": ("ctrl", "c"), "post_delay": SLEEP_AFTER_COMMAND}], log_fn=log_fn)
         fallback_result = _wait_for_connection_result(timeout=TIMEOUT_CONNECT, log_fn=log_fn)
         if fallback_result != "connected":
             raise RuntimeError(
@@ -1195,40 +1209,44 @@ def step_start_measure(config: dict, log_fn=None):
             f"Start Measure hatası: DropView'e ait açık dialog var: {titles}"
         )
 
-    wait_for_image(
+    safe_wait_for_image(
+        dv_hwnd,
         _IMG["scripts_menu"],
         timeout=TIMEOUT_WINDOW_OPEN,
         poll_interval=POLL_INTERVAL_SLOW,
-        hwnd=dv_hwnd,
-        use_foreground_fallback=False,
+        threshold=THRESHOLD_HIGH,
+        log_fn=log_fn,
     )
     time.sleep(SLEEP_AFTER_FOCUS)
-    pyautogui.hotkey("alt", "s")
-    time.sleep(SLEEP_AFTER_FOCUS)
-    pyautogui.press("s")
-    time.sleep(1.2)
+    safe_sequence(
+        dv_hwnd,
+        [
+            {"type": "hotkey", "keys": ("alt", "s"), "post_delay": SLEEP_AFTER_FOCUS},
+            {"type": "press", "key": "s", "post_delay": 1.2},
+        ],
+        log_fn=log_fn,
+    )
 
     ms_hwnd = find_window(MULTISCRIPT_WINDOW, timeout=15)
     if log_fn:
         log_fn(f"│  Multiscript Editor açıldı (hwnd={ms_hwnd}).")
     time.sleep(SLEEP_AFTER_FOCUS)
 
-    lbl_x, lbl_y = find_on_screen(
+    lbl_x, lbl_y = safe_find_on_screen(
+        ms_hwnd,
         _IMG["loaded_scripts"],
         threshold=THRESHOLD_HIGH,
-        hwnd=ms_hwnd,
-        use_foreground_fallback=False,
+        log_fn=log_fn,
     )
     listbox_x = lbl_x
     listbox_y = lbl_y + 100
 
-    lx, ly = find_on_screen(
+    lx, ly = safe_find_on_screen(
+        ms_hwnd,
         _IMG["load_btn"],
-        hwnd=ms_hwnd,
-        use_foreground_fallback=False,
+        log_fn=log_fn,
     )
-    pyautogui.click(lx, ly)
-    time.sleep(SLEEP_AFTER_FOCUS)
+    safe_click(ms_hwnd, lx, ly, log_fn=log_fn, post_delay=SLEEP_AFTER_FOCUS)
 
     script_path = config["script_path"]
     open_hwnd = find_window("Open", timeout=10)
@@ -1250,41 +1268,42 @@ def step_start_measure(config: dict, log_fn=None):
 
     fn_x = dlg_x + int(dlg_w * 0.45)
     fn_y = dlg_y + int(dlg_h * 0.70)
-    pyautogui.click(fn_x, fn_y)
-    time.sleep(0.4)
+    safe_click(open_hwnd, fn_x, fn_y, log_fn=log_fn, post_delay=0.4)
 
-    pyautogui.hotkey("ctrl", "a")
-    time.sleep(0.1)
-    pyautogui.hotkey("ctrl", "v")
-    time.sleep(SLEEP_AFTER_CLICK)
-    pyautogui.press("enter")
-    time.sleep(0.8)
+    safe_sequence(
+        open_hwnd,
+        [
+            {"type": "hotkey", "keys": ("ctrl", "a"), "post_delay": 0.1},
+            {"type": "hotkey", "keys": ("ctrl", "v"), "post_delay": SLEEP_AFTER_CLICK},
+            {"type": "press", "key": "enter", "post_delay": 0.8},
+        ],
+        log_fn=log_fn,
+    )
 
     ms_hwnd = find_window(MULTISCRIPT_WINDOW, timeout=10)
     _focus_window(ms_hwnd, restore_if_iconic=False, sleep_after=SLEEP_AFTER_FOCUS)
     before_count = _count_and_clear_scripts(ms_hwnd, listbox_x, listbox_y)
     _delete_scripts_above(ms_hwnd, listbox_x, listbox_y, before_count)
 
-    rx, ry = find_on_screen(
+    rx, ry = safe_find_on_screen(
+        ms_hwnd,
         _IMG["run_btn"],
         threshold=THRESHOLD_MID,
-        hwnd=ms_hwnd,
-        use_foreground_fallback=False,
+        log_fn=log_fn,
     )
-    pyautogui.click(rx, ry)
-    time.sleep(SLEEP_AFTER_COMMAND)
+    safe_click(ms_hwnd, rx, ry, log_fn=log_fn, post_delay=SLEEP_AFTER_COMMAND)
 
     # "Some curves have not been saved" diyalogu Run sonrası gecikmeli açılabiliyor.
     _dismiss_warning_if_present(WARNING_UNSAVED, wait=3.0)
 
     try:
-        wait_for_image(
+        safe_wait_for_image(
+            ms_hwnd,
             _IMG["yellow_dot_selected"],
             timeout=30,
             poll_interval=POLL_INTERVAL_SLOW,
             threshold=THRESHOLD_HIGH,
-            hwnd=ms_hwnd,
-            use_foreground_fallback=False,
+            log_fn=log_fn,
         )
     except Exception:
         if log_fn:
