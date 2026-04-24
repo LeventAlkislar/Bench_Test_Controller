@@ -54,8 +54,8 @@ def _get_monitor_for_hwnd(sct, hwnd) -> dict | None:
         return None
 
 
-def _grab_screen(hwnd=None, use_foreground_fallback=True) -> np.ndarray:
-    """Grabs a DPI-aware monitor screenshot as BGR."""
+def _grab_screen(hwnd=None, use_foreground_fallback=True) -> tuple[np.ndarray, int, int]:
+    """Grabs a DPI-aware monitor screenshot and returns (BGR image, left, top)."""
     with mss.mss() as sct:
         monitor = _get_monitor_for_hwnd(sct, hwnd)
         if monitor is None and use_foreground_fallback:
@@ -69,7 +69,8 @@ def _grab_screen(hwnd=None, use_foreground_fallback=True) -> np.ndarray:
             monitor = _get_active_monitor(sct)
 
         raw = sct.grab(monitor)
-        return cv2.cvtColor(np.array(raw), cv2.COLOR_BGRA2BGR)
+        screen = cv2.cvtColor(np.array(raw), cv2.COLOR_BGRA2BGR)
+        return screen, int(monitor["left"]), int(monitor["top"])
 
 
 def find_on_screen(image_path, threshold=0.7, hwnd=None, use_foreground_fallback=True):
@@ -78,7 +79,9 @@ def find_on_screen(image_path, threshold=0.7, hwnd=None, use_foreground_fallback
     """
     needle_pil = Image.open(image_path).convert("RGB")
     needle = cv2.cvtColor(np.array(needle_pil), cv2.COLOR_RGB2BGR)
-    screen = _grab_screen(hwnd=hwnd, use_foreground_fallback=use_foreground_fallback)
+    screen, offset_x, offset_y = _grab_screen(
+        hwnd=hwnd, use_foreground_fallback=use_foreground_fallback
+    )
 
     result = cv2.matchTemplate(screen, needle, cv2.TM_CCOEFF_NORMED)
     _, max_val, _, max_loc = cv2.minMaxLoc(result)
@@ -90,7 +93,7 @@ def find_on_screen(image_path, threshold=0.7, hwnd=None, use_foreground_fallback
         )
 
     h, w = needle.shape[:2]
-    return max_loc[0] + w // 2, max_loc[1] + h // 2
+    return offset_x + max_loc[0] + w // 2, offset_y + max_loc[1] + h // 2
 
 
 def match_score_on_screen(image_path, hwnd=None, use_foreground_fallback=True) -> float:
@@ -100,7 +103,7 @@ def match_score_on_screen(image_path, hwnd=None, use_foreground_fallback=True) -
     try:
         needle_pil = Image.open(image_path).convert("RGB")
         needle = cv2.cvtColor(np.array(needle_pil), cv2.COLOR_RGB2BGR)
-        screen = _grab_screen(hwnd=hwnd, use_foreground_fallback=use_foreground_fallback)
+        screen, _, _ = _grab_screen(hwnd=hwnd, use_foreground_fallback=use_foreground_fallback)
         result = cv2.matchTemplate(screen, needle, cv2.TM_CCOEFF_NORMED)
         _, max_val, _, _ = cv2.minMaxLoc(result)
         return float(max_val)
