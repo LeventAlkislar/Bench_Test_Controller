@@ -22,7 +22,7 @@ from typing import Literal, Optional
 
 from bench_test.measurement.session import MeasurementSession
 
-DisplayMode = Literal["empty", "active", "archived"]
+DisplayMode = Literal["empty", "active", "archived", "history"]
 
 
 @dataclass
@@ -66,6 +66,10 @@ class SessionContext:
     @property
     def is_archived(self) -> bool:
         return self.display_mode == "archived"
+
+    @property
+    def is_history(self) -> bool:
+        return self.display_mode == "history"
 
     @property
     def is_empty(self) -> bool:

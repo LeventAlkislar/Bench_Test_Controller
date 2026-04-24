@@ -69,6 +69,36 @@ class LogTab(QWidget):
         sb = self.log.verticalScrollBar()
         sb.setValue(0)
 
+    def render_history(self, sessions) -> None:
+        """Bir part altindaki tum session loglarini toplu gosterir."""
+        import os
+
+        self.log.clear()
+        if not sessions:
+            self.log.append("# History log bulunamadi.")
+            return
+
+        part_number = sessions[0].part_number
+        self.log.append(
+            f"# --- HISTORY | {part_number} | {len(sessions)} session ---"
+        )
+
+        for session in sessions:
+            log_path = os.path.join(session.logs_dir, "session.log")
+            self.log.append(
+                f"# --- {session.status.value.upper()} | {session.session_dir} ---"
+            )
+            if not os.path.isfile(log_path):
+                self.log.append(f"# Log dosyasi bulunamadi: {log_path}")
+                continue
+
+            with open(log_path, encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    self.log.append(line.rstrip())
+
+        sb = self.log.verticalScrollBar()
+        sb.setValue(0)
+
     def restore_from_session(self, session_dir):
         """Geriye donuk uyumluluk - render_session'a yonlendir."""
         from bench_test.measurement.session import MeasurementSession

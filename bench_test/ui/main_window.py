@@ -89,13 +89,18 @@ class MainWindow(QMainWindow):
 
         self.dv_ctrl.start_polling()
 
-    def switch_display(self, session, mode: str):
+    def switch_display(self, session, mode: str, history_sessions=None):
         """
         Tum sekmeleri verilen session'a gore yeniden render eder.
-        mode: "empty" | "active" | "archived"
+        mode: "empty" | "active" | "archived" | "history"
         """
         self._ctx.switch(session, mode)
         self._clear_all_tabs()
+
+        if mode == "history":
+            self.viewer_tab.render_history(history_sessions or [])
+            self.log_tab.render_history(history_sessions or [])
+            return
 
         if session is not None:
             self.viewer_tab.render_session(session, live=(mode == "active"))

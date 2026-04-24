@@ -84,6 +84,7 @@ class ViewerTab(QWidget):
         super().__init__()
         self.package_tab   = package_tab
         self._session      : Optional[MeasurementSession] = None
+        self._history_sessions: List[MeasurementSession] = []
         self._parse_result : Optional[ParseResult]        = None
         self._marker_items : list = []   # grafikteki marker öğeleri
 
@@ -365,6 +366,30 @@ class ViewerTab(QWidget):
             w = w.parent() if hasattr(w, "parent") else None
         return None
 
+    def _find_history_sessions(self, part_dir: str) -> List[MeasurementSession]:
+        """Part klasoru altindaki session klasorlerini yukler."""
+        sessions: List[MeasurementSession] = []
+        try:
+            entries = sorted(os.scandir(part_dir), key=lambda e: e.name)
+        except OSError:
+            return sessions
+
+        for entry in entries:
+            if not entry.is_dir():
+                continue
+            json_path = os.path.join(entry.path, "session.json")
+            if not os.path.isfile(json_path):
+                continue
+            try:
+                sessions.append(MeasurementSession.load(entry.path))
+            except Exception as exc:
+                self.log_signal.emit(
+                    f"Viewer history session atlandi: {entry.path} | {exc}"
+                )
+
+        sessions.sort(key=lambda item: item.created_at)
+        return sessions
+
     def _browse_session(self):
         """Geçmiş session dizinini kullanıcı seçer."""
         path = open_dir(self, "Session Dizini Seç", "browse_session")
@@ -373,6 +398,21 @@ class ViewerTab(QWidget):
 
         # session.json var mı?
         json_path = os.path.join(path, "session.json")
+        if not os.path.isfile(json_path):
+            history_sessions = self._find_history_sessions(path)
+            if not history_sessions:
+                QMessageBox.warning(self, "Viewer",
+                    "SeÃ§ilen dizin geÃ§erli bir session veya part klasÃ¶rÃ¼ deÄŸil.\n"
+                    "LÃ¼tfen session.json iÃ§eren bir session dizini veya altÄ±nda "
+                    "session klasÃ¶rleri bulunan bir part dizini seÃ§in.")
+                return
+
+            mw = self._get_main_window()
+            if mw:
+                mw.switch_display(None, "history", history_sessions=history_sessions)
+                return
+            self.render_history(history_sessions)
+            return
         if not os.path.isfile(json_path):
             QMessageBox.warning(self, "Viewer",
                 "Seçilen dizinde session.json bulunamadı.\n"
@@ -392,6 +432,7 @@ class ViewerTab(QWidget):
     def _load_session(self, session: MeasurementSession):
         """Session nesnesini set eder ve grafiği yeniler."""
         self._session = session
+        self._history_sessions = []
 
         # Canlı mod: sadece IN_PROGRESS iken
         if session.status == SessionStatus.IN_PROGRESS:
@@ -403,6 +444,15 @@ class ViewerTab(QWidget):
             self.live_lbl.setText("")
             self.delete_btn.setEnabled(True)
 
+        self._refresh(reset_view=True)
+
+    def render_history(self, sessions: List[MeasurementSession]) -> None:
+        """Bir part altindaki tum session verilerini yukler."""
+        self._session = None
+        self._history_sessions = list(sessions)
+        self._poll_timer.stop()
+        self.live_lbl.setText("")
+        self.delete_btn.setEnabled(False)
         self._refresh(reset_view=True)
 
     # ── Yenileme ──────────────────────────────────────────────────
@@ -419,7 +469,7 @@ class ViewerTab(QWidget):
 
     def _refresh(self, reset_view: bool = False):
         """Veriyi yeniden okur ve grafiği günceller."""
-        if not self._session:
+        if not self._session and not self._history_sessions:
             return
 
         # Session durumunu diskten yenile (başka process güncelliyor olabilir)
@@ -431,12 +481,42 @@ class ViewerTab(QWidget):
         except Exception:
             pass
 
+        if self._history_sessions:
+            refreshed_sessions = []
+            for session in self._history_sessions:
+                try:
+                    json_path = os.path.join(session.session_dir, "session.json")
+                    if os.path.isfile(json_path):
+                        refreshed_sessions.append(
+                            MeasurementSession.load(session.session_dir)
+                        )
+                except Exception:
+                    continue
+            if refreshed_sessions:
+                self._history_sessions = refreshed_sessions
+
         self._update_meta()
         self._load_log()
         self._plot_data(reset_view=reset_view)
 
     def _update_meta(self):
         """Session meta bilgilerini annotation paneline yazar."""
+        if self._history_sessions:
+            first = self._history_sessions[0]
+            created_start = first.created_at.strftime("%Y-%m-%d %H:%M:%S")
+            created_end = self._history_sessions[-1].created_at.strftime("%Y-%m-%d %H:%M:%S")
+            self.meta_lbl.setText(
+                f"<b>Part:</b> {first.part_number}<br>"
+                f"<b>Mode:</b> History<br>"
+                f"<b>Sessions:</b> {len(self._history_sessions)}<br>"
+                f"<b>Range:</b> {created_start} - {created_end}<br>"
+                f"<b>Dir:</b> <small>{os.path.dirname(first.session_dir)}</small>"
+            )
+            self.session_lbl.setText(
+                f"{first.part_number}  [history: {len(self._history_sessions)}]"
+            )
+            return
+
         s = self._session
         created = s.created_at.strftime("%Y-%m-%d %H:%M:%S")
         status_color = {
@@ -460,15 +540,16 @@ class ViewerTab(QWidget):
 
     def _load_log(self):
         """Log dosyasını parse eder, annotation panellerini doldurur."""
-        log_path = self._find_log()
-        if not log_path:
+        log_paths = self._find_logs()
+        if not log_paths:
             self._parse_result = None
             self.notes_edit.setPlainText("Log dosyası bulunamadı.")
             self.sys_edit.setPlainText("")
             return
 
         parser = LogParser()
-        self._parse_result = parser.parse(log_path)
+        parse_results = [parser.parse(path) for path in log_paths]
+        self._parse_result = self._merge_parse_results(parse_results)
 
         # Manuel notlar
         if self._parse_result.manual_notes:
@@ -502,6 +583,32 @@ class ViewerTab(QWidget):
         candidate = os.path.join(self._session.logs_dir, "session.log")
         return candidate if os.path.isfile(candidate) else None
 
+    def _find_logs(self) -> List[str]:
+        """Tek session veya history modu icin mevcut log dosyalarini bulur."""
+        if self._history_sessions:
+            log_paths = []
+            for session in self._history_sessions:
+                candidate = os.path.join(session.logs_dir, "session.log")
+                if os.path.isfile(candidate):
+                    log_paths.append(candidate)
+            return log_paths
+
+        log_path = self._find_log()
+        return [log_path] if log_path else []
+
+    def _merge_parse_results(self, results: List[ParseResult]) -> ParseResult:
+        """Birden fazla parse sonucunu tek zaman ekseninde birlestirir."""
+        merged = ParseResult()
+        for result in results:
+            merged.step_events.extend(result.step_events)
+            merged.system_events.extend(result.system_events)
+            merged.manual_notes.extend(result.manual_notes)
+
+        merged.step_events.sort(key=lambda item: item.timestamp)
+        merged.system_events.sort(key=lambda item: item.timestamp)
+        merged.manual_notes.sort(key=lambda item: item.timestamp)
+        return merged
+
     # ── Grafik çizimi ─────────────────────────────────────────────
 
     def _plot_data(self, reset_view: bool = False):
@@ -521,18 +628,40 @@ class ViewerTab(QWidget):
         self._measure_dots.clear()
         self._clear_hover_data()
 
-        timestamps, currents = self._read_measurement_data()
-
-        if not timestamps:
+        series_data = self._read_measurement_series()
+        if not series_data:
             self._show_no_data_msg()
             return
 
+        timestamps = []
+        currents = []
+        bottom_timestamps = []
+        bottom_currents = []
+
+        for _, series_timestamps, series_currents in series_data:
+            timestamps.extend(series_timestamps)
+            currents.extend(series_currents)
+            mean_ts, mean_cur = self._build_mean_series(
+                series_timestamps,
+                series_currents,
+                group_size=5,
+            )
+            bottom_timestamps.extend(mean_ts)
+            bottom_currents.extend(mean_cur)
+
+        if timestamps:
+            sorted_pairs = sorted(zip(timestamps, currents), key=lambda item: item[0])
+            timestamps = [item[0] for item in sorted_pairs]
+            currents = [item[1] for item in sorted_pairs]
+        if bottom_timestamps:
+            bottom_pairs = sorted(
+                zip(bottom_timestamps, bottom_currents),
+                key=lambda item: item[0],
+            )
+            bottom_timestamps = [item[0] for item in bottom_pairs]
+            bottom_currents = [item[1] for item in bottom_pairs]
+
         self._set_hover_data(self.plot_widget_top, timestamps, currents)
-        bottom_timestamps, bottom_currents = self._build_mean_series(
-            timestamps,
-            currents,
-            group_size=5,
-        )
         if self.plot_widget_bottom:
             self._set_hover_data(
                 self.plot_widget_bottom,
@@ -541,6 +670,18 @@ class ViewerTab(QWidget):
             )
 
         # Ana seri — Current (uA) -> sadece point, çizgi yok
+        for label, series_timestamps, series_currents in series_data:
+            self.plot_widget_top.plot(
+                series_timestamps,
+                series_currents,
+                pen=None,
+                symbol="o",
+                symbolSize=5,
+                symbolBrush=pg.mkBrush(_C_DATA_LINE),
+                symbolPen=pg.mkPen(color=_C_DATA_LINE, width=1),
+                name=None,
+            )
+
         self.top_curve = self.plot_widget_top.plot(
             timestamps,
             currents,
@@ -549,12 +690,28 @@ class ViewerTab(QWidget):
             symbolSize=5,
             symbolBrush=pg.mkBrush(_C_DATA_LINE),
             symbolPen=pg.mkPen(color=_C_DATA_LINE, width=1),
-            name="Current (uA)"
+            name=None
         )
 
 
         # ── Bottom grafik: downsample edilmiş veri ─────────────────
         if self.plot_widget_bottom:
+            for label, series_timestamps, series_currents in series_data:
+                mean_ts, mean_cur = self._build_mean_series(
+                    series_timestamps,
+                    series_currents,
+                    group_size=5,
+                )
+                self.plot_widget_bottom.plot(
+                    mean_ts,
+                    mean_cur,
+                    pen=None,
+                    symbol="o",
+                    symbolSize=5,
+                    symbolBrush=pg.mkBrush(_C_DATA_LINE),
+                    symbolPen=pg.mkPen(color=_C_DATA_LINE, width=1),
+                    name=None,
+                )
             self.bottom_curve = self.plot_widget_bottom.plot(
                 bottom_timestamps,
                 bottom_currents,
@@ -563,7 +720,7 @@ class ViewerTab(QWidget):
                 symbolSize=5,
                 symbolBrush=pg.mkBrush(_C_DATA_LINE),
                 symbolPen=pg.mkPen(color=_C_DATA_LINE, width=1),
-                name="Mean Current (uA)"
+                name=None
             )
 
         # Marker çizgileri
@@ -585,18 +742,41 @@ class ViewerTab(QWidget):
             self.plot_widget_bottom.getViewBox().disableAutoRange(axis="y")
             self._update_measure_dots_for_plot(self.plot_widget_bottom)
 
+    def _read_measurement_series(self):
+        """Tek session veya history modu icin olcum serilerini okur."""
+        if self._history_sessions:
+            all_series = []
+            for session in self._history_sessions:
+                timestamps, currents = self._read_session_measurement_data(session)
+                if not timestamps:
+                    self.log_signal.emit(
+                        f"Viewer history xlsx atlandi: {session.session_dir}"
+                    )
+                    continue
+                label = session.created_at.strftime("%Y-%m-%d %H:%M:%S")
+                all_series.append((label, timestamps, currents))
+            return all_series
+
+        timestamps, currents = self._read_session_measurement_data(self._session)
+        if not timestamps:
+            return []
+        return [("Current (uA)", timestamps, currents)]
+
     def _read_measurement_data(self):
         """
         xlsx varsa xlsx'ten, yoksa CSV'lerden okur.
         (timestamp_unix_list, current_list) döner.
         """
+        return self._read_session_measurement_data(self._session)
+
+    def _read_session_measurement_data(self, session: MeasurementSession):
         # xlsx
-        xlsx_path = self._session.get_file_path("xlsx")
+        xlsx_path = session.get_file_path("xlsx")
         if not xlsx_path:
             # Oluşturulmuş xlsx'i measurements/ altında ara
             candidate = os.path.join(
-                self._session.measurements_dir,
-                f"{self._session.part_number}.xlsx")
+                session.measurements_dir,
+                f"{session.part_number}.xlsx")
             if os.path.isfile(candidate):
                 xlsx_path = candidate
 
@@ -604,7 +784,7 @@ class ViewerTab(QWidget):
             return self._read_xlsx(xlsx_path)
 
         # xlsx yoksa CSV'lerden oku (canlı mod)
-        return self._read_csvs()
+        return self._read_csvs(session)
 
     def _build_mean_series(self, timestamps, currents, group_size: int = 5):
         """Alt grafik için grup ortalamalı seri üretir."""
@@ -645,12 +825,12 @@ class ViewerTab(QWidget):
             self.log_signal.emit(f"Viewer xlsx okuma hatası: {e}")
             return [], []
 
-    def _read_csvs(self):
+    def _read_csvs(self, session: MeasurementSession):
         """CSV dosyalarından veri okur (canlı mod fallback)."""
         import glob
         from datetime import timedelta
 
-        mdir = self._session.measurements_dir
+        mdir = session.measurements_dir
         files = sorted(glob.glob(os.path.join(mdir, "*.csv")),
                        key=lambda p: os.path.getctime(p))
         if not files:
@@ -932,6 +1112,7 @@ class ViewerTab(QWidget):
 
         # UI temizle
         self._session = None
+        self._history_sessions = []
         self._parse_result = None
         self.session_lbl.setText("Oturum silindi")
         self.meta_lbl.setText("—")
