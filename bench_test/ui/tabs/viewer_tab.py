@@ -69,6 +69,18 @@ _SYSTEM_COLORS = {
     "resumed" : _C_PAUSED,
 }
 
+_PORT_COLORS = {
+    1: (255, 100, 100, 40),
+    2: (100, 200, 100, 40),
+    3: (100, 150, 255, 40),
+    4: (255, 200, 80, 40),
+    5: (200, 100, 255, 40),
+    6: (80, 220, 220, 40),
+    7: (255, 140, 60, 40),
+    8: (180, 180, 180, 40),
+}
+_PORT_COLOR_DEFAULT = (160, 160, 160, 30)
+
 _C_MEASURE_LINE = (33, 150, 243)
 _HOVER_DISTANCE_PX = 14
 
@@ -866,6 +878,51 @@ class ViewerTab(QWidget):
 
         return timestamps, currents
 
+    def _draw_glucose_regions(self, data_timestamps: list):
+        """Port A step geÃ§iÅŸleri arasÄ±ndaki bÃ¶lgeleri porta gÃ¶re renklendirir."""
+        if not self._parse_result or not data_timestamps:
+            return
+
+        t_max = max(data_timestamps)
+        offset = self._get_offset_sec()
+
+        # Sadece port_a iÃ§eren step event'leri zamana gÃ¶re sÄ±rala
+        port_events = sorted(
+            [ev for ev in self._parse_result.step_events
+             if ev.port_a is not None
+             and getattr(ev, "marker_kind", "step") != "measure"],
+            key=lambda ev: ev.timestamp,
+        )
+
+        if not port_events:
+            return
+
+        for i, ev in enumerate(port_events):
+            t_start = ev.timestamp.timestamp() + offset
+            t_end = (port_events[i + 1].timestamp.timestamp() + offset
+                     if i + 1 < len(port_events)
+                     else t_max)
+
+            if t_end <= t_start:
+                continue
+
+            rgba = _PORT_COLORS.get(ev.port_a, _PORT_COLOR_DEFAULT)
+            brush = pg.mkBrush(*rgba)
+
+            for pw in (self.plot_widget_top, self.plot_widget_bottom):
+                if not pw:
+                    continue
+                region = pg.LinearRegionItem(
+                    values=(t_start, t_end),
+                    orientation="vertical",
+                    brush=brush,
+                    movable=False,
+                    pen=pg.mkPen(None),
+                )
+                region.setZValue(-10)
+                pw.addItem(region)
+                self._marker_items.append(region)
+
     def _draw_markers(self, data_timestamps: list):
         """Step ve sistem marker çizgilerini grafiğe ekler."""
         if not data_timestamps:
@@ -873,6 +930,7 @@ class ViewerTab(QWidget):
 
         t_min = min(data_timestamps)-120
         t_max = max(data_timestamps)
+        self._draw_glucose_regions(data_timestamps)
 
         # Step marker'ları
         offset = self._get_offset_sec()
