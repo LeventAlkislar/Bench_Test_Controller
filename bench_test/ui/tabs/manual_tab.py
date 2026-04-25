@@ -70,8 +70,14 @@ class ManualControlTab(QWidget):
     def _build_valve_a(self):
         ga = QGroupBox("Valve A: SV-01 Multiport Valve (8-Port Selector)")
         fla = QVBoxLayout(ga)
+        top_row = QHBoxLayout()
+        top_row.setSpacing(12)
+        left_col = QVBoxLayout()
+        left_col.setSpacing(6)
+        right_col = QVBoxLayout()
+        right_col.setSpacing(6)
 
-        # Bağlantı ayarları
+        # ── Sol: Bağlantı ayarları ────────────────────────────
         row_a = QHBoxLayout()
         row_a.addWidget(QLabel("COM Port:"))
         self.port_a = QComboBox(); self.port_a.setMinimumWidth(100)
@@ -88,7 +94,7 @@ class ManualControlTab(QWidget):
         self.addr_a.setMaximumWidth(40)
         row_a.addWidget(self.addr_a)
         row_a.addStretch()
-        fla.addLayout(row_a)
+        left_col.addLayout(row_a)
 
         btn_conn_a = QHBoxLayout()
         self.conn_a_btn = _btn("Connect A",    self._connect_a,    "#4CAF50")
@@ -102,44 +108,15 @@ class ManualControlTab(QWidget):
         btn_conn_a.addWidget(self.test_a_btn)
         btn_conn_a.addWidget(self.status_a)
         btn_conn_a.addStretch()
-        fla.addLayout(btn_conn_a)
+        left_col.addLayout(btn_conn_a)
 
-        fla.addWidget(self._separator())
+        half_line = QFrame()
+        half_line.setFrameShape(QFrame.Shape.HLine)
+        half_line.setStyleSheet("color: #444;")
+        half_line.setMaximumWidth(320)
+        left_col.addWidget(half_line)
 
-        # Port butonları
-        from PyQt6.QtWidgets import QGridLayout
-        grid = QGridLayout()
-        self.port_btns = []
-        for i in range(1, 9):
-            b = QPushButton(f"Port {i}")
-            b.setMinimumSize(80, 40)
-            b.clicked.connect(lambda checked, p=i: self._switch_port(p))
-            grid.addWidget(b, (i - 1) // 4, (i - 1) % 4)
-            self.port_btns.append(b)
-        fla.addLayout(grid)
-
-        cur_port_row = QHBoxLayout()
-        cur_port_row.addWidget(QLabel("Current Port:"))
-        self.cur_port = QLabel("Unknown")
-        self.cur_port.setFont(QFont("Segoe UI", 14, QFont.Weight.Bold))
-        self.cur_port.setStyleSheet("color:#2196F3;")
-        cur_port_row.addWidget(self.cur_port)
-        cur_port_row.addStretch()
-        fla.addLayout(cur_port_row)
-
-        ctrl_a_row = QHBoxLayout()
-        ctrl_a_row.addWidget(_btn("Reset A", self._reset_a, "#FF9800"))
-        ctrl_a_row.addWidget(_btn("Stop A",  self._stop_a,  "#F44336"))
-        ctrl_a_row.addWidget(_btn("Query A", self._query_a, "#607D8B"))
-        ctrl_a_row.addStretch()
-        fla.addLayout(ctrl_a_row)
-
-        self.status_a_lbl = QLabel("Ready")
-        fla.addWidget(self.status_a_lbl)
-
-        fla.addWidget(self._separator())
-
-        # Hız kontrolü
+        # ── Sol: Hız kontrolü ─────────────────────────────────
         sr = QHBoxLayout()
         sr.addWidget(QLabel("Speed (5-350 rpm):"))
         self.speed_spin = QSpinBox()
@@ -148,14 +125,14 @@ class ManualControlTab(QWidget):
         self.speed_spin.setFixedWidth(80)
         sr.addWidget(self.speed_spin)
         sr.addStretch()
-        fla.addLayout(sr)
+        left_col.addLayout(sr)
 
         pr = QHBoxLayout()
         pr.addWidget(QLabel("Presets:"))
         for v, label in [(50, "Slow"), (150, "Medium"), (250, "Fast"), (350, "Max")]:
             pr.addWidget(_btn(f"{label} ({v})", lambda checked, s=v: self.speed_spin.setValue(s)))
         pr.addStretch()
-        fla.addLayout(pr)
+        left_col.addLayout(pr)
 
         sb = QHBoxLayout()
         self.set_spd_btn  = _btn("Set Temporary",  self._set_speed_dynamic,   "#FF9800")
@@ -170,8 +147,49 @@ class ManualControlTab(QWidget):
         sb.addWidget(self.qry_spd_btn)
         sb.addWidget(self.speed_lbl)
         sb.addStretch()
-        fla.addLayout(sb)
-        fla.addWidget(_lbl("Not: 'Temporary' cihaz kapanınca sıfırlanır. 'Permanent' yeniden başlatma gerektirir.", color="#888"))
+        left_col.addLayout(sb)
+        left_col.addWidget(_lbl("Not: 'Temporary' cihaz kapanınca sıfırlanır. 'Permanent' yeniden başlatma gerektirir.", color="#888"))
+        left_col.addStretch()
+
+        # ── Sağ: Port butonları ───────────────────────────────
+        from PyQt6.QtWidgets import QGridLayout
+        grid = QGridLayout()
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(6)
+        grid.setVerticalSpacing(6)
+        self.port_btns = []
+        for i in range(1, 9):
+            b = QPushButton(f"Port {i}")
+            b.setMinimumSize(68, 34)
+            b.clicked.connect(lambda checked, p=i: self._switch_port(p))
+            grid.addWidget(b, (i - 1) // 4, (i - 1) % 4)
+            self.port_btns.append(b)
+        right_col.addWidget(QLabel("Port Selection:"))
+        right_col.addLayout(grid)
+
+        cur_port_row = QHBoxLayout()
+        cur_port_row.addWidget(QLabel("Current Port:"))
+        self.cur_port = QLabel("Unknown")
+        self.cur_port.setFont(QFont("Segoe UI", 14, QFont.Weight.Bold))
+        self.cur_port.setStyleSheet("color:#2196F3;")
+        cur_port_row.addWidget(self.cur_port)
+        cur_port_row.addStretch()
+        right_col.addLayout(cur_port_row)
+
+        ctrl_a_row = QHBoxLayout()
+        ctrl_a_row.addWidget(_btn("Reset A", self._reset_a, "#FF9800"))
+        ctrl_a_row.addWidget(_btn("Stop A",  self._stop_a,  "#F44336"))
+        ctrl_a_row.addWidget(_btn("Query A", self._query_a, "#607D8B"))
+        ctrl_a_row.addStretch()
+        right_col.addLayout(ctrl_a_row)
+
+        self.status_a_lbl = QLabel("Ready")
+        right_col.addWidget(self.status_a_lbl)
+        right_col.addStretch()
+
+        top_row.addLayout(left_col, 3)
+        top_row.addLayout(right_col, 2)
+        fla.addLayout(top_row)
 
         return ga
 
@@ -180,8 +198,14 @@ class ManualControlTab(QWidget):
     def _build_valve_b(self):
         gb = QGroupBox("Valve B: SY-07B Injector Valve (6-Port, 2-State)")
         flb = QVBoxLayout(gb)
+        top_row = QHBoxLayout()
+        top_row.setSpacing(12)
+        left_col = QVBoxLayout()
+        left_col.setSpacing(6)
+        right_col = QVBoxLayout()
+        right_col.setSpacing(6)
 
-        # Bağlantı ayarları
+        # ── Sol: Bağlantı ayarları ────────────────────────────
         row_b = QHBoxLayout()
         row_b.addWidget(QLabel("COM Port:"))
         self.port_b = QComboBox(); self.port_b.setMinimumWidth(100)
@@ -198,7 +222,7 @@ class ManualControlTab(QWidget):
         self.addr_b.setMaximumWidth(40)
         row_b.addWidget(self.addr_b)
         row_b.addStretch()
-        flb.addLayout(row_b)
+        left_col.addLayout(row_b)
 
         btn_conn_b = QHBoxLayout()
         self.conn_b_btn = _btn("Connect B",    self._connect_b,    "#4CAF50")
@@ -212,12 +236,12 @@ class ManualControlTab(QWidget):
         btn_conn_b.addWidget(self.test_b_btn)
         btn_conn_b.addWidget(self.status_b)
         btn_conn_b.addStretch()
-        flb.addLayout(btn_conn_b)
-        flb.addWidget(_lbl("States: 1=Load (1-6, 2-3, 4-5) | 2=Inject (1-2, 3-4, 5-6)", color="#888"))
+        left_col.addLayout(btn_conn_b)
+        left_col.addStretch()
 
-        flb.addWidget(self._separator())
+        # ── Sağ: Durum kontrolü ───────────────────────────────
+        right_col.addWidget(_lbl("States: 1=Load (1-6, 2-3, 4-5) | 2=Inject (1-2, 3-4, 5-6)", color="#888"))
 
-        # Durum kontrolü
         sb_row = QHBoxLayout()
         self.load_btn   = QPushButton("Load\n(1-6, 2-3, 4-5)")
         self.inject_btn = QPushButton("Inject\n(1-2, 3-4, 5-6)")
@@ -228,7 +252,7 @@ class ManualControlTab(QWidget):
         sb_row.addWidget(self.load_btn)
         sb_row.addWidget(self.inject_btn)
         sb_row.addStretch()
-        flb.addLayout(sb_row)
+        right_col.addLayout(sb_row)
 
         sr = QHBoxLayout()
         sr.addWidget(QLabel("Current State:"))
@@ -237,17 +261,22 @@ class ManualControlTab(QWidget):
         self.cur_state.setStyleSheet("color:#9C27B0;")
         sr.addWidget(self.cur_state)
         sr.addStretch()
-        flb.addLayout(sr)
+        right_col.addLayout(sr)
 
         ctrl_b_row = QHBoxLayout()
         ctrl_b_row.addWidget(_btn("Reset B", self._reset_b, "#FF9800"))
         ctrl_b_row.addWidget(_btn("Stop B",  self._stop_b,  "#F44336"))
         ctrl_b_row.addWidget(_btn("Query B", self._query_b, "#607D8B"))
         ctrl_b_row.addStretch()
-        flb.addLayout(ctrl_b_row)
+        right_col.addLayout(ctrl_b_row)
 
         self.status_b_lbl = QLabel("Ready")
-        flb.addWidget(self.status_b_lbl)
+        right_col.addWidget(self.status_b_lbl)
+        right_col.addStretch()
+
+        top_row.addLayout(left_col, 3)
+        top_row.addLayout(right_col, 2)
+        flb.addLayout(top_row)
 
         return gb
 
