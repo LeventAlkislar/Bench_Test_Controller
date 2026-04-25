@@ -997,10 +997,18 @@ class ViewerTab(QWidget):
             labelOpts={
                 "position": 0.97,
                 "color": color,
-                "fill": _C_BG,
-                "border": pg.mkPen(color=_C_BG, width=1),
+#                "fill": _C_BG,
+#                "border": pg.mkPen(color=_C_BG, width=1),
+                "fill": (255, 255, 255, 0),
+                "border": pg.mkPen(None),
                 "movable": False,
             })
+
+        font = QFont()
+        font.setPointSize(10)  # daha büyük
+        font.setBold(True)  # bold
+        line_top.label.setFont(font)
+
         self.plot_widget_top.addItem(line_top)
         self._marker_items.append(line_top)
 
@@ -1011,10 +1019,16 @@ class ViewerTab(QWidget):
                 labelOpts={
                     "position": 0.97,
                     "color": color,
-                    "fill": _C_BG,
-                    "border": pg.mkPen(color=_C_BG, width=1),
+                    "fill": (255, 255, 255, 0),
+                    "border": pg.mkPen(None),
                     "movable": False,
                 })
+
+            font = QFont()
+            font.setPointSize(10)  # daha büyük
+            font.setBold(True)  # bold
+            line_bottom.label.setFont(font)
+
             self.plot_widget_bottom.addItem(line_bottom)
             self._marker_items.append(line_bottom)
 
@@ -1124,7 +1138,7 @@ class ViewerTab(QWidget):
                 item["dot"].setData([item["x"]], [y_pos])
 
     def _step_label(self, ev: StepEvent) -> str:
-        """Step marker için kısa etiket: 'S3 50.0 mg/dL Load'"""
+        """Step marker için kısa etiket: '50.0 mg/dL' veya 'P3'"""
         parts = []
         if ev.port_a:
             glucose_map = get_value("port_glucose", {})
@@ -1133,11 +1147,9 @@ class ViewerTab(QWidget):
                 parts.append(f"{mg} mg/dL")
             else:
                 parts.append(f"P{ev.port_a}")
-        if ev.valve_b:
-            parts.append(ev.valve_b)
         if ev.loop_info:
             parts.append(ev.loop_info)
-        return " ".join(parts) if parts else "STEP"
+        return " ".join(parts) if parts else ""
 
     def _delete_session(self):
         """Yüklü session dizinini kullanıcı onayı alarak siler."""
