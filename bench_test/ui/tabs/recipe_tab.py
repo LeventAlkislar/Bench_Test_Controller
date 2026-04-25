@@ -132,6 +132,8 @@ class RecipeTab(QWidget):
 
         self._simulation_mode = False
         self._main_window = None
+        self._running_loop_text = "-"
+        self._elapsed_time_text = "-"
 
         self._build()
         self._restore_last_recipe()
@@ -329,9 +331,15 @@ class RecipeTab(QWidget):
         self.table.setRowCount(len(self.recipe_steps))
         for i, step in enumerate(self.recipe_steps):
             loop_info = self._get_loop_info(i + 1)
+            glucose_map = get_value("port_glucose", {})
+            if step.port > 0:
+                mg = glucose_map.get(str(step.port))
+                port_display = f"{mg} mg/dL" if mg is not None and mg >= 0 else f"Port {step.port}"
+            else:
+                port_display = "-"
             vals = [
                 str(i + 1),
-                f"Port {step.port}" if step.port > 0 else "-",
+                port_display,
                 VALVE_B_LABELS.get(step.valve_b_state, "-"),
                 str(step.duration_minutes),
                 step.description,
@@ -456,16 +464,29 @@ class RecipeTab(QWidget):
                 return f"Loop x{loop.loop_count}"
         return ""
 
+    @staticmethod
+    def _format_elapsed_text(total_min: float) -> str:
+        d = int(total_min // (24 * 60))
+        h = int(total_min % (24 * 60) // 60)
+        m = int(total_min % 60)
+        return f"{d}d {h}h {m}m"
+
+    def _reset_run_metrics(self):
+        self._running_loop_text = "-"
+        self._elapsed_time_text = "-"
+        self._update_loops_display()
+        self._update_total_time()
+
     def _update_loops_display(self):
         if not self.step_loops:
-            self.loops_lbl.setText("No step loops defined"); return
+            self.loops_lbl.setText(f"No step loops defined | Running Loop: {self._running_loop_text}"); return
         parts = [f"Steps {l.start_step}-{l.end_step} x {l.loop_count}"
                  for l in sorted(self.step_loops, key=lambda x: x.start_step)]
-        self.loops_lbl.setText("  |  ".join(parts))
+        self.loops_lbl.setText(f"{'  |  '.join(parts)} | Running Loop: {self._running_loop_text}")
 
     def _update_total_time(self):
         if not self.recipe_steps:
-            self.total_time_lbl.setText("Total Time: 0 min (0d 0h 0m)"); return
+            self.total_time_lbl.setText(f"Total Time: 0 min (0d 0h 0m) | Elapsed: {self._elapsed_time_text}"); return
         times = [s.duration_minutes for s in self.recipe_steps]
         processed = set()
         total = 0
@@ -476,8 +497,9 @@ class RecipeTab(QWidget):
         for i, t in enumerate(times):
             if i not in processed: total += t
         total *= self.loop_spin.value()
-        d = int(total // (24 * 60)); h = int(total % (24 * 60) // 60); m = int(total % 60)
-        self.total_time_lbl.setText(f"Total Time: {total:.1f} min ({d}d {h}h {m}m)")
+        self.total_time_lbl.setText(
+            f"Total Time: {total:.1f} min ({self._format_elapsed_text(total)}) | Elapsed: {self._elapsed_time_text}"
+        )
 
     def _save_recipe(self):
         if not self.recipe_steps:
@@ -628,6 +650,7 @@ class RecipeTab(QWidget):
                 self.ctrl_a, self.ctrl_b, recipe, self.status_queue, self.stop_event,
                 self.dv_ctrl, session_scr_path=session_scr,
                 simulation_mode=self._simulation_mode)
+            self._reset_run_metrics()
             self.recipe_runner.start()
             if self.package_tab:
                 self.package_tab.sm.start()
@@ -655,6 +678,7 @@ class RecipeTab(QWidget):
 
     def _stop_recipe(self):
         self.stop_event.set()
+        self._reset_run_metrics()
         self.start_btn.setEnabled(True); self.pause_btn.setEnabled(False); self.pause_btn.setText("Pause")
         self.stop_btn.setEnabled(False); self.status_lbl.setText("Stopped")
         self.progress.setValue(0); self.progress_lbl.setText("0%")
@@ -673,6 +697,12 @@ class RecipeTab(QWidget):
                     rem   = data.get("remaining_minutes", 0)
                     total = data.get("total_minutes", 1)
                     pct   = max(0, min(100, ((total - rem) / total) * 100)) if total > 0 else 100
+                    loop_index = data.get("loop_index", 0)
+                    loop_count = data.get("loop_count", 0)
+                    self._running_loop_text = f"{loop_index} / {loop_count}" if loop_count > 0 else "-"
+                    self._elapsed_time_text = self._format_elapsed_text(data.get("overall_elapsed_min", 0))
+                    self._update_loops_display()
+                    self._update_total_time()
                     parts = []
                     if data.get("port", 0) > 0:        parts.append(f"A:Port {data['port']}")
                     if data.get("valve_b_state", 0) > 0:
@@ -685,6 +715,7 @@ class RecipeTab(QWidget):
                 elif msg_type in ("switching", "running", "log"):
                     self.status_lbl.setText(str(data)); self.log_signal.emit(str(data))
                 elif msg_type == "completed":
+                    self._reset_run_metrics()
                     self.status_lbl.setText(f"COMPLETED: {data}")
                     self.progress.setValue(100); self.progress_lbl.setText("100%")
                     self.start_btn.setEnabled(True); self.pause_btn.setEnabled(False)
@@ -694,6 +725,7 @@ class RecipeTab(QWidget):
                     QMessageBox.information(self, "Recipe Complete", str(data))
                     self.log_signal.emit(str(data))
                 elif msg_type == "finished":
+                    self._reset_run_metrics()
                     self.status_lbl.setText(f"TAMAMLANDI: {data}")
                     self.progress.setValue(100)
                     self.progress_lbl.setText("100%")
@@ -708,10 +740,12 @@ class RecipeTab(QWidget):
                     QMessageBox.information(self, "Recipe Complete", str(data))
                     self.log_signal.emit(str(data))
                 elif msg_type == "stopped":
+                    self._reset_run_metrics()
                     self.status_lbl.setText(f"Stopped: {data}"); self.log_signal.emit(str(data))
                     if self.package_tab:
                         self.package_tab.on_recipe_aborted()
                 elif msg_type == "error":
+                    self._reset_run_metrics()
                     self.status_lbl.setText(f"ERROR: {data}")
                     self.start_btn.setEnabled(True); self.pause_btn.setEnabled(False)
                     self.stop_btn.setEnabled(False)
@@ -741,8 +775,7 @@ class RecipeTab(QWidget):
         self.name_edit.setText("New Recipe")
         self.loop_spin.setValue(1)
         self._refresh_table()
-        self._update_loops_display()
-        self._update_total_time()
+        self._reset_run_metrics()
 
         self.status_lbl.setText("—")
         self.progress.setValue(0)

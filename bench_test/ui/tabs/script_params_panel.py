@@ -12,7 +12,7 @@ Sinyaller:
 """
 
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QFormLayout,
+    QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
     QLineEdit, QSpinBox, QDoubleSpinBox,
     QGroupBox, QLabel
 )
@@ -20,6 +20,7 @@ from PyQt6.QtCore import pyqtSignal, Qt
 
 from bench_test.config import DEFAULT_REPEAT_COUNT, DEFAULT_WAIT_DURATION_SEC
 from bench_test.ui.widgets import _btn
+from bench_test.utils.paths import get_value, remember_value
 
 
 class ScriptParamsPanel(QWidget):
@@ -82,6 +83,60 @@ class ScriptParamsPanel(QWidget):
 
         layout.addWidget(auto_grp)
         layout.addWidget(viewer_grp)
+
+        # ── Deney koşulları ───────────────────────────────────
+        exp_grp = QGroupBox("Deney Koşulları")
+        exp_form = QFormLayout(exp_grp)
+
+        self.flow_spin = QDoubleSpinBox()
+        self.flow_spin.setRange(0.0, 100.0)
+        self.flow_spin.setDecimals(1)
+        self.flow_spin.setSuffix(" mL/dk")
+        self.flow_spin.setValue(get_value("flow_rate_ml_min", 0.0))
+        self.flow_spin.valueChanged.connect(
+            lambda v: remember_value("flow_rate_ml_min", v)
+        )
+        exp_form.addRow("Akış Hızı:", self.flow_spin)
+
+        self.temp_spin = QDoubleSpinBox()
+        self.temp_spin.setRange(-20.0, 100.0)
+        self.temp_spin.setDecimals(1)
+        self.temp_spin.setSuffix(" °C")
+        self.temp_spin.setValue(get_value("temperature_c", 25.0))
+        self.temp_spin.valueChanged.connect(
+            lambda v: remember_value("temperature_c", v)
+        )
+        exp_form.addRow("Sıcaklık:", self.temp_spin)
+
+        layout.addWidget(exp_grp)
+
+        # ── Port - Glikoz Eşlemesi ────────────────────────────
+        glucose_grp = QGroupBox("Port – Glikoz Eşlemesi")
+        glucose_outer = QHBoxLayout(glucose_grp)
+        glucose_outer.setSpacing(10)
+
+        saved_glucose = get_value("port_glucose", {})
+        self._glucose_spins: dict[int, QDoubleSpinBox] = {}
+        for col_ports in [(1, 2, 3, 4), (5, 6, 7, 8)]:
+            col_form = QFormLayout()
+            for port in col_ports:
+                saved_val = saved_glucose.get(str(port))
+                spin = QDoubleSpinBox()
+                spin.setRange(-1.0, 1000.0)
+                spin.setDecimals(0)
+                spin.setSpecialValueText("—")
+                spin.setMinimum(-1.0)
+                spin.setSuffix(" mg/dL")
+                if saved_val is None or saved_val < 0:
+                    spin.setValue(-1.0)
+                else:
+                    spin.setValue(float(saved_val))
+                spin.valueChanged.connect(self._save_glucose_map)
+                col_form.addRow(f"Port {port}:", spin)
+                self._glucose_spins[port] = spin
+            glucose_outer.addLayout(col_form)
+
+        layout.addWidget(glucose_grp)
         layout.addStretch()
 
     # ── Dışarıdan set ─────────────────────────────────────────────
@@ -146,6 +201,22 @@ class ScriptParamsPanel(QWidget):
         else:
             self.delay_lbl.setText(f"{minutes} min  {seconds} sec")
             self.delay_lbl.setStyleSheet("color: #4CAF50; font-style: normal;")
+
+    def _save_glucose_map(self):
+        """Port-glikoz eşlemesini last_paths.json'a yazar. -1.0 = boş (tire)."""
+        mapping = {
+            str(port): (spin.value() if spin.value() >= 0 else None)
+            for port, spin in self._glucose_spins.items()
+        }
+        remember_value("port_glucose", mapping)
+
+    def get_glucose_map(self) -> dict:
+        """Viewer için {port_int: mg_dl_float} döner. Boş portlar dahil edilmez."""
+        return {
+            port: spin.value()
+            for port, spin in self._glucose_spins.items()
+            if spin.value() >= 0
+        }
 
     def clear(self):
         """ScriptParamsPanel'i açılış haline getirir."""

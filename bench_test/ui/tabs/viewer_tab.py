@@ -1066,10 +1066,15 @@ class ViewerTab(QWidget):
                 item["dot"].setData([item["x"]], [y_pos])
 
     def _step_label(self, ev: StepEvent) -> str:
-        """Step marker için kısa etiket: 'S3 P1 Load'"""
+        """Step marker için kısa etiket: 'S3 50.0 mg/dL Load'"""
         parts = []
         if ev.port_a:
-            parts.append(f"P{ev.port_a}")
+            glucose_map = get_value("port_glucose", {})
+            mg = glucose_map.get(str(ev.port_a))
+            if mg is not None:
+                parts.append(f"{mg} mg/dL")
+            else:
+                parts.append(f"P{ev.port_a}")
         if ev.valve_b:
             parts.append(ev.valve_b)
         if ev.loop_info:

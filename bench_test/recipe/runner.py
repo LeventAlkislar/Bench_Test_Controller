@@ -39,6 +39,9 @@ class RecipeRunner(threading.Thread):
         self.simulation_mode  = simulation_mode
         self.pause_event      = threading.Event()
         self.pause_event.set()
+        self.recipe_start_t   = None
+        self.current_loop_index = 0
+        self.current_loop_count = 0
 
     def pause(self):
         self.pause_event.clear()
@@ -179,6 +182,7 @@ class RecipeRunner(threading.Thread):
                 "step": step_num,
                 "total_steps": total_steps,
                 "elapsed_min": elapsed / 60,
+                "overall_elapsed_min": (time.time() - self.recipe_start_t) / 60 if self.recipe_start_t else elapsed / 60,
                 "remaining_min": remaining,
                 "remaining_minutes": remaining,
                 "duration_min": step.duration_minutes,
@@ -187,6 +191,8 @@ class RecipeRunner(threading.Thread):
                 "valve_b_state": step.valve_b_state,
                 "description": step.description,
                 "loop_info": loop_info,
+                "loop_index": self.current_loop_index,
+                "loop_count": self.current_loop_count,
             }))
             time.sleep(1.0)
 
@@ -198,9 +204,12 @@ class RecipeRunner(threading.Thread):
         loop_count = recipe.loop_count
         step_loops = recipe.step_loops
 
+        self.recipe_start_t = time.time()
+        self.current_loop_count = loop_count
         self.status_queue.put(("started", f"Recipe '{recipe.name}' başlatıldı."))
 
         for loop_i in range(loop_count):
+            self.current_loop_index = loop_i + 1
             loop_info = f"[Loop {loop_i+1}/{loop_count}] " if loop_count > 1 else ""
 
             step_indices = list(range(len(steps)))

@@ -13,5 +13,16 @@
   "dropsens_com": "COM10",
   "last_part_number": "UNAM-PET-58-002",
   "last_method_file": "C:\\UNAM DRIVE\\TUSEB\\SGI Prototip Gelistirme\\1B Sistem Muhendisligi\\Bench Tests\\CGM Measurements\\PAD Discrete Measurements\\UNAM-PET-58-002\\20260422_142116\\measurement_parameters\\UNAM-PET-58-002.tp",
-  "last_recipe_file": "C:\\UNAM DRIVE\\TUSEB\\SGI Prototip Gelistirme\\1B Sistem Muhendisligi\\Bench Tests\\CGM Measurements\\PAD Discrete Measurements\\UNAM-PET-58-002\\20260422_142116\\measurement_parameters\\recipe.json"
+  "last_recipe_file": "C:\\UNAM DRIVE\\TUSEB\\SGI Prototip Gelistirme\\1B Sistem Muhendisligi\\Bench Tests\\CGM Measurements\\PAD Discrete Measurements\\UNAM-PET-58-002\\20260422_142116\\measurement_parameters\\recipe.json",
+  "flow_rate_ml_min": 0.3,
+  "port_glucose": {
+    "1": 0.0,
+    "2": 40.0,
+    "3": 65.0,
+    "4": 125.0,
+    "5": 215.0,
+    "6": 300.0,
+    "7": 400.0,
+    "8": null
+  }
 }
