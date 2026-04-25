@@ -113,7 +113,7 @@ class ManualControlTab(QWidget):
         half_line = QFrame()
         half_line.setFrameShape(QFrame.Shape.HLine)
         half_line.setStyleSheet("color: #444;")
-        half_line.setMaximumWidth(320)
+        half_line.setMaximumWidth(520)
         left_col.addWidget(half_line)
 
         # ── Sol: Hız kontrolü ─────────────────────────────────

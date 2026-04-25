@@ -172,7 +172,8 @@ class RecipeTab(QWidget):
 
         fla.addWidget(QLabel("Duration (min):"))
         self.step_dur = QDoubleSpinBox()
-        self.step_dur.setRange(0, 9999)   # 0'a izin var
+        self.step_dur.setRange(0, 9999)  # 0'a izin var
+        self.step_dur.setDecimals(1)
         self.step_dur.setValue(60)
         self.step_dur.setMaximumWidth(70)
         fla.addWidget(self.step_dur)
@@ -199,6 +200,7 @@ class RecipeTab(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
         self.table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
         self.table.verticalHeader().setDefaultSectionSize(22)
+        self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.DoubleClicked)
         self.table.itemChanged.connect(self._on_item_changed)
@@ -213,29 +215,29 @@ class RecipeTab(QWidget):
         sb.addWidget(_btn("Move Down",       self._move_down))
         sb.addWidget(_btn("Remove Selected", self._remove_step))
         sb.addWidget(_btn("Clear All",       self._clear_all))
-        sb.addWidget(QFrame())
-        sb.addWidget(_btn("Set Step Loop",   self._set_loop,   "#9C27B0"))
-        sb.addWidget(_btn("Clear Loops",     self._clear_loops,"#607D8B"))
         sb.addStretch()
+        sb.addWidget(_btn("Set Step Loop",   self._set_loop))
+        sb.addWidget(_btn("Clear Loops",     self._clear_loops))
         layout.addLayout(sb)
 
-        # ── Loops display ─────────────────────────────────────
-        gl = QGroupBox("Active Step Loops")
-        gll = QVBoxLayout(gl)
+        # ── Recipe Duration display ─────────────────────────────────────
+        gl = QGroupBox("Recipe Duration")
+        gll = QHBoxLayout(gl)
         self.loops_lbl = QLabel("No step loops defined")
-        self.loops_lbl.setStyleSheet("color:#9C27B0;")
+        self.loops_lbl.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
         gll.addWidget(self.loops_lbl)
+        gll.addStretch()
+        self.total_time_lbl = QLabel("Total Time: 0 min (0d 0h 0m)")
+        self.total_time_lbl.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+        gll.addWidget(self.total_time_lbl)
+
         layout.addWidget(gl)
 
-        # ── File ops + total time ─────────────────────────────
+        # ── File ops ───────────────────────────────────────────────────
         fb = QHBoxLayout()
-#        fb.addWidget(_btn("Save Recipe", self._save_recipe))
-        fb.addWidget(_btn("Load Recipe", self._load_recipe))
-        fb.addWidget(_btn("Save Recipe", self._save_recipe))
+        fb.addWidget(_btn("Load Recipe", self._load_recipe, "#4CAF50"))
+        fb.addWidget(_btn("Save Recipe", self._save_recipe, "#FF9800"))
         fb.addStretch()
-        self.total_time_lbl = QLabel("Total Time: 0 min (0h 0m)")
-        self.total_time_lbl.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
-        fb.addWidget(self.total_time_lbl)
         layout.addLayout(fb)
 
         # ── Execution ─────────────────────────────────────────
@@ -457,13 +459,13 @@ class RecipeTab(QWidget):
     def _update_loops_display(self):
         if not self.step_loops:
             self.loops_lbl.setText("No step loops defined"); return
-        parts = [f"Steps {l.start_step}-{l.end_step} x{l.loop_count}"
+        parts = [f"Steps {l.start_step}-{l.end_step} x {l.loop_count}"
                  for l in sorted(self.step_loops, key=lambda x: x.start_step)]
         self.loops_lbl.setText("  |  ".join(parts))
 
     def _update_total_time(self):
         if not self.recipe_steps:
-            self.total_time_lbl.setText("Total Time: 0 min (0h 0m)"); return
+            self.total_time_lbl.setText("Total Time: 0 min (0d 0h 0m)"); return
         times = [s.duration_minutes for s in self.recipe_steps]
         processed = set()
         total = 0
@@ -474,8 +476,8 @@ class RecipeTab(QWidget):
         for i, t in enumerate(times):
             if i not in processed: total += t
         total *= self.loop_spin.value()
-        h = int(total // 60); m = int(total % 60)
-        self.total_time_lbl.setText(f"Total Time: {total:.1f} min ({h}h {m}m)")
+        d = int(total // (24 * 60)); h = int(total % (24 * 60) // 60); m = int(total % 60)
+        self.total_time_lbl.setText(f"Total Time: {total:.1f} min ({d}d {h}h {m}m)")
 
     def _save_recipe(self):
         if not self.recipe_steps:
