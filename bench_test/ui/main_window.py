@@ -4,7 +4,6 @@ from PyQt6.QtWidgets import QLabel, QMainWindow, QMessageBox, QTabWidget, QVBoxL
 from bench_test.dropview.controller import DropViewController
 from bench_test.measurement.session import MeasurementSession
 from bench_test.measurement.session_context import SessionContext
-from bench_test.ui.tabs.connection_tab import ConnectionTab
 from bench_test.ui.tabs.log_tab import LogTab
 from bench_test.ui.tabs.manual_tab import ManualControlTab
 from bench_test.ui.tabs.measurement_setup_tab import MeasurementSetupTab
@@ -45,7 +44,6 @@ class MainWindow(QMainWindow):
         tabs = QTabWidget()
         layout.addWidget(tabs)
 
-        self.conn_tab = ConnectionTab(self.ctrl_a, self.ctrl_b, self.dv_ctrl)
         self.manual_tab = ManualControlTab(self.ctrl_a, self.ctrl_b, self.dv_ctrl)
         self.recipe_tab = RecipeTab(self.ctrl_a, self.ctrl_b, self.dv_ctrl)
         self.recipe_tab._main_window = self
@@ -53,7 +51,6 @@ class MainWindow(QMainWindow):
         self.viewer_tab = ViewerTab(self.setup_tab.package_panel)
         self.log_tab = LogTab()
 
-        tabs.addTab(self.conn_tab, "Connection")
         tabs.addTab(self.manual_tab, "Manual Control")
         tabs.addTab(self.setup_tab, "Measurement Setup")
         tabs.addTab(self.recipe_tab, "Recipe Control")
@@ -67,7 +64,6 @@ class MainWindow(QMainWindow):
             )
 
         for tab in [
-            self.conn_tab,
             self.manual_tab,
             self.setup_tab,
             self.recipe_tab,

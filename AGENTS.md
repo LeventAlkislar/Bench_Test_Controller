@@ -37,6 +37,7 @@
 - Kullanıcı istemedikçe commit oluşturma.
 - Kullanıcı istemedikçe branch değiştirme veya yeni branch açma.
 - Mevcut branch ve çalışma ağacındaki kullanıcı değişikliklerine saygı göster.
+- "https://github.com/LeventAlkislar/Bench_Test_Controller.git" Bu repository kullan, en güncel branch e git
 
 ## Genel Kurallar
 1. Analysis: Make architectural analysis before diving into implementation
