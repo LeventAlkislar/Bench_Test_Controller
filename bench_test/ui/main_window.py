@@ -41,6 +41,15 @@ class MainWindow(QMainWindow):
         self.sim_banner.setVisible(False)
         layout.addWidget(self.sim_banner)
 
+        self.part_banner = QLabel("")
+        self.part_banner.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.part_banner.setStyleSheet(
+            "background-color: #1565C0; color: white; "
+            "font-weight: bold; font-size: 14px; padding: 4px;"
+        )
+        self.part_banner.setVisible(False)
+        layout.addWidget(self.part_banner)
+
         tabs = QTabWidget()
         layout.addWidget(tabs)
 
@@ -94,15 +103,22 @@ class MainWindow(QMainWindow):
         self._clear_all_tabs()
 
         if mode == "history":
-            self.viewer_tab.render_history(history_sessions or [])
-            self.log_tab.render_history(history_sessions or [])
+            sessions = history_sessions or []
+            part = sessions[0].part_number if sessions else ""
+            self.set_part_banner(part)
+            self.viewer_tab.render_history(sessions)
+            self.log_tab.render_history(sessions)
             return
 
         if session is not None:
+            self.set_part_banner(session.part_number)
             self.viewer_tab.render_session(session, live=(mode == "active"))
             self.log_tab.render_session(session)
             self.recipe_tab.render_session(session)
             self.setup_tab.render_session(session)
+            return
+
+        self.set_part_banner("")
 
     def _clear_all_tabs(self):
         self.viewer_tab.clear()
@@ -138,8 +154,19 @@ class MainWindow(QMainWindow):
         """Oturumu Temizle -> display'i bosalt, aktif pipeline etkilenmez."""
         if self._ctx.display_mode == "active":
             return
+        self.set_part_banner("")
         self.switch_display(None, "empty")
         self.log_tab.append("Oturum temizlendi.")
+
+    def set_part_banner(self, part_number: str = ""):
+        """Part numarasını üst banner'da gösterir; boşsa gizler."""
+        if part_number:
+            self.part_banner.setText(f"{part_number}")
+#            self.part_banner.setText(f"Part: {part_number}")
+            self.part_banner.setVisible(True)
+        else:
+            self.part_banner.setText("")
+            self.part_banner.setVisible(False)
 
     def set_simulation_mode(self, active: bool, missing: str = ""):
         self.sim_banner.setVisible(active)

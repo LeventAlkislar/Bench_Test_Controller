@@ -1091,18 +1091,18 @@ def step_start_dropview(config: dict, log_fn=None):
                     proc = psutil.Process(hwnd_pid)
                     if proc.is_running() and not _is_dropview_ui_ready(dv_hwnd, timeout=3.0):
                         _log(
-                            f"â”‚  UYARI: DropView baÄŸlÄ± gÃ¶rÃ¼nÃ¼yor ama UI hazÄ±r deÄŸil "
-                            f"(PID={hwnd_pid}), yeniden baÅŸlatÄ±lacak."
+                            f"│  UYARI: DropView bağlı görünüyor ama UI hazır değil "
+                            f"(PID={hwnd_pid}), yeniden başlatılacak."
                         )
                         try:
                             psutil.Process(hwnd_pid).kill()
                             _wait_for_dropview_process_exit(timeout=5)
-                            _log("â”‚  HazÄ±r olmayan DropView instance'Ä± kapatÄ±ldÄ±.")
+                            _log("│  Hazır olmayan DropView instance'ı kapatıldı.")
                             proc = psutil.Process(hwnd_pid)
                         except psutil.NoSuchProcess:
                             pass
                         except Exception as e:
-                            _log(f"â”‚  UYARI: HazÄ±r olmayan instance kapatÄ±lamadÄ±: {e}")
+                            _log(f"│  UYARI: Hazır olmayan instance kapatılamadı: {e}")
                     if not proc.is_running():
                         _log(f"│  UYARI: Bağlı görünüyor ama process çalışmıyor (PID={hwnd_pid}), yeniden başlatılacak.")
                     else:

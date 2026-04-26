@@ -70,16 +70,26 @@ _SYSTEM_COLORS = {
 }
 
 _PORT_COLORS = {
-    1: (255, 100, 100, 40),
-    2: (100, 200, 100, 40),
-    3: (100, 150, 255, 40),
-    4: (255, 200, 80, 40),
-    5: (200, 100, 255, 40),
-    6: (80, 220, 220, 40),
-    7: (255, 140, 60, 40),
-    8: (180, 180, 180, 40),
+    1: (255, 255, 255, 100),   # port 1 = 0 mg/dL → nötr gri/beyaz
+    2: (170, 220, 235, 100),   # koyu pembe → en yüksek glikoz
+    3: (120, 190, 210, 100),   # orta pembe
+    4: (150, 110, 190, 100),   # açık pembe → orta-yüksek
+    5: (220, 160, 120, 100),   # pastel koyu turuncu → orta-düşük
+    6: (235, 185, 140, 100),   # pastel orta turuncu
+    7: (245, 205, 170, 100),   # pastel açık turuncu → en düşük glikoz
+    8: (255, 255, 255, 100),   # port 8 = Boş → nötr gri/beyaz
 }
-_PORT_COLOR_DEFAULT = (160, 160, 160, 30)
+
+#Açık turuncu:	RGB: (240, 180, 120)
+#Orta turuncu:	RGB: (225, 150, 90)
+#Koyu turuncu:	RGB: (200, 120, 60)
+#Orta mor:	RGB: (150, 110, 190)
+#Orta cyan:	RGB: (120, 190, 210)
+#Açık cyan:	RGB: (170, 220, 235)
+
+
+
+_PORT_COLOR_DEFAULT = (160, 160, 160, 0)
 
 _C_MEASURE_LINE = (33, 150, 243)
 _HOVER_DISTANCE_PX = 14
@@ -235,6 +245,15 @@ class ViewerTab(QWidget):
         top_group = QGroupBox("Measurement Timeline")
         top_group_layout = QVBoxLayout(top_group)
         top_group_layout.setContentsMargins(10, 10, 10, 10)
+
+        # Part numarası etiketi — grafik alanının üstü
+        self.chart_part_lbl = QLabel("")
+        self.chart_part_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.chart_part_lbl.setStyleSheet(
+            "font-size: 12px; font-weight: bold; color: #1565C0; padding: 4px 0px;"
+        )
+        self.chart_part_lbl.setVisible(False)
+        top_group_layout.addWidget(self.chart_part_lbl)
 
         if not _PG_OK:
             lbl = QLabel(
@@ -414,9 +433,9 @@ class ViewerTab(QWidget):
             history_sessions = self._find_history_sessions(path)
             if not history_sessions:
                 QMessageBox.warning(self, "Viewer",
-                    "SeÃ§ilen dizin geÃ§erli bir session veya part klasÃ¶rÃ¼ deÄŸil.\n"
-                    "LÃ¼tfen session.json iÃ§eren bir session dizini veya altÄ±nda "
-                    "session klasÃ¶rleri bulunan bir part dizini seÃ§in.")
+                    "Seçilen dizin geçerli bir session veya part klasörü değil.\n"
+                    "Lütfen session.json içeren bir session dizini veya altında "
+                    "session klasörleri bulunan bir part dizini seçin.")
                 return
 
             mw = self._get_main_window()
@@ -465,6 +484,13 @@ class ViewerTab(QWidget):
         self._poll_timer.stop()
         self.live_lbl.setText("")
         self.delete_btn.setEnabled(False)
+        if sessions:
+            self.chart_part_lbl.setText(
+                f"Part: {sessions[0].part_number}  [history: {len(sessions)}]"
+            )
+            self.chart_part_lbl.setVisible(True)
+        else:
+            self.chart_part_lbl.setVisible(False)
         self._refresh(reset_view=True)
 
     # ── Yenileme ──────────────────────────────────────────────────
@@ -475,6 +501,10 @@ class ViewerTab(QWidget):
         live=True ise poll_timer baslatilir.
         """
         self._load_session(session)
+        self.chart_part_lbl.setText(
+            f"Part: {session.part_number}  [{session.status.value}]"
+        )
+        self.chart_part_lbl.setVisible(True)
         if live and not self._poll_timer.isActive():
             self._poll_timer.start()
             self.live_lbl.setText(f"⟳ Canlı mod ({POLL_INTERVAL_MS // 1000}sn)")
@@ -879,14 +909,14 @@ class ViewerTab(QWidget):
         return timestamps, currents
 
     def _draw_glucose_regions(self, data_timestamps: list):
-        """Port A step geÃ§iÅŸleri arasÄ±ndaki bÃ¶lgeleri porta gÃ¶re renklendirir."""
+        """Port A step geçişleri arasındaki bölgeleri porta göre renklendirir."""
         if not self._parse_result or not data_timestamps:
             return
 
         t_max = max(data_timestamps)
         offset = self._get_offset_sec()
 
-        # Sadece port_a iÃ§eren step event'leri zamana gÃ¶re sÄ±rala
+        # Sadece port_a içeren step event'leri zamana göre sırala
         port_events = sorted(
             [ev for ev in self._parse_result.step_events
              if ev.port_a is not None
@@ -1002,6 +1032,7 @@ class ViewerTab(QWidget):
                 "fill": (255, 255, 255, 0),
                 "border": pg.mkPen(None),
                 "movable": False,
+                "anchors": [(0, 0), (0, 0)],
             })
 
         font = QFont()
@@ -1022,6 +1053,7 @@ class ViewerTab(QWidget):
                     "fill": (255, 255, 255, 0),
                     "border": pg.mkPen(None),
                     "movable": False,
+                    "anchors": [(0, 0), (0, 0)],
                 })
 
             font = QFont()
@@ -1144,7 +1176,7 @@ class ViewerTab(QWidget):
             glucose_map = get_value("port_glucose", {})
             mg = glucose_map.get(str(ev.port_a))
             if mg is not None:
-                parts.append(f"{mg} mg/dL")
+                parts.append(f"{float(mg):.0f} mg/dL")
             else:
                 parts.append(f"P{ev.port_a}")
         if ev.loop_info:
@@ -1194,11 +1226,16 @@ class ViewerTab(QWidget):
         self.notes_edit.clear()
         self.sys_edit.clear()
         self.delete_btn.setEnabled(False)
+        self.chart_part_lbl.setText("")
+        self.chart_part_lbl.setVisible(False)
         if self.plot_widget_top:
             self.plot_widget_top.clear()
         if self.plot_widget_bottom:
             self.plot_widget_bottom.clear()
         self._clear_hover_data()
+        mw = self._get_main_window()
+        if mw and hasattr(mw, "set_part_banner"):
+            mw.set_part_banner("")
 
     def _show_no_data_msg(self):
         """Veri yoksa grafik alanına mesaj yazar."""
@@ -1405,6 +1442,9 @@ class ViewerTab(QWidget):
         self.notes_edit.clear()
         self.sys_edit.clear()
         self.delete_btn.setEnabled(False)
+
+        self.chart_part_lbl.setText("")
+        self.chart_part_lbl.setVisible(False)
 
         if self.plot_widget_top:
             self.plot_widget_top.clear()
