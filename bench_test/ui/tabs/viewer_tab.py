@@ -93,7 +93,7 @@ _PORT_COLORS = {
 _PORT_COLOR_DEFAULT = (160, 160, 160, 0)
 
 _C_MEASURE_LINE = (33, 150, 243)
-_HOVER_DISTANCE_PX = 14
+_HOVER_DISTANCE_PX = 5
 
 POLL_INTERVAL_MS = 10_000   # 10 saniye
 
@@ -121,6 +121,8 @@ class ViewerTab(QWidget):
         self._hover_points: dict = {}
         self._hover_labels: dict = {}
         self._hover_state: dict = {}
+        self._event_marker_points: list = []
+        self._vline_hover_points: list = []
         self.plot_widget_top = None
         self.plot_widget_bottom = None
 
@@ -990,9 +992,11 @@ class ViewerTab(QWidget):
                 continue
 
             if getattr(ev, "marker_kind", "step") == "measure":
+                is_start = getattr(ev, "marker_label", "") == "Start Measure"
                 self._add_measure_marker(
                     t_raw,  # offset yok
-                    is_start=(getattr(ev, "marker_label", "") == "Start Measure"),
+                    is_start=is_start,
+                    label="START" if is_start else "STOP",
                 )
                 continue
 
@@ -1017,15 +1021,13 @@ class ViewerTab(QWidget):
             t = ev.timestamp.timestamp()
             if not (t_min <= t <= t_max):
                 continue
-            if ev.event_type in ("started", "stopped", "error"):
-                self._add_measure_marker(
-                    t,
-                    is_start=(ev.event_type == "started"),
-                )
-            else:
-                # paused / resumed → dashed line olarak kalır
-                color = _SYSTEM_COLORS.get(ev.event_type, _C_PAUSED)
-                self._add_vline(t, color, ev.event_type.upper(), dashed=True)
+            color = _SYSTEM_COLORS.get(ev.event_type, _C_PAUSED)
+            self._add_measure_marker(
+                t,
+                is_start=(ev.event_type == "started"),
+                marker_color=color,
+                label=self._system_event_label(ev.event_type),
+            )
 
     def _add_vline(self, x: float, color: tuple, label: str,
                    dashed: bool = False, width: int = 1):
@@ -1058,6 +1060,11 @@ class ViewerTab(QWidget):
 
         self.plot_widget_top.addItem(line_top)
         self._marker_items.append(line_top)
+        self._vline_hover_points.append({
+            "plot": self.plot_widget_top,
+            "x": x,
+            "label": label,
+        })
 
         # Alt grafik çizgisi
         if self.plot_widget_bottom:
@@ -1079,14 +1086,28 @@ class ViewerTab(QWidget):
 
             self.plot_widget_bottom.addItem(line_bottom)
             self._marker_items.append(line_bottom)
+            self._vline_hover_points.append({
+                "plot": self.plot_widget_bottom,
+                "x": x,
+                "label": label,
+            })
 
-    def _add_measure_marker(self, x: float, is_start: bool):
+    def _add_measure_marker(self, x: float, is_start: bool,
+                            marker_color: tuple = None, label: str = ""):
         """Measure event'lerinde sadece nokta cizer."""
-        marker_color = _C_STARTED if is_start else _C_STOPPED
+        if marker_color is None:
+            marker_color = _C_STARTED if is_start else _C_STOPPED
 
         def _draw_on(plot_widget):
             if not plot_widget:
                 return
+            marker_entry = {
+                "plot": plot_widget,
+                "dot": None,
+                "x": x,
+                "y": 0.0,
+                "label": label,
+            }
             dot = pg.ScatterPlotItem(
                 [x], [0.0],
                 size=10,
@@ -1095,12 +1116,25 @@ class ViewerTab(QWidget):
             )
             plot_widget.addItem(dot)
             self._marker_items.append(dot)
-            self._measure_dots.append({"plot": plot_widget, "dot": dot, "x": x})
+            marker_entry["dot"] = dot
+            self._measure_dots.append(marker_entry)
+            self._event_marker_points.append(marker_entry)
             self._ensure_measure_dot_tracking(plot_widget)
             self._update_measure_dots_for_plot(plot_widget)
 
         _draw_on(self.plot_widget_top)
         _draw_on(self.plot_widget_bottom)
+
+    def _system_event_label(self, event_type: str) -> str:
+        """Hover icin sistem event etiketini doner."""
+        labels = {
+            "started": "START",
+            "stopped": "STOP",
+            "paused": "PAUSE",
+            "resumed": "RESUME",
+            "error": "ERROR",
+        }
+        return labels.get(event_type, event_type.upper())
 
     def _ensure_measure_dot_tracking(self, plot_widget):
         """Zoom veya pan sonrasi measure noktalarini ust banda tasir."""
@@ -1184,6 +1218,7 @@ class ViewerTab(QWidget):
         for item in self._measure_dots:
             if item["plot"] is plot_widget:
                 item["dot"].setData([item["x"]], [y_pos])
+                item["y"] = y_pos
 
     def _step_label(self, ev: StepEvent) -> str:
         """Step marker için kısa etiket: '50.0 mg/dL' veya 'P3'"""
@@ -1292,6 +1327,8 @@ class ViewerTab(QWidget):
         """Eski session verisine ait hover bilgisini temizler."""
         self._hover_points.clear()
         self._hover_state.clear()
+        self._event_marker_points.clear()
+        self._vline_hover_points.clear()
         for label in self._hover_labels.values():
             if label:
                 label.hide()
@@ -1329,6 +1366,19 @@ class ViewerTab(QWidget):
             self._hide_hover_label(plot_widget)
             return
 
+        marker_data = self._find_nearest_event_marker(plot_widget, pos)
+        if marker_data is not None:
+            marker_id = f"marker:{id(marker_data['dot'])}"
+            self._show_hover_label(plot_widget, marker_id, marker_data["label"], pos)
+            return
+
+        vline_data = self._find_nearest_vline(plot_widget, pos)
+        if vline_data is not None:
+            label_text = self._format_vline_hover_text(vline_data)
+            vline_id = f"vline:{id(vline_data)}"
+            self._show_hover_label(plot_widget, vline_id, label_text, pos)
+            return
+
         point_data = self._hover_points.get(plot_widget)
         if not point_data or not point_data["x"]:
             self._hide_hover_label(plot_widget)
@@ -1345,7 +1395,7 @@ class ViewerTab(QWidget):
         label_text = f"Time: {ts_text}\nCurrent: {y_value:.3f} uA"
         self._show_hover_label(plot_widget, nearest_index, label_text, pos)
 
-    def _show_hover_label(self, plot_widget, point_index: int,
+    def _show_hover_label(self, plot_widget, point_key,
                           label_text: str, scene_pos):
         """Ayni noktadaysa etiketi yeniden çizmeden görünür tutar."""
         label = self._hover_labels.get(plot_widget)
@@ -1353,11 +1403,11 @@ class ViewerTab(QWidget):
         if not label or state is None:
             return
 
-        state_changed = state["index"] != point_index or state["text"] != label_text
+        state_changed = state["index"] != point_key or state["text"] != label_text
         if state_changed:
             label.setText(label_text.replace("\n", "<br>"))
             label.adjustSize()
-            state["index"] = point_index
+            state["index"] = point_key
             state["text"] = label_text
 
         label_x, label_y = self._calc_hover_label_pos(plot_widget, scene_pos, label)
@@ -1423,6 +1473,59 @@ class ViewerTab(QWidget):
             return None
         return best_index
 
+    def _find_nearest_event_marker(self, plot_widget, scene_pos):
+        """Hover mesafesindeki en yakin event marker'ini doner."""
+        best_item = None
+        best_distance = None
+        view_box = plot_widget.getViewBox()
+
+        for item in self._event_marker_points:
+            if item["plot"] is not plot_widget or not item.get("label"):
+                continue
+            scene_point = view_box.mapViewToScene(
+                pg.Point(item["x"], item.get("y", 0.0))
+            )
+            distance = (scene_point.x() - scene_pos.x()) ** 2 + (
+                scene_point.y() - scene_pos.y()
+            ) ** 2
+            if best_distance is None or distance < best_distance:
+                best_distance = distance
+                best_item = item
+
+        if best_distance is None or best_distance > _HOVER_DISTANCE_PX ** 2:
+            return None
+        return best_item
+
+    def _find_nearest_vline(self, plot_widget, scene_pos):
+        """Fareye yatayda yakin olan dikey cizgiyi doner."""
+        best_item = None
+        best_distance = None
+        view_box = plot_widget.getViewBox()
+        mouse_point = view_box.mapSceneToView(scene_pos)
+
+        for item in self._vline_hover_points:
+            if item["plot"] is not plot_widget:
+                continue
+            scene_point = view_box.mapViewToScene(
+                pg.Point(item["x"], mouse_point.y())
+            )
+            distance = abs(scene_point.x() - scene_pos.x())
+            if best_distance is None or distance < best_distance:
+                best_distance = distance
+                best_item = item
+
+        if best_distance is None or best_distance > _HOVER_DISTANCE_PX:
+            return None
+        return best_item
+
+    def _format_vline_hover_text(self, vline_data) -> str:
+        """Dikey cizgi hover metnini hazirlar."""
+        ts_text = datetime.fromtimestamp(vline_data["x"]).strftime("%Y-%m-%d %H:%M:%S")
+        label = (vline_data.get("label") or "").strip()
+        if label:
+            return f"Marker: {label}\nTime: {ts_text}"
+        return f"Time: {ts_text}"
+
     def _on_session_state_changed(self, state: str):
         """MainWindow state_changed bağlantısı için."""
         state_norm = (state or "").strip().lower()
@@ -1442,6 +1545,8 @@ class ViewerTab(QWidget):
         self._parse_result = None
         self._marker_items.clear()
         self._measure_dots.clear()
+        self._event_marker_points.clear()
+        self._vline_hover_points.clear()
         self._measure_range_hooks.clear()
         self._saved_top_view_range = None
         self._manual_top_view_active = False
