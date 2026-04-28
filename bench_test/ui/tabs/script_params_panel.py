@@ -38,14 +38,14 @@ class ScriptParamsPanel(QWidget):
         layout.setSpacing(6)
 
         # ── Kullanıcı parametreleri ───────────────────────────
-        user_grp = QGroupBox("Parameters")
-        user_form = QFormLayout(user_grp)
+        params_grp = QGroupBox("Script Parameters")
+        params_form = QFormLayout(params_grp)
 
         self.repeat_spin = QSpinBox()
         self.repeat_spin.setRange(1, 99999)
         self.repeat_spin.setValue(DEFAULT_REPEAT_COUNT)
         self.repeat_spin.valueChanged.connect(self.params_changed)
-        user_form.addRow("Repeat Count:", self.repeat_spin)
+        params_form.addRow("Repeat Count:", self.repeat_spin)
 
         self.wait_spin = QDoubleSpinBox()
         self.wait_spin.setRange(1.0, 3600.0)
@@ -53,41 +53,42 @@ class ScriptParamsPanel(QWidget):
         self.wait_spin.setValue(DEFAULT_WAIT_DURATION_SEC)
         self.wait_spin.setSuffix(" sn")
         self.wait_spin.valueChanged.connect(self.params_changed)
-        user_form.addRow("Wait Duration:", self.wait_spin)
+        params_form.addRow("Wait Duration:", self.wait_spin)
 
-        layout.addWidget(user_grp)
 
-        # ── Görüntüleyici ayarları (salt-okunur) ─────────────
-        viewer_grp = QGroupBox("Viewer Settings")
-        viewer_form = QFormLayout(viewer_grp)
-        self.delay_lbl = QLabel("—")
-        self.delay_lbl.setStyleSheet("color: #888; font-style: italic;")
-        viewer_form.addRow("Response Delay:", self.delay_lbl)
 
 
         # ── Otomatik alanlar (salt-okunur) ────────────────────
-        auto_grp = QGroupBox("Auto (read-only)")
-        auto_form = QFormLayout(auto_grp)
-
         self.method_edit = QLineEdit()
         self.method_edit.setReadOnly(True)
         self.method_edit.setPlaceholderText("Method .tp yüklenince dolar")
         self.method_edit.setStyleSheet("color: #888; font-style: italic;")
-        auto_form.addRow("Method File:", self.method_edit)
+        params_form.addRow("Method File:", self.method_edit)
 
         self.csv_edit = QLineEdit()
         self.csv_edit.setReadOnly(True)
         self.csv_edit.setPlaceholderText("Part Number girilince dolar")
         self.csv_edit.setStyleSheet("color: #888; font-style: italic;")
-        auto_form.addRow("CSV File:", self.csv_edit)
+        params_form.addRow("CSV File:", self.csv_edit)
 
-        layout.addWidget(auto_grp)
-        layout.addWidget(viewer_grp)
+        layout.addWidget(params_grp)
 
         # ── Deney koşulları ───────────────────────────────────
-        exp_grp = QGroupBox("Deney Koşulları")
+        exp_grp = QGroupBox("Measurement Conditions")
         exp_form = QFormLayout(exp_grp)
 
+        # ── Sıcaklık ayarları ─────────────
+        self.temp_spin = QDoubleSpinBox()
+        self.temp_spin.setRange(0.0, 50.0)
+        self.temp_spin.setDecimals(1)
+        self.temp_spin.setSuffix(" °C")
+        self.temp_spin.setValue(get_value("temperature_c", 25.0))
+        self.temp_spin.valueChanged.connect(
+            lambda v: remember_value("temperature_c", v)
+        )
+        exp_form.addRow("Temperature:", self.temp_spin)
+
+        # ── Akış hızı  ayarları ─────────────
         self.flow_spin = QDoubleSpinBox()
         self.flow_spin.setRange(0.0, 100.0)
         self.flow_spin.setDecimals(1)
@@ -96,26 +97,33 @@ class ScriptParamsPanel(QWidget):
         self.flow_spin.valueChanged.connect(
             lambda v: remember_value("flow_rate_ml_min", v)
         )
-        exp_form.addRow("Akış Hızı:", self.flow_spin)
+        exp_form.addRow("Flow Rate:", self.flow_spin)
 
-        self.temp_spin = QDoubleSpinBox()
-        self.temp_spin.setRange(-20.0, 100.0)
-        self.temp_spin.setDecimals(1)
-        self.temp_spin.setSuffix(" °C")
-        self.temp_spin.setValue(get_value("temperature_c", 25.0))
-        self.temp_spin.valueChanged.connect(
-            lambda v: remember_value("temperature_c", v)
-        )
-        exp_form.addRow("Sıcaklık:", self.temp_spin)
+        # ── Görüntüleyici ayarları (salt-okunur) ─────────────
+        self.delay_lbl = QLabel("—")
+        self.delay_lbl.setStyleSheet("color: #888; font-style: italic;")
+        exp_form.addRow("Response Delay:", self.delay_lbl)
+
 
         layout.addWidget(exp_grp)
 
         # ── Port - Glikoz Eşlemesi ────────────────────────────
-        glucose_grp = QGroupBox("Port – Glikoz Eşlemesi")
+        glucose_grp = QGroupBox("Port – Glucose Match")
         glucose_outer = QHBoxLayout(glucose_grp)
         glucose_outer.setSpacing(10)
 
-        saved_glucose = get_value("port_glucose", {})
+        default_glucose = {
+            "1": 0,
+            "2": 40,
+            "3": 65,
+            "4": 125,
+            "5": 215,
+            "6": 300,
+            "7": 400,
+            "8": -1,
+        }
+        had_saved_glucose = get_value("port_glucose", None) is not None
+        saved_glucose = get_value("port_glucose", default_glucose)
         self._glucose_spins: dict[int, QDoubleSpinBox] = {}
         for col_ports in [(1, 2, 3, 4), (5, 6, 7, 8)]:
             col_form = QFormLayout()
@@ -135,6 +143,9 @@ class ScriptParamsPanel(QWidget):
                 col_form.addRow(f"Port {port}:", spin)
                 self._glucose_spins[port] = spin
             glucose_outer.addLayout(col_form)
+
+        if not had_saved_glucose:
+            self._save_glucose_map()
 
         layout.addWidget(glucose_grp)
         layout.addStretch()

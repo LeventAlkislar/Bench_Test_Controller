@@ -1,5 +1,16 @@
-from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QLabel, QMainWindow, QMessageBox, QTabWidget, QVBoxLayout, QWidget
+from PyQt6.QtCore import QSize, Qt
+from PyQt6.QtWidgets import (
+    QLabel,
+    QMainWindow,
+    QMessageBox,
+    QStyle,
+    QStyleOptionTab,
+    QStylePainter,
+    QTabBar,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
+)
 
 from bench_test.dropview.controller import DropViewController
 from bench_test.measurement.session import MeasurementSession
@@ -11,6 +22,74 @@ from bench_test.ui.tabs.recipe_tab import RecipeTab
 from bench_test.ui.tabs.viewer_tab import ViewerTab
 from bench_test.valve.injector import InjectorValveController
 from bench_test.valve.multiport import ValveController
+
+
+class RightAlignedTabBar(QTabBar):
+    def __init__(self):
+        super().__init__()
+        self.setExpanding(False)
+        self._spacer_index = -1
+        self._spacer_width = 0
+
+    def set_spacer_index(self, index: int):
+        self._spacer_index = index
+        self.updateGeometry()
+        self.update()
+
+    def set_spacer_width(self, width: int):
+        width = max(0, width)
+        if self._spacer_width == width:
+            return
+        self._spacer_width = width
+        self.updateGeometry()
+        self.update()
+
+    def tabSizeHint(self, index: int):
+        size = super().tabSizeHint(index)
+        if index == self._spacer_index:
+            return QSize(self._spacer_width, size.height())
+        return size
+
+    def paintEvent(self, event):
+        painter = QStylePainter(self)
+        option = QStyleOptionTab()
+        for index in range(self.count()):
+            if index == self._spacer_index:
+                continue
+            self.initStyleOption(option, index)
+            painter.drawControl(QStyle.ControlElement.CE_TabBarTab, option)
+
+
+class RightAlignedLogTabWidget(QTabWidget):
+    def __init__(self):
+        super().__init__()
+        self._tab_bar = RightAlignedTabBar()
+        self.setTabBar(self._tab_bar)
+        self._spacer_index = -1
+
+    def add_right_aligned_tab(self, widget: QWidget, label: str) -> int:
+        if self._spacer_index < 0:
+            self._spacer_index = self.addTab(QWidget(), "")
+            self.setTabEnabled(self._spacer_index, False)
+            self._tab_bar.set_spacer_index(self._spacer_index)
+        index = self.addTab(widget, label)
+        self._update_spacer_width()
+        return index
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update_spacer_width()
+
+    def _update_spacer_width(self):
+        if self._spacer_index < 0:
+            return
+        tab_bar = self.tabBar()
+        fixed_width = 0
+        for index in range(tab_bar.count()):
+            if index == self._spacer_index:
+                continue
+            fixed_width += tab_bar.tabSizeHint(index).width()
+        self._tab_bar.set_spacer_width(self.width() - fixed_width)
 
 
 class MainWindow(QMainWindow):
@@ -50,7 +129,7 @@ class MainWindow(QMainWindow):
         self.part_banner.setVisible(False)
         layout.addWidget(self.part_banner)
 
-        tabs = QTabWidget()
+        tabs = RightAlignedLogTabWidget()
         layout.addWidget(tabs)
 
         self.manual_tab = ManualControlTab(self.ctrl_a, self.ctrl_b, self.dv_ctrl)
@@ -63,8 +142,8 @@ class MainWindow(QMainWindow):
         tabs.addTab(self.manual_tab, "Manual Control")
         tabs.addTab(self.setup_tab, "Measurement Setup")
         tabs.addTab(self.recipe_tab, "Recipe Control")
-        tabs.addTab(self.log_tab, "Full Log")
         tabs.addTab(self.viewer_tab, "Graphics Viewer")
+        tabs.add_right_aligned_tab(self.log_tab, "Full Log")
 
         self.recipe_tab.package_tab = self.setup_tab
         if self.recipe_tab._current_recipe_path:

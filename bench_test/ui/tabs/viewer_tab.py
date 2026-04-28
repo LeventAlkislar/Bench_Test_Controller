@@ -70,14 +70,14 @@ _SYSTEM_COLORS = {
 }
 
 _PORT_COLORS = {
-    1: (255, 255, 255, 100),   # port 1 = 0 mg/dL → nötr gri/beyaz
-    2: (170, 220, 235, 100),   # koyu pembe → en yüksek glikoz
-    3: (120, 190, 210, 100),   # orta pembe
-    4: (150, 110, 190, 100),   # açık pembe → orta-yüksek
-    5: (220, 160, 120, 100),   # pastel koyu turuncu → orta-düşük
-    6: (235, 185, 140, 100),   # pastel orta turuncu
-    7: (245, 205, 170, 100),   # pastel açık turuncu → en düşük glikoz
-    8: (255, 255, 255, 100),   # port 8 = Boş → nötr gri/beyaz
+    1: (255, 255, 255, 100),   # sabit
+    2: (180, 220, 230, 100),   # açık cyan
+    3: (180, 200, 215, 100),   # orta cyan
+    4: (155, 135, 200, 100),   # yumuşak mor (cyan → mor geçiş)
+    5: (210, 155, 135, 100),   # pastel kırmızımsı turuncu (mor → turuncu geçiş)
+    6: (225, 175, 145, 100),   # açık turuncu
+    7: (235, 200, 170, 100),   # çok açık turuncu
+    8: (255, 255, 255, 100),   # sabit
 }
 
 #Açık turuncu:	RGB: (240, 180, 120)

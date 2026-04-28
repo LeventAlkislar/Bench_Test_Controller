@@ -1,0 +1,29 @@
+{
+  "scr_open_dir": "C:\\UNAM DRIVE\\TUSEB\\SGI Prototip Gelistirme\\1B Sistem Muhendisligi\\Bench Tests\\CGM Measurements\\PAD Discrete Measurements\\XXX-YYY-ZZZ\\20260415_220902\\measurement_parameters",
+  "scr_last_used": "C:\\UNAM DRIVE\\TUSEB\\SGI Prototip Gelistirme\\1B Sistem Muhendisligi\\Bench Tests\\CGM Measurements\\PAD Discrete Measurements\\XXX-YYY-ZZZ\\20260415_220902\\measurement_parameters",
+  "method_dir": "C:\\UNAM DRIVE\\TUSEB\\SGI Prototip Gelistirme\\1B Sistem Muhendisligi\\Bench Tests\\CGM Measurements\\Measurement Parameters\\Method PAD",
+  "csv_output_dir": "C:\\UNAM DRIVE\\TUSEB\\SGI Prototip Gelistirme\\1B Sistem Muhendisligi\\Bench Tests\\CGM Measurements\\PAD Discrete Measurements\\XXX-YYY-ZZZ\\20260415_220902\\measurements",
+  "dropview_exe": "C:\\Program Files\\DropView 8400M",
+  "recipe_dir": "C:\\UNAM DRIVE\\TUSEB\\SGI Prototip Gelistirme\\1B Sistem Muhendisligi\\Bench Tests\\CGM Measurements\\Measurement Parameters\\Scenarios",
+  "package_root": "C:\\UNAM DRIVE\\TUSEB\\SGI Prototip Gelistirme\\1B Sistem Muhendisligi\\Bench Tests\\CGM Measurements\\PAD Discrete Measurements",
+  "scr_save_dir": "C:\\UNAM DRIVE\\TUSEB\\SGI Prototip Gelistirme\\1B Sistem Muhendisligi\\Bench Tests\\CGM Measurements\\Measurement Parameters\\Scripts",
+  "browse_session": "C:\\UNAM DRIVE\\TUSEB\\SGI Prototip Gelistirme\\1B Sistem Muhendisligi\\Bench Tests\\CGM Measurements\\PAD Discrete Measurements\\UNAM-PET-58\\20260421_143307",
+  "response_delay_min": 11,
+  "response_delay_sec": 0,
+  "dropsens_com": "COM10",
+  "last_part_number": "UNAM-PET-58",
+  "last_method_file": "C:\\UNAM DRIVE\\TUSEB\\SGI Prototip Gelistirme\\1B Sistem Muhendisligi\\Bench Tests\\CGM Measurements\\PAD Discrete Measurements\\UNAM-PET-58\\20260421_143307\\measurement_parameters\\UNAM-PET-58.tp",
+  "last_recipe_file": "C:\\UNAM DRIVE\\TUSEB\\SGI Prototip Gelistirme\\1B Sistem Muhendisligi\\Bench Tests\\CGM Measurements\\PAD Discrete Measurements\\UNAM-PET-58\\20260421_143307\\measurement_parameters\\recipe.json",
+  "flow_rate_ml_min": 0.3,
+  "port_glucose": {
+    "1": 0.0,
+    "2": 40.0,
+    "3": 65.0,
+    "4": 125.0,
+    "5": 215.0,
+    "6": 300.0,
+    "7": 400.0,
+    "8": null
+  },
+  "temperature_c": 25.0
+}
