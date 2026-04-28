@@ -19,12 +19,21 @@ def setup_logging():
 setup_logging()
 
 from PyQt6.QtWidgets import QApplication
+from PyQt6.QtGui import QIcon
 from bench_test.ui.main_window import MainWindow
+
+
+def resource_path(relative_path):
+    base_path = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base_path, relative_path)
 
 def main():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
+    app_icon = QIcon(resource_path(os.path.join("bench_test", "ui", "assets", "app_icon.ico")))
+    app.setWindowIcon(app_icon)
     win = MainWindow()
+    win.setWindowIcon(app_icon)
     win.show()
     sys.exit(app.exec())
 
