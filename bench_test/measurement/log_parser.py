@@ -126,6 +126,7 @@ _SYSTEM_PATTERNS = {
 _RE_IGNORE = re.compile(
     r"^(switching:|valve [ab] (connected|disconnected)|"
     r"step \d+: duration changed|added step loop|"
+    r"added recipe step:|cleared all step loops|"
     r"session (opened|closed)|[-─]{5,}|"
     r"part:|session opened:|"
     r"step loop \d+/\d+ \(steps \d+-\d+\): switching:)",

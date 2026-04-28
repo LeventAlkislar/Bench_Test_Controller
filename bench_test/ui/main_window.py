@@ -189,6 +189,11 @@ class MainWindow(QMainWindow):
             self.log_tab.render_history(sessions)
             return
 
+        if mode == "legacy" and session is not None:
+            self.set_part_banner(session.part_number)
+            self.viewer_tab.render_session(session, live=False)
+            return
+
         if session is not None:
             self.set_part_banner(session.part_number)
             self.viewer_tab.render_session(session, live=(mode == "active"))

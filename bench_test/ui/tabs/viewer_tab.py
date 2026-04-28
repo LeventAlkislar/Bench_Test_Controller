@@ -45,6 +45,7 @@ except ImportError:
     _OPENPYXL_OK = False
 
 from bench_test.measurement.session import MeasurementSession, SessionStatus
+from bench_test.measurement.legacy_session import LegacySession
 from bench_test.measurement.aggregator import Aggregator, AggregatorError
 from bench_test.measurement.log_parser import LogParser, ParseResult, StepEvent, SystemEvent
 from bench_test.ui.widgets import _btn
@@ -421,44 +422,54 @@ class ViewerTab(QWidget):
         sessions.sort(key=lambda item: item.created_at)
         return sessions
 
+
     def _browse_session(self):
         """Geçmiş session dizinini kullanıcı seçer."""
         path = open_dir(self, "Session Dizini Seç", "browse_session")
         if not path:
             return
 
-        # session.json var mı?
+        # ── 1. Yol: session.json var mı? ─────────────────────────────
         json_path = os.path.join(path, "session.json")
-        if not os.path.isfile(json_path):
-            history_sessions = self._find_history_sessions(path)
-            if not history_sessions:
-                QMessageBox.warning(self, "Viewer",
-                    "Seçilen dizin geçerli bir session veya part klasörü değil.\n"
-                    "Lütfen session.json içeren bir session dizini veya altında "
-                    "session klasörleri bulunan bir part dizini seçin.")
+        if os.path.isfile(json_path):
+            try:
+                session = MeasurementSession.load(path)
+            except Exception as e:
+                QMessageBox.critical(self, "Viewer",
+                                     f"Session yüklenemedi:\n{e}")
                 return
+            mw = self._get_main_window()
+            if mw:
+                mw.switch_display(session, "archived")
+            else:
+                self._load_session(session)
+            self.session_loaded.emit(str(session.session_dir))
+            return
 
+        # ── 2. Yol: Alt klasörlerde session.json var mı? (history) ────
+        history_sessions = self._find_history_sessions(path)
+        if history_sessions:
             mw = self._get_main_window()
             if mw:
                 mw.switch_display(None, "history", history_sessions=history_sessions)
                 return
             self.render_history(history_sessions)
             return
-        if not os.path.isfile(json_path):
-            QMessageBox.warning(self, "Viewer",
-                "Seçilen dizinde session.json bulunamadı.\n"
-                "Lütfen geçerli bir session dizini seçin.")
+
+        # ── 3. Yol: Legacy mod — xlsx veya csv var mı? ────────────────
+        legacy = LegacySession.discover(path)
+        if legacy:
+            mw = self._get_main_window()
+            if mw:
+                mw.switch_display(legacy, "legacy")
+            else:
+                self._load_session(legacy)
             return
 
-        try:
-            session = MeasurementSession.load(path)
-        except Exception as e:
-            QMessageBox.critical(self, "Viewer",
-                f"Session yüklenemedi:\n{e}")
-            return
+        QMessageBox.warning(self, "Viewer",
+                            "Seçilen dizinde tanınan veri bulunamadı.\n"
+                            "session.json, standart xlsx veya CSV dosyası aranır.")
 
-        self._load_session(session)
-        self.session_loaded.emit(str(session.session_dir))
 
     def _load_session(self, session: MeasurementSession):
         """Session nesnesini set eder ve grafiği yeniler."""
@@ -560,6 +571,15 @@ class ViewerTab(QWidget):
             return
 
         s = self._session
+        # Legacy session özel meta
+        if isinstance(s, LegacySession):
+            self.meta_lbl.setText(
+                f"<b>Part:</b> {s.part_number}<br>"
+                f"<b>Mode:</b> <span style='color:#FF9800'>Legacy</span><br>"
+                f"<b>Dir:</b> <small>{s.session_dir}</small>"
+            )
+            self.session_lbl.setText(f"{s.part_number}  [legacy]")
+            return
         created = s.created_at.strftime("%Y-%m-%d %H:%M:%S")
         status_color = {
             "completed"  : "#4CAF50",
@@ -980,26 +1000,15 @@ class ViewerTab(QWidget):
 
             label = self._step_label(ev)
 
-            # STEP: Sx Px içerenler
-            if label.startswith("S") and " P" in label:
-                color = _C_STEP_LINE  # kırmızı
-                width = 1  # ince
+            label = self._step_label(ev)
 
-            # RESET: diğer step eventler
-            else:
-                color = _C_RESET_LINE  # turuncu
-                width = 3  # kalın
-
-            # Port/Load-Inject önceliği label içeriğinden değil event alanlarından gelsin.
+            # port_a değiştiyse kırmızı kalın; sadece valve_b değiştiyse turuncu ince.
             if ev.port_a is not None:
-                color = _C_STEP_LINE
-                width = 3
-            elif ev.valve_b is not None:
-                color = _C_RESET_LINE
+                color = _C_STEP_LINE    # kırmızı
                 width = 1
             else:
-                color = _C_RESET_LINE
-                width = 3
+                color = _C_RESET_LINE   # turuncu
+                width = 1
 
             self._add_vline(t, color, label, width=width)
 
@@ -1008,8 +1017,15 @@ class ViewerTab(QWidget):
             t = ev.timestamp.timestamp()
             if not (t_min <= t <= t_max):
                 continue
-            color = _SYSTEM_COLORS.get(ev.event_type, _C_PAUSED)
-            self._add_vline(t, color, ev.event_type.upper(), dashed=True)
+            if ev.event_type in ("started", "stopped", "error"):
+                self._add_measure_marker(
+                    t,
+                    is_start=(ev.event_type == "started"),
+                )
+            else:
+                # paused / resumed → dashed line olarak kalır
+                color = _SYSTEM_COLORS.get(ev.event_type, _C_PAUSED)
+                self._add_vline(t, color, ev.event_type.upper(), dashed=True)
 
     def _add_vline(self, x: float, color: tuple, label: str,
                    dashed: bool = False, width: int = 1):
@@ -1171,17 +1187,13 @@ class ViewerTab(QWidget):
 
     def _step_label(self, ev: StepEvent) -> str:
         """Step marker için kısa etiket: '50.0 mg/dL' veya 'P3'"""
-        parts = []
         if ev.port_a:
             glucose_map = get_value("port_glucose", {})
             mg = glucose_map.get(str(ev.port_a))
             if mg is not None:
-                parts.append(f"{float(mg):.0f} mg/dL")
-            else:
-                parts.append(f"P{ev.port_a}")
-        if ev.loop_info:
-            parts.append(ev.loop_info)
-        return " ".join(parts) if parts else ""
+                return f"{float(mg):.0f} mg/dL"
+            return f"P{ev.port_a}"
+        return ""
 
     def _delete_session(self):
         """Yüklü session dizinini kullanıcı onayı alarak siler."""
