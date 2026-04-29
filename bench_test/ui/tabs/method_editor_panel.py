@@ -53,7 +53,7 @@ class MethodEditorPanel(QWidget):
         layout.setSpacing(6)
 
         top_row = QHBoxLayout()
-        self.file_lbl = QLabel("Dosya yuklenmedi")
+        self.file_lbl = QLabel("File not loaded")
         self.file_lbl.setStyleSheet("color: #888; font-size: 11px;")
         self.file_lbl.setWordWrap(True)
         top_row.addWidget(self.file_lbl, stretch=1)
@@ -196,7 +196,7 @@ class MethodEditorPanel(QWidget):
             root = tree.getroot()
             technic = root.find("technic")
             if technic is None:
-                raise ValueError(".tp dosyasinda <technic> bulunamadi.")
+                raise ValueError("<technic> not found in .tp file.")
 
             tech_id = technic.get("id", "")
             self.technic_lbl.setText(
@@ -267,7 +267,7 @@ class MethodEditorPanel(QWidget):
             self.tp_loaded.emit(path)
 
         except Exception as e:
-            QMessageBox.critical(self, "Hata", f".tp yuklenemedi:\n{e}")
+            QMessageBox.critical(self, "Error", f"Failed to load .tp:\n{e}")
 
     def _restore_last_method(self):
         path = get_value("last_method_file", "")
@@ -278,7 +278,7 @@ class MethodEditorPanel(QWidget):
             self.load_from_path(path)
             return
 
-        self.file_lbl.setText(f"Bulunamadi: {os.path.basename(path)}")
+        self.file_lbl.setText(f"Not found: {os.path.basename(path)}")
         self.file_lbl.setStyleSheet("color: #F44336; font-size: 11px;")
         self.file_lbl.setToolTip(path)
 
@@ -302,7 +302,7 @@ class MethodEditorPanel(QWidget):
     def clear(self):
         """MethodEditorPanel'i açılış haline getirir."""
         self._current_path = ""
-        self.file_lbl.setText("Dosya yuklenmedi")
+        self.file_lbl.setText("File not loaded")
         self.file_lbl.setStyleSheet("color: #888; font-size: 11px;")
         self.file_lbl.setToolTip("")
 

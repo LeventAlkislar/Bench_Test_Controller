@@ -56,14 +56,14 @@ class RecipeRunner(threading.Thread):
         try:
             from bench_test.dropview import automator
             if automator.window_exists(automator.DROPVIEW_WINDOW_NAME):
-                self._log(f"| Adim {step_num} hatasi sonrasi DropView temizleniyor...")
+                self._log(f"| Cleaning up DropView after step {step_num} error...")
                 ok = self.dropview_ctrl.do_exit_dropview(log_fn=self._log)
                 if ok:
-                    self._log("| DropView cleanup tamamlandi.")
+                    self._log("| DropView cleanup completed.")
                 else:
-                    self._log("| UYARI: DropView cleanup denendi ancak basarisiz dondu.")
+                    self._log("| WARNING: DropView cleanup was attempted but returned failure.")
         except Exception as e:
-            self._log(f"| UYARI: DropView cleanup basarisiz: {e}")
+            self._log(f"| WARNING: DropView cleanup failed: {e}")
 
     def _log(self, msg):
         self.status_queue.put(("log", msg))
@@ -85,18 +85,18 @@ class RecipeRunner(threading.Thread):
         dv     = self.dropview_ctrl
 
         if action == "start_dropview" and dv:
-            self._log("DropView başlatılıyor ve DropSens bağlanıyor...")
+            self._log("Launching DropView and connecting DropSens...")
             ok = dv.do_start_dropview(log_fn=self._log)
             if not ok:
-                self.status_queue.put(("error", f"Adım {step_num}: Start DropView başarısız."))
+                self.status_queue.put(("error", f"Step {step_num}: Start DropView failed."))
                 self._cleanup_dropview(step_num)
                 return False
 
         elif action == "start_measure" and dv:
             if not self._check_dropview_connected():
                 self.status_queue.put(("error",
-                    f"Adım {step_num}: DropView bağlantısı yok — ölçüm başlatılamadı. "
-                    "Lütfen önce Start DropView adımı ekleyin."))
+                    f"Step {step_num}: DropView is not connected — measurement could not be started. "
+                    "Please add a Start DropView step first."))
                 self._cleanup_dropview(step_num)
                 return False
             scr_path = self.session_scr_path or step.dropview_scr
@@ -104,22 +104,22 @@ class RecipeRunner(threading.Thread):
                 self._log(f"Script: {scr_path}")
             ok = dv.do_start_measure(scr_path, log_fn=self._log)
             if not ok:
-                self.status_queue.put(("error", f"Adım {step_num}: Start Measure başarısız."))
+                self.status_queue.put(("error", f"Step {step_num}: Start Measure failed."))
                 self._cleanup_dropview(step_num)
                 return False
 
         elif action == "stop_measure" and dv:
-            self._log("Ölçüm durduruluyor...")
+            self._log("Stopping measurement...")
             ok = dv.do_stop_measure(log_fn=self._log)
             if not ok:
-                self.status_queue.put(("error", f"Adım {step_num}: Stop Measure başarısız."))
+                self.status_queue.put(("error", f"Step {step_num}: Stop Measure failed."))
                 return False
 
         elif action == "exit_dropview" and dv:
-            self._log("DropView kapatılıyor...")
+            self._log("Closing DropView...")
             ok = dv.do_exit_dropview(log_fn=self._log)
             if not ok:
-                self.status_queue.put(("error", f"Adım {step_num}: Exit DropView başarısız."))
+                self.status_queue.put(("error", f"Step {step_num}: Exit DropView failed."))
                 return False
 
         # ── Valf A ────────────────────────────────────────────
@@ -134,7 +134,7 @@ class RecipeRunner(threading.Thread):
             time.sleep(0.3)
             self.controller_a.wait_for_completion(timeout=20.0)
         elif step.port > 0 and self.simulation_mode:
-            self._log(f"SIMULATED: Valve A -> Port {step.port} (bağlantı yok, atlandı)")
+            self._log(f"SIMULATED: Valve A -> Port {step.port} (not connected, skipped)")
 
         # ── Valf B ────────────────────────────────────────────
         if step.valve_b_state > 0 and self.controller_b and self.controller_b.is_connected():
@@ -150,7 +150,7 @@ class RecipeRunner(threading.Thread):
             self.controller_b.wait_for_completion(timeout=20.0)
         elif step.valve_b_state > 0 and self.simulation_mode:
             state_name = InjectorValveController.STATE_NAMES.get(step.valve_b_state, "")
-            self._log(f"SIMULATED: Valve B -> {state_name} (bağlantı yok, atlandı)")
+            self._log(f"SIMULATED: Valve B -> {state_name} (not connected, skipped)")
 
         if step.duration_minutes <= 0:
             return True
@@ -206,7 +206,7 @@ class RecipeRunner(threading.Thread):
 
         self.recipe_start_t = time.time()
         self.current_loop_count = loop_count
-        self.status_queue.put(("started", f"Recipe '{recipe.name}' başlatıldı."))
+        self.status_queue.put(("started", f"Recipe '{recipe.name}' started."))
 
         for loop_i in range(loop_count):
             self.current_loop_index = loop_i + 1
@@ -237,7 +237,7 @@ class RecipeRunner(threading.Thread):
                 step = steps[idx]
                 ok = self._execute_step(step, step_num, total, loop_info)
                 if not ok:
-                    self.status_queue.put(("stopped", "Recipe durduruldu."))
+                    self.status_queue.put(("stopped", "Recipe stopped."))
                     return
 
-        self.status_queue.put(("finished", f"Recipe '{recipe.name}' tamamlandı."))
+        self.status_queue.put(("finished", f"Recipe '{recipe.name}' completed."))

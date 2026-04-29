@@ -61,20 +61,20 @@ class ScriptParamsPanel(QWidget):
         # ── Otomatik alanlar (salt-okunur) ────────────────────
         self.method_edit = QLineEdit()
         self.method_edit.setReadOnly(True)
-        self.method_edit.setPlaceholderText("Method .tp yüklenince dolar")
+        self.method_edit.setPlaceholderText("Auto-filled when method is loaded")
         self.method_edit.setStyleSheet("color: #888; font-style: italic;")
         params_form.addRow("Method File:", self.method_edit)
 
         self.csv_edit = QLineEdit()
         self.csv_edit.setReadOnly(True)
-        self.csv_edit.setPlaceholderText("Part Number girilince dolar")
+        self.csv_edit.setPlaceholderText("Auto-filled when Part Number is entered")
         self.csv_edit.setStyleSheet("color: #888; font-style: italic;")
         params_form.addRow("CSV File:", self.csv_edit)
 
         layout.addWidget(params_grp)
 
         # ── Deney koşulları ───────────────────────────────────
-        exp_grp = QGroupBox("Measurement Conditions")
+        exp_grp = QGroupBox("Experiment Conditions")
         exp_form = QFormLayout(exp_grp)
 
         # ── Sıcaklık ayarları ─────────────
@@ -92,7 +92,7 @@ class ScriptParamsPanel(QWidget):
         self.flow_spin = QDoubleSpinBox()
         self.flow_spin.setRange(0.0, 100.0)
         self.flow_spin.setDecimals(1)
-        self.flow_spin.setSuffix(" mL/dk")
+        self.flow_spin.setSuffix(" mL/min")
         self.flow_spin.setValue(get_value("flow_rate_ml_min", 0.0))
         self.flow_spin.valueChanged.connect(
             lambda v: remember_value("flow_rate_ml_min", v)
@@ -108,7 +108,7 @@ class ScriptParamsPanel(QWidget):
         layout.addWidget(exp_grp)
 
         # ── Port - Glikoz Eşlemesi ────────────────────────────
-        glucose_grp = QGroupBox("Port – Glucose Match")
+        glucose_grp = QGroupBox("Port – Glucose Mapping")
         glucose_outer = QHBoxLayout(glucose_grp)
         glucose_outer.setSpacing(10)
 

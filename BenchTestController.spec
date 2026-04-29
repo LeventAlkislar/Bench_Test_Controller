@@ -5,15 +5,12 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[
-        ('bench_test/dropview/img', 'bench_test/dropview/img'),
-        ('bench_test/ui/assets', 'bench_test/ui/assets'),
-    ],
+    datas=[('bench_test\\dropview\\img', 'bench_test\\dropview\\img'), ('bench_test\\ui\\assets', 'bench_test\\ui\\assets')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=['PIL._avif'],
     noarchive=False,
     optimize=0,
 )
@@ -38,5 +35,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon='bench_test/ui/assets/app_icon.ico',
+    icon=['bench_test\\ui\\assets\\app_icon.ico'],
 )

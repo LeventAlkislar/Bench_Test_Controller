@@ -60,7 +60,7 @@ class PackageTab(QWidget):
             try:
                 self._log_writer.close()
             except Exception as e:
-                self._log(f"⚠ LogWriter kapatılamadı: {e}")
+                self._log(f"⚠ Failed to close LogWriter: {e}")
 
     # ── UI ────────────────────────────────────────────────────────
 
@@ -81,7 +81,7 @@ class PackageTab(QWidget):
         pkg_row = QHBoxLayout()
         self.package_root_edit = QLineEdit()
         self.package_root_edit.setReadOnly(True)
-        self.package_root_edit.setPlaceholderText("Paket kök dizini seçilmedi...")
+        self.package_root_edit.setPlaceholderText("Package root not selected...")
         self.package_root_edit.setText(get_last("package_root", ""))
         pkg_row.addWidget(self.package_root_edit)
         pkg_row.addWidget(_btn("Browse", self._browse_package_root))
@@ -108,7 +108,7 @@ class PackageTab(QWidget):
         status_grp = QGroupBox("Package Status")
         status_lay = QVBoxLayout(status_grp)
 
-        self.status_lbl = QLabel("Paket oluşturulmadı")
+        self.status_lbl = QLabel("Package not created")
         self.status_lbl.setStyleSheet(f"color: {_COLOR_NONE}; font-weight: bold;")
         status_lay.addWidget(self.status_lbl)
 
@@ -121,15 +121,15 @@ class PackageTab(QWidget):
         btn_row.addStretch()
         self.create_pkg_btn = _btn("Create Package", self._create_package)
         self.create_pkg_btn.setEnabled(False)   # şimdilik pasif
-        self.create_pkg_btn.setToolTip("Henüz aktif değil — recipe başlarken otomatik oluşturulur")
+        self.create_pkg_btn.setToolTip("Not active yet — created automatically when recipe starts")
         btn_row.addWidget(self.create_pkg_btn)
 
         self.aggregate_btn = _btn("Aggregate CSVs → xlsx", self._run_aggregator)
         self.aggregate_btn.setEnabled(False)
         self.aggregate_btn.setToolTip(
-            "CSV ölçümlerini birleştirip xlsx oluşturur.\n"
-            "Recipe tamamlandığında otomatik çalışır,\n"
-            "ya da buradan manuel tetikleyebilirsiniz.")
+            "Merges CSV measurements into xlsx.\n"
+            "Runs automatically when recipe completes,\n"
+            "or can be triggered manually here.")
         btn_row.addWidget(self.aggregate_btn)
         status_lay.addLayout(btn_row)
 
@@ -192,7 +192,7 @@ class PackageTab(QWidget):
             lbl.setToolTip(path)
             lbl.setStyleSheet(f"color: {_COLOR_READY};")
         elif path:
-            lbl.setText(f"Bulunamadı: {os.path.basename(path)}")
+            lbl.setText(f"Not found: {os.path.basename(path)}")
             lbl.setToolTip(path)
             lbl.setStyleSheet(f"color: {_COLOR_ERROR};")
         else:
@@ -209,10 +209,10 @@ class PackageTab(QWidget):
         part = self.part_number_edit.text().strip()
         root = self.package_root_edit.text().strip()
         if part and root:
-            self.status_lbl.setText("Hazır — recipe başlatıldığında paket oluşturulacak")
+            self.status_lbl.setText("Ready — package will be created when recipe starts")
             self.status_lbl.setStyleSheet(f"color: {_COLOR_READY};")
         else:
-            self.status_lbl.setText("Paket oluşturulmadı")
+            self.status_lbl.setText("Package not created")
             self.status_lbl.setStyleSheet(f"color: {_COLOR_NONE};")
 
     def _set_status(self, text: str, color: str):
@@ -222,7 +222,7 @@ class PackageTab(QWidget):
     # ── Browse ────────────────────────────────────────────────────
 
     def _browse_package_root(self):
-        path = open_dir(self, "Paket Kök Dizini Seç", "package_root")
+        path = open_dir(self, "Select Package Root Directory", "package_root")
         if path:
             self.package_root_edit.setText(path)
             self._refresh_status()
@@ -251,7 +251,7 @@ class PackageTab(QWidget):
         """
         # Aktif session varsa yeniden paket oluşturma
         if self._session is not None:
-            self._log("⚠ Aktif oturum zaten var — mevcut oturum kullanılıyor.")
+            self._log("⚠ Active session already exists — reusing current session.")
             return True
 
         self._refresh_refs()
@@ -261,21 +261,21 @@ class PackageTab(QWidget):
 
         # ── Validasyon ────────────────────────────────────────────
         if not part_number:
-            QMessageBox.warning(self, "Uyarı",
-                "Part Number boş olamaz.\nPackage sekmesinden girin.")
+            QMessageBox.warning(self, "Warning",
+                "Part Number cannot be empty.\nEnter it from the Package tab.")
             return False
 
         if not package_root or not os.path.isdir(package_root):
-            QMessageBox.warning(self, "Uyarı",
-                "Geçerli bir Package Root dizini seçilmemiş.\n"
-                "Package sekmesinden seçin.")
+            QMessageBox.warning(self, "Warning",
+                "No valid Package Root directory selected.\n"
+                "Select it from the Package tab.")
             return False
 
         scr_path = self.script_tab.get_current_scr_path() if self.script_tab else ""
         if not scr_path or not os.path.isfile(scr_path):
-            QMessageBox.warning(self, "Uyarı",
-                "Script dosyası (.scr) seçilmemiş.\n"
-                "Script Editor sekmesinden bir .scr dosyası yükleyin.")
+            QMessageBox.warning(self, "Warning",
+                "Script file (.scr) not selected.\n"
+                "Load a .scr file from the Script Editor tab.")
             return False
 
         # ── Paketleme ─────────────────────────────────────────────
@@ -287,13 +287,13 @@ class PackageTab(QWidget):
             tp_path = self.script_tab.method_edit.text().strip()
             if tp_path and os.path.isfile(tp_path):
                 packager.pack_tp(tp_path)
-                self._log(f"✓ .tp kopyalandı: {os.path.basename(tp_path)}")
+                self._log(f"✓ .tp copied: {os.path.basename(tp_path)}")
             else:
-                self._log("⚠ .tp dosyası bulunamadı, atlandı.")
+                self._log("⚠ .tp file not found, skipped.")
 
             # .scr — CSV yolu measurements/ dizinine yönlendirilir
             packager.pack_script(scr_path)
-            self._log(f"✓ .scr kopyalandı ve güncellendi: {os.path.basename(scr_path)}")
+            self._log(f"✓ .scr copied and updated: {os.path.basename(scr_path)}")
 
             # recipe.json
             recipe_path = ""
@@ -301,9 +301,9 @@ class PackageTab(QWidget):
                 recipe_path = self.recipe_tab._current_recipe_path or ""
             if recipe_path and os.path.isfile(recipe_path):
                 packager.pack_recipe(recipe_path)
-                self._log(f"✓ recipe kopyalandı: {os.path.basename(recipe_path)}")
+                self._log(f"✓ recipe copied: {os.path.basename(recipe_path)}")
             else:
-                self._log("⚠ recipe dosyası bulunamadı, atlandı.")
+                self._log("⚠ recipe file not found, skipped.")
 
             packager.finalize()
 
@@ -311,12 +311,12 @@ class PackageTab(QWidget):
             new_scr = packager.get_packed_scr_path()
             if new_scr and self.script_tab:
                 self.script_tab._load_from_path(new_scr)
-                self._log(f"✓ Script Editor güncellendi → {new_scr}")
+                self._log(f"✓ Script Editor updated → {new_scr}")
 
             # Durum güncelle
             session_name = os.path.basename(self._session.session_dir)
             self._set_status(
-                f"Aktif: {part_number} / {session_name}",
+                f"Active: {part_number} / {session_name}",
                 _COLOR_RUNNING)
             self.session_dir_lbl.setText(self._session.session_dir)
             self.aggregate_btn.setEnabled(True)
@@ -325,25 +325,25 @@ class PackageTab(QWidget):
             self._log_writer = LogWriter(self._session)
             self._log_writer.open()
 
-            self._log(f"Paket oluşturuldu: {self._session.session_dir}")
-            self.log_signal.emit(f"Paket oluşturuldu: {self._session.session_dir}")
+            self._log(f"Package created: {self._session.session_dir}")
+            self.log_signal.emit(f"Package created: {self._session.session_dir}")
             self.sm.build(self._session)
             return True
 
         except PackagerError as e:
             self._session = None
-            QMessageBox.critical(self, "Paket Hatası", str(e))
-            self._log(f"✗ Paket hatası: {e}")
-            self.log_signal.emit(f"Paket hatası: {e}")
-            self._set_status("Hata — paket oluşturulamadı", _COLOR_ERROR)
+            QMessageBox.critical(self, "Package Error", str(e))
+            self._log(f"✗ Package error: {e}")
+            self.log_signal.emit(f"Package error: {e}")
+            self._set_status("Error — package could not be created", _COLOR_ERROR)
             return False
 
         except Exception as e:
             self._session = None
-            QMessageBox.critical(self, "Hata", f"Paket oluşturulamadı:\n{e}")
-            self._log(f"✗ Beklenmeyen hata: {e}")
-            self.log_signal.emit(f"Paket hatası: {e}")
-            self._set_status("Hata — paket oluşturulamadı", _COLOR_ERROR)
+            QMessageBox.critical(self, "Error", f"Failed to create package:\n{e}")
+            self._log(f"✗ Unexpected error: {e}")
+            self.log_signal.emit(f"Package error: {e}")
+            self._set_status("Error — package could not be created", _COLOR_ERROR)
             return False
 
     def write_to_log(self, msg: str):
@@ -358,8 +358,8 @@ class PackageTab(QWidget):
         """RecipeTab recipe tamamlandığında çağırır."""
         if self._session:
             self._set_status(
-                f"Tamamlandı: {self._session.part_number}", _COLOR_DONE)
-            self._log("Oturum tamamlandı.")
+                f"Completed: {self._session.part_number}", _COLOR_DONE)
+            self._log("Session completed.")
         self.sm.finish()
 
     # ── Aggregator ────────────────────────────────────────────────
@@ -368,27 +368,27 @@ class PackageTab(QWidget):
         """Manuel buton — kullanıcı istediğinde aggregate çalıştırır."""
         if not self._session:
             QMessageBox.warning(self, "Aggregator",
-                                "Aktif oturum yok.\nÖnce bir recipe çalıştırın.")
+                                "No active session.\nRun a recipe first.")
             return
         if self.sm.state == "running":
             QMessageBox.warning(self, "Aggregator",
-                                "Recipe çalışıyor.\nBitmesini bekleyin veya durdurun.")
+                                "Recipe is running.\nWait for it to finish or stop it.")
             return
         aggregator = Aggregator(self._session)
         xlsx_path = aggregator.run(parent=self)
         if xlsx_path:
-            self._log(f"✓ Aggregate tamamlandı: {os.path.basename(xlsx_path)}")
-            self.log_signal.emit(f"Aggregate tamamlandı: {xlsx_path}")
+            self._log(f"✓ Aggregate complete: {os.path.basename(xlsx_path)}")
+            self.log_signal.emit(f"Aggregate complete: {xlsx_path}")
         else:
-            self._log("⚠ Aggregate iptal edildi veya başarısız.")
+            self._log("⚠ Aggregate cancelled or failed.")
         self._ask_keep_session()
 
     def on_recipe_aborted(self):
         """RecipeTab recipe durdurulduğunda çağırır."""
         if self._session:
             self._set_status(
-                f"Durduruldu: {self._session.part_number}", _COLOR_ERROR)
-            self._log("Oturum durduruldu.")
+                f"Stopped: {self._session.part_number}", _COLOR_ERROR)
+            self._log("Session stopped.")
         self.sm.stop()
 
     def _ask_keep_session(self):
@@ -407,11 +407,11 @@ class PackageTab(QWidget):
 
         reply = QMessageBox.question(
             self,
-            "Oturumu Sakla",
-            f"Oturum: {part_number}  [{status}]\n"
+            "Archive Session",
+            f"Session: {part_number}  [{status}]\n"
             f"{session_dir}\n\n"
-            f"Bu oturum kaydedilsin mi?\n"
-            f"'Hayır' seçerseniz tüm dosyalar silinir.",
+            f"Keep this session?\n"
+            f"Selecting 'No' will delete all files.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.Yes,
         )
@@ -420,13 +420,13 @@ class PackageTab(QWidget):
             self._close_log_writer()
             try:
                 shutil.rmtree(session_dir)
-                self._log(f"Oturum silindi: {session_dir}")
-                self.log_signal.emit(f"Oturum silindi: {session_dir}")
+                self._log(f"Session deleted: {session_dir}")
+                self.log_signal.emit(f"Session deleted: {session_dir}")
             except Exception as e:
-                self._log(f"✗ Dizin silinemedi: {e}")
-                QMessageBox.warning(self, "Hata", f"Dizin silinemedi:\n{e}")
+                self._log(f"✗ Failed to delete directory: {e}")
+                QMessageBox.warning(self, "Error", f"Failed to delete directory:\n{e}")
         else:
-            self._log(f"Oturum saklandı: {session_dir}")
+            self._log(f"Session archived: {session_dir}")
             self._close_log_writer()
 
         # Her durumda session'ı kapat — yeni recipe yeni session açar
@@ -435,7 +435,7 @@ class PackageTab(QWidget):
         self.sm.reset()
         self.aggregate_btn.setEnabled(False)
         self.session_dir_lbl.setText("")
-        self._set_status("Hazır — yeni recipe başlatılabilir", _COLOR_READY)
+        self._set_status("Ready — new recipe can be started", _COLOR_READY)
 
     def get_session(self) -> MeasurementSession:
         """Aktif oturumu döndürür. Yoksa None."""

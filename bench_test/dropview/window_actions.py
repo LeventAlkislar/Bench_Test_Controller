@@ -205,8 +205,8 @@ def _find_on_screen_in_region(image_path, hwnd, region, threshold):
     _, max_val, _, max_loc = cv2.minMaxLoc(result)
     if max_val < threshold:
         raise RuntimeError(
-            f"Goruntu ekranda bulunamadi (eslesme: {max_val:.2f} < {threshold}). "
-            f"Dosya: {os.path.basename(image_path)}"
+            f"Image not found on screen (match: {max_val:.2f} < {threshold}). "
+            f"File: {os.path.basename(image_path)}"
         )
     h, w = needle.shape[:2]
     return offset_x + rx + max_loc[0] + w // 2, offset_y + ry + max_loc[1] + h // 2
@@ -267,7 +267,7 @@ def safe_wait_for_image(
             return
         except Exception:
             time.sleep(poll_interval)
-    raise TimeoutError(f"'{os.path.basename(image_path)}' {timeout}sn icinde ekranda bulunamadi.")
+    raise TimeoutError(f"'{os.path.basename(image_path)}' was not found on screen within {timeout}s.")
 
 
 def safe_wait_for_image_gone(

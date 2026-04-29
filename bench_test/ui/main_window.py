@@ -22,6 +22,7 @@ from bench_test.ui.tabs.recipe_tab import RecipeTab
 from bench_test.ui.tabs.viewer_tab import ViewerTab
 from bench_test.valve.injector import InjectorValveController
 from bench_test.valve.multiport import ValveController
+from bench_test.version import window_title
 
 
 class RightAlignedTabBar(QTabBar):
@@ -95,7 +96,7 @@ class RightAlignedLogTabWidget(QTabWidget):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Bench Test Controller v1.0")
+        self.setWindowTitle(window_title())
         self.setMinimumSize(1200, 900)
 
         self.ctrl_a = ValveController()
@@ -163,6 +164,7 @@ class MainWindow(QMainWindow):
         self.setup_tab.sm.aggregate_done.connect(self._on_aggregate_done)
         self.setup_tab.sm.log_signal.connect(self.log_tab.append)
         self.setup_tab.sm.state_changed.connect(self._on_sm_state_changed)
+        self.setup_tab.sm.state_changed.connect(self.viewer_tab._on_session_state_changed)
         self.viewer_tab.session_loaded.connect(self._on_browse_session_loaded)
         self.setup_tab.package_panel.clear_session_requested.connect(
             self._on_clear_session
@@ -240,7 +242,7 @@ class MainWindow(QMainWindow):
             return
         self.set_part_banner("")
         self.switch_display(None, "empty")
-        self.log_tab.append("Oturum temizlendi.")
+        self.log_tab.append("Session cleared.")
 
     def set_part_banner(self, part_number: str = ""):
         """Part numarasını üst banner'da gösterir; boşsa gizler."""
@@ -255,11 +257,9 @@ class MainWindow(QMainWindow):
     def set_simulation_mode(self, active: bool, missing: str = ""):
         self.sim_banner.setVisible(active)
         if active:
-            self.setWindowTitle(
-                f"Bench Test Controller v1.0  [Simulation - {missing} missing]"
-            )
+            self.setWindowTitle(window_title(f"[Simulation - {missing} missing]"))
         else:
-            self.setWindowTitle("Bench Test Controller v1.0")
+            self.setWindowTitle(window_title())
 
     def closeEvent(self, event):
         if self.recipe_tab.recipe_runner and self.recipe_tab.recipe_runner.is_alive():

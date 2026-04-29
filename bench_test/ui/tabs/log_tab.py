@@ -45,7 +45,7 @@ class LogTab(QWidget):
         self.log.setFocus()
 
     def _save(self):
-        path = save_file(self, "Logu Kaydet", "log_dir", "Text (*.txt)", ".txt")
+        path = save_file(self, "Save Log", "log_dir", "Text (*.txt)", ".txt")
         if path:
             with open(path, "w", encoding="utf-8") as f:
                 f.write(self.log.toPlainText())
@@ -57,7 +57,7 @@ class LogTab(QWidget):
         log_path = os.path.join(session.logs_dir, "session.log")
         self.log.clear()
         if not os.path.isfile(log_path):
-            self.log.append(f"# Log dosyasi bulunamadi: {log_path}")
+            self.log.append(f"# Log file not found: {log_path}")
             return
         mode = "archived" if session.status.value != "in_progress" else "active"
         self.log.append(
@@ -75,7 +75,7 @@ class LogTab(QWidget):
 
         self.log.clear()
         if not sessions:
-            self.log.append("# History log bulunamadi.")
+            self.log.append("# History log not found.")
             return
 
         part_number = sessions[0].part_number
@@ -89,7 +89,7 @@ class LogTab(QWidget):
                 f"# --- {session.status.value.upper()} | {session.session_dir} ---"
             )
             if not os.path.isfile(log_path):
-                self.log.append(f"# Log dosyasi bulunamadi: {log_path}")
+                self.log.append(f"# Log file not found: {log_path}")
                 continue
 
             with open(log_path, encoding="utf-8", errors="replace") as f:

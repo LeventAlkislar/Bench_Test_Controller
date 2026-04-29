@@ -138,7 +138,7 @@ class ViewerTab(QWidget):
         # ── Araç çubuğu ───────────────────────────────────────────
         toolbar = QHBoxLayout()
 
-        self.session_lbl = QLabel("Oturum yüklenmedi")
+        self.session_lbl = QLabel("No session loaded")
         self.session_lbl.setStyleSheet("color: #888; font-size: 11px;")
         toolbar.addWidget(self.session_lbl, stretch=1)
 
@@ -148,7 +148,7 @@ class ViewerTab(QWidget):
 
         self.delete_btn = _btn("Delete Session", self._delete_session,  "#F44336")
         self.delete_btn.setEnabled(False)
-        self.delete_btn.setToolTip("Seçili session dizinini kalıcı olarak siler.")
+        self.delete_btn.setToolTip("Permanently deletes the selected session directory.")
         toolbar.addWidget(self.delete_btn)
 
         self.live_lbl = QLabel("")
@@ -251,8 +251,8 @@ class ViewerTab(QWidget):
 
         if not _PG_OK:
             lbl = QLabel(
-                "pyqtgraph bulunamadı.\n"
-                "Kurmak için: pip install pyqtgraph")
+                "pyqtgraph not found.\n"
+                "Install it with: pip install pyqtgraph")
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             lbl.setStyleSheet("color: #F44336; font-size: 13px;")
             layout.addWidget(lbl)
@@ -350,18 +350,13 @@ class ViewerTab(QWidget):
             return
         if self._session.status != SessionStatus.IN_PROGRESS:
             return
-
-        # CSV varsa silent aggregate — yoksa (henüz ölçüm başlamadı) sessizce atla
         try:
             agg = Aggregator(self._session)
             agg.run_silent(offset_hours=0.0)
         except AggregatorError:
-            pass  # CSV yok veya okunamadı — grafik güncellemesini atla, bir sonraki döngüde tekrar dene
-            return
+            return  # CSV yok — bir sonraki döngüde tekrar dene
         except Exception:
             return
-
-        # Aggregate başarılı — grafiği güncelle
         self._refresh(reset_view=False)
 
     # ── Session yükleme ───────────────────────────────────────────
@@ -371,7 +366,7 @@ class ViewerTab(QWidget):
         session = self._get_active_session()
         if not session:
             QMessageBox.information(self, "Viewer",
-                "Aktif oturum yok.\nÖnce bir recipe başlatın.")
+                "No active session.\nStart a recipe first.")
             return
 
         self._reset_auto_follow()
@@ -406,7 +401,7 @@ class ViewerTab(QWidget):
         self._saved_top_view_range = None
 
     def _refresh_or_load(self):
-        """Refresh: yüklü oturumu yeniler; yoksa aktif oturumu yükler."""
+        """Refresh: yüklü oturumu auto-zoom ile yeniler. Yüklü oturum yoksa aktif oturumu yükler."""
         self._reset_auto_follow()
         if self._session or self._history_sessions:
             self._refresh(reset_view=True)
@@ -431,7 +426,7 @@ class ViewerTab(QWidget):
                 sessions.append(MeasurementSession.load(entry.path))
             except Exception as exc:
                 self.log_signal.emit(
-                    f"Viewer history session atlandi: {entry.path} | {exc}"
+                    f"Viewer history session skipped: {entry.path} | {exc}"
                 )
 
         sessions.sort(key=lambda item: item.created_at)
@@ -440,7 +435,7 @@ class ViewerTab(QWidget):
 
     def _browse_session(self):
         """Geçmiş session dizinini kullanıcı seçer."""
-        path = open_dir(self, "Session Dizini Seç", "browse_session")
+        path = open_dir(self, "Select Session Directory", "browse_session")
         if not path:
             return
 
@@ -451,7 +446,7 @@ class ViewerTab(QWidget):
                 session = MeasurementSession.load(path)
             except Exception as e:
                 QMessageBox.critical(self, "Viewer",
-                                     f"Session yüklenemedi:\n{e}")
+                                     f"Failed to load session:\n{e}")
                 return
             mw = self._get_main_window()
             if mw:
@@ -482,8 +477,9 @@ class ViewerTab(QWidget):
             return
 
         QMessageBox.warning(self, "Viewer",
-                            "Seçilen dizinde tanınan veri bulunamadı.\n"
-                            "session.json, standart xlsx veya CSV dosyası aranır.")
+                            "Selected directory is not a valid session or part folder.\n"
+                            "Please select a session directory containing session.json, "
+                            "or a part directory containing session subdirectories.")
 
 
     def _load_session(self, session: MeasurementSession):
@@ -494,7 +490,7 @@ class ViewerTab(QWidget):
         # Canlı mod: sadece IN_PROGRESS iken
         if session.status == SessionStatus.IN_PROGRESS:
             self._poll_timer.start()
-            self.live_lbl.setText("⟳ Canlı mod (30sn)")
+            self.live_lbl.setText(f"⟳ Live ({POLL_INTERVAL_MS // 1000}s)")
             self.delete_btn.setEnabled(False)   # Çalışan session silinemez
         else:
             self._poll_timer.stop()
@@ -528,11 +524,12 @@ class ViewerTab(QWidget):
         self._set_plot_titles(session.part_number)
         if live and not self._poll_timer.isActive():
             self._poll_timer.start()
-            self.live_lbl.setText(f"⟳ Canlı mod ({POLL_INTERVAL_MS // 1000}sn)")
+            self.live_lbl.setText(f"⟳ Live ({POLL_INTERVAL_MS // 1000}s)")
 
     def _set_plot_titles(self, part_text: str = ""):
-        """Part bilgisini grafik başlıklarına yazar."""
-        title_opts = {"color": "k", "size": "10pt", "bold": True}
+        """Grafik export'unda gorunmesi icin part bilgisini plot title'ina yazar."""
+#        title_opts = {"color": "#1565C0", "size": "12pt", "bold": True}
+        title_opts = {"size": "10pt", "bold": True}
         if self.plot_widget_top:
             title = f"{part_text} - Raw" if part_text else ""
             self.plot_widget_top.setTitle(title, **title_opts)
@@ -547,7 +544,8 @@ class ViewerTab(QWidget):
 
         # Session durumunu diskten yenile (başka process güncelliyor olabilir)
         try:
-            json_path = os.path.join(self._session.session_dir, "session.json")
+            if self._session is not None:
+                json_path = os.path.join(self._session.session_dir, "session.json")
             if os.path.isfile(json_path):
                 refreshed = MeasurementSession.load(self._session.session_dir)
                 self._session = refreshed
@@ -625,7 +623,7 @@ class ViewerTab(QWidget):
         log_paths = self._find_logs()
         if not log_paths:
             self._parse_result = None
-            self.notes_edit.setPlainText("Log dosyası bulunamadı.")
+            self.notes_edit.setPlainText("Log file not found.")
             self.sys_edit.setPlainText("")
             return
 
@@ -812,16 +810,12 @@ class ViewerTab(QWidget):
         # Measure dot'larını doğru konuma yerleştir.
         # Yeni session yüklenince auto-range uygulanır; normal refresh'te ise
         # kullanıcının mevcut zoom/pan görünümü korunur.
-        if reset_view or self._saved_top_view_range is None:
-            self._auto_fit_top_view()
+        if reset_view or not self._manual_top_view_active or self._saved_top_view_range is None:
+            self._auto_fit_top_view(timestamps, currents)
         else:
             self._apply_saved_top_view_range()
         self._update_measure_dots_for_plot(self.plot_widget_top)
         if self.plot_widget_bottom:
-            # Alt grafik Y eksenini ust grafikten linked olarak aliyor;
-            # burada yeniden autoRange yaparsak ortak Y araligi alttaki
-            # downsample edilmis gorunume gore yeniden hesaplanabiliyor.
-            self.plot_widget_bottom.getViewBox().disableAutoRange(axis="y")
             self._update_measure_dots_for_plot(self.plot_widget_bottom)
 
     def _read_measurement_series(self):
@@ -832,7 +826,7 @@ class ViewerTab(QWidget):
                 timestamps, currents = self._read_session_measurement_data(session)
                 if not timestamps:
                     self.log_signal.emit(
-                        f"Viewer history xlsx atlandi: {session.session_dir}"
+                        f"Viewer history xlsx skipped: {session.session_dir}"
                     )
                     continue
                 label = session.created_at.strftime("%Y-%m-%d %H:%M:%S")
@@ -904,7 +898,7 @@ class ViewerTab(QWidget):
             wb.close()
             return timestamps, currents
         except Exception as e:
-            self.log_signal.emit(f"Viewer xlsx okuma hatası: {e}")
+            self.log_signal.emit(f"Viewer: failed to read xlsx: {e}")
             return [], []
 
     def _read_csvs(self, session: MeasurementSession):
@@ -1072,7 +1066,7 @@ class ViewerTab(QWidget):
             })
 
         font = QFont()
-        font.setPointSize(10)  # daha büyük
+        font.setPointSize(8)  # daha büyük
         font.setBold(True)  # bold
         line_top.label.setFont(font)
 
@@ -1098,7 +1092,7 @@ class ViewerTab(QWidget):
                 })
 
             font = QFont()
-            font.setPointSize(10)  # daha büyük
+            font.setPointSize(8)  # daha büyük
             font.setBold(True)  # bold
             line_bottom.label.setFont(font)
 
@@ -1212,16 +1206,34 @@ class ViewerTab(QWidget):
         finally:
             self._applying_top_view_state = False
 
-    def _auto_fit_top_view(self):
-        """Üst grafiğe kontrollü bir kez auto-fit uygular ve sonucu saklar."""
-        if not self.plot_widget_top:
+    def _auto_fit_top_view(self, timestamps=None, currents=None):
+        """Üst grafiği yalnızca gerçek veri serisine göre fit eder."""
+        if not self.plot_widget_top or not timestamps or not currents:
             return
+
+        x_min = min(timestamps)
+        x_max = max(timestamps)
+        y_min = min(currents)
+        y_max = max(currents)
+
+        if x_min == x_max:
+            x_max = x_min + 1.0
+        if y_min == y_max:
+            y_max = y_min + 1.0
+
+        y_pad = (y_max - y_min) * 0.08
+        if y_pad <= 0:
+            y_pad = 1.0
 
         top_view_box = self.plot_widget_top.getViewBox()
         self._applying_top_view_state = True
         try:
-            top_view_box.enableAutoRange()
-            top_view_box.autoRange()
+            top_view_box.disableAutoRange()
+            top_view_box.setRange(
+                xRange=[x_min, x_max],
+                yRange=[y_min - y_pad, y_max + y_pad],
+                padding=0,
+            )
         finally:
             self._applying_top_view_state = False
         self._save_current_top_view_range(manual=False)
@@ -1258,12 +1270,12 @@ class ViewerTab(QWidget):
 
         reply = QMessageBox.question(
             self,
-            "Session Sil",
-            f"Bu işlem geri alınamaz!\n\n"
-            f"Silinecek: {part_number}\n"
+            "Delete Session",
+            f"This action cannot be undone!\n\n"
+            f"Session: {part_number}\n"
             f"{session_dir}\n\n"
-            f"Tüm dosyalar (CSV, xlsx, log) kalıcı olarak silinecek.\n"
-            f"Devam edilsin mi?",
+            f"All files (CSV, xlsx, log) will be permanently deleted.\n"
+            f"Continue?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -1273,20 +1285,20 @@ class ViewerTab(QWidget):
 
         try:
             shutil.rmtree(session_dir)
-            self.log_signal.emit(f"Session silindi: {session_dir}")
+            self.log_signal.emit(f"Session deleted: {session_dir}")
         except Exception as e:
             import traceback
             err = f"{type(e).__name__}: {e}"
             self.log_signal.emit(err)
             self.log_signal.emit(traceback.format_exc())
-            QMessageBox.critical(self, "Hata", f"Dizin silinemedi:\n{err}")
+            QMessageBox.critical(self, "Error", f"Failed to delete directory:\n{err}")
             return
 
         # UI temizle
         self._session = None
         self._history_sessions = []
         self._parse_result = None
-        self.session_lbl.setText("Oturum silindi")
+        self.session_lbl.setText("Session deleted")
         self.meta_lbl.setText("—")
         self.notes_edit.clear()
         self.sys_edit.clear()
@@ -1306,7 +1318,7 @@ class ViewerTab(QWidget):
         if not self.plot_widget_top:
             return
         text = pg.TextItem(
-            "Veri bulunamadı.\nÖnce Aggregator çalıştırın veya CSV bekleyin.",
+            "No data found.\nRun the aggregator first or wait for CSV output.",
             color=(150, 150, 150), anchor=(0.5, 0.5))
         self.plot_widget_top.addItem(text)
         text.setPos(0, 0)
@@ -1555,7 +1567,7 @@ class ViewerTab(QWidget):
                 self._load_active_session()
             if self._session:
                 self._poll_timer.start()
-                self.live_lbl.setText(f"⟳ Canlı mod ({POLL_INTERVAL_MS // 1000}sn)")
+                self.live_lbl.setText(f"⟳ Live ({POLL_INTERVAL_MS // 1000}s)")
                 self._refresh(reset_view=False)
             return
         if state_norm == "idle":
@@ -1577,7 +1589,7 @@ class ViewerTab(QWidget):
 
         self._poll_timer.stop()
         self.live_lbl.setText("")
-        self.session_lbl.setText("Oturum yüklenmedi")
+        self.session_lbl.setText("No session loaded")
         self.session_lbl.setStyleSheet("color: #888; font-size: 11px;")
         self.meta_lbl.setText("—")
         self.notes_edit.clear()

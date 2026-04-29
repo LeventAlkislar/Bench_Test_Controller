@@ -148,7 +148,7 @@ class ManualControlTab(QWidget):
         sb.addWidget(self.speed_lbl)
         sb.addStretch()
         left_col.addLayout(sb)
-        left_col.addWidget(_lbl("Not: 'Temporary' cihaz kapanınca sıfırlanır. 'Permanent' yeniden başlatma gerektirir.", color="#888"))
+        left_col.addWidget(_lbl("Note: 'Temporary' resets on power-off. 'Permanent' requires a device restart.", color="#888"))
         left_col.addStretch()
 
         # ── Sağ: Port butonları ───────────────────────────────
@@ -309,8 +309,8 @@ class ManualControlTab(QWidget):
         fld.addLayout(row_prog)
 
         fld.addWidget(_lbl(
-            "Start DropView: DropView'i başlatır           |  Exit DropView: DropView'i kapatır (Alt+F4)\n"
-            "Connect: DropSens bağlantısı kurar (Ctrl+C)  |  Disconnect: DropSens bağlantısını keser (Ctrl+D)",
+            "Start DropView: launches DropView             |  Exit DropView: closes DropView (Alt+F4)\n"
+            "Connect: establishes DropSens connection (Ctrl+C)  |  Disconnect: disconnects DropSens (Ctrl+D)",
             color="#888"))
 
         return gd
@@ -476,7 +476,7 @@ class ManualControlTab(QWidget):
                                              Q_ARG(str, f"Failed: {r.get('error', '')}"))
                     self.log_signal.emit(f"Valve A switch failed: {r.get('error', '')}")
             except Exception as e:
-                self.log_signal.emit(f"HATA _switch_port: {e}")
+                self.log_signal.emit(f"ERROR _switch_port: {e}")
 
         threading.Thread(target=_run, daemon=True).start()
 
@@ -634,15 +634,15 @@ class ManualControlTab(QWidget):
     # ──────────────────────────────────────────────────────────
 
     def _dv_launch(self):
-        self.dv_status.setText("● Başlatılıyor...")
+        self.dv_status.setText("● Starting...")
         self.dv_status.setStyleSheet("color:#FF9800;")
-        self.log_signal.emit("DropView başlatılıyor...")
+        self.log_signal.emit("Launching DropView...")
         self.dv_ctrl.do_launch_dropview(log_fn=lambda msg: self.log_signal.emit(msg))
 
     def _dv_connect(self):
-        self.dv_status.setText("● Bağlanıyor...")
+        self.dv_status.setText("● Connecting...")
         self.dv_status.setStyleSheet("color:#FF9800;")
-        self.log_signal.emit("DropSens bağlanıyor...")
+        self.log_signal.emit("Connecting DropSens...")
         com = self.port_dv.currentText()
         remember_value("dropsens_com", com)
         self.dv_ctrl.do_connect_dropsens(
@@ -651,15 +651,15 @@ class ManualControlTab(QWidget):
         )
 
     def _dv_disconnect(self):
-        self.dv_status.setText("● Bağlantı kesiliyor...")
+        self.dv_status.setText("● Disconnecting...")
         self.dv_status.setStyleSheet("color:#FF9800;")
-        self.log_signal.emit("DropSens bağlantısı kesiliyor...")
+        self.log_signal.emit("Disconnecting DropSens...")
         self.dv_ctrl.do_disconnect_dropsens(log_fn=lambda msg: self.log_signal.emit(msg))
 
     def _dv_close(self):
-        self.dv_status.setText("● Kapatılıyor...")
+        self.dv_status.setText("● Closing...")
         self.dv_status.setStyleSheet("color:#FF9800;")
-        self.log_signal.emit("DropView kapatılıyor...")
+        self.log_signal.emit("Closing DropView...")
         self.dv_ctrl.do_exit_dropview(log_fn=lambda msg: self.log_signal.emit(msg))
 
     def _set_dv_btns(self, enabled: bool):

@@ -52,7 +52,7 @@ class ScriptEditorTab(QWidget):
 
         self.csv_edit = QLineEdit()
         self.csv_edit.setReadOnly(True)
-        self.csv_edit.setPlaceholderText("[Oturum başladığında otomatik ayarlanır]")
+        self.csv_edit.setPlaceholderText("[Auto-assigned when session starts]")
         self.csv_edit.setStyleSheet("color: #888; font-style: italic;")
         form.addRow("CSV File:", self.csv_edit)
 
@@ -165,7 +165,7 @@ class ScriptEditorTab(QWidget):
                 remember("method_dir", self.method_edit.text())
             if self.csv_edit.text():
                 remember("csv_output_dir", self.csv_edit.text())
-            self.log_signal.emit(f"Script yüklendi: {path}")
+            self.log_signal.emit(f"Script loaded: {path}")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"File can not be loaded: {e}")
 

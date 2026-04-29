@@ -298,9 +298,9 @@ class RecipeTab(QWidget):
 
         # Süre 0 sadece DropView aksiyonu olduğunda geçerli
         if duration <= 0 and dv_action == "none":
-            QMessageBox.warning(self, "Uyarı",
-                "Süre 0 yalnızca bir DropView aksiyonu seçildiğinde kullanılabilir.\n"
-                "None aksiyonunda süre 0 girilemeez.")
+            QMessageBox.warning(self, "Warning",
+                "Duration 0 is only valid when a DropView action is selected.\n"
+                "Duration 0 cannot be used with no action.")
             return
 
         # En az bir aksiyon olmalı
@@ -311,7 +311,7 @@ class RecipeTab(QWidget):
                           valve_b_state=vb_state, dropview_action=dv_action)
         self.recipe_steps.append(step)
         self._refresh_table(); self._update_total_time()
-        log_msg = (f"Adım eklendi: A=Port{port}, B={VALVE_B_LABELS[vb_state]}, "
+        log_msg = (f"Step added: A=Port{port}, B={VALVE_B_LABELS[vb_state]}, "
                    f"DV={DROPVIEW_LABELS.get(dv_action, dv_action)}, {duration}min")
         if desc:
             log_msg += f"  |  {desc}"
@@ -503,15 +503,16 @@ class RecipeTab(QWidget):
 
     def _save_recipe(self):
         if not self.recipe_steps:
-            QMessageBox.warning(self, "Uyarı", "Kaydedilecek adım yok"); return
-        path = save_file(self, "Recipe Kaydet", "recipe_dir",
-                          "JSON (*.json);;Tüm dosyalar (*.*)", ".json",
+            QMessageBox.warning(self, "Warning", "No steps to save"); return
+        path = save_file(self, "Save Recipe", "recipe_dir",
+                          "JSON (*.json);;All files (*.*)", ".json",
                           self.name_edit.text().replace(" ", "_") + ".json")
         if path:
             data = {"name": self.name_edit.text(), "loop_count": self.loop_spin.value(),
                     "steps": [asdict(s) for s in self.recipe_steps],
                     "step_loops": [asdict(l) for l in self.step_loops]}
-            with open(path, "w") as f: json.dump(data, f, indent=2)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
             self._current_recipe_path = path                  # ← YENİ
             remember_value("last_recipe_file", path)
             if self.package_tab:
@@ -519,14 +520,14 @@ class RecipeTab(QWidget):
             self.log_signal.emit(f"Recipe saved: {path}")
 
     def _load_recipe(self):
-        path = open_file(self, "Recipe Yükle", "recipe_dir",
-                         "JSON (*.json);;Tüm dosyalar (*.*)")
+        path = open_file(self, "Load Recipe", "recipe_dir",
+                         "JSON (*.json);;All files (*.*)")
         if path:
             self._load_recipe_from_path(path)
 
     def _load_recipe_from_path(self, path: str):
         try:
-            with open(path) as f:
+            with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             self.name_edit.setText(data.get("name", ""))
             self.loop_spin.setValue(data.get("loop_count", 1))
@@ -603,13 +604,13 @@ class RecipeTab(QWidget):
             missing = []
             if not valve_a_ok: missing.append("Valve A")
             if not valve_b_ok: missing.append("Valve B")
-            missing_str = " ve ".join(missing)
+            missing_str = " and ".join(missing)
             if not valve_a_ok and not valve_b_ok:
                 reply = QMessageBox.warning(
-                    self, "Valf Bağlantısı Yok",
-                    f"{missing_str} bağlı değil.\n\n"
-                    f"Simülasyon modunda devam edilsin mi?\n"
-                    f"(Valf adımları atlanır, diğer adımlar çalışır)",
+                    self, "Valve Not Connected",
+                    f"{missing_str} is not connected.\n\n"
+                    f"Continue in simulation mode?\n"
+                    f"(Valve steps will be skipped, other steps will run)",
                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                     QMessageBox.StandardButton.No
                 )
@@ -618,13 +619,13 @@ class RecipeTab(QWidget):
                 self._simulation_mode = True
                 if self._main_window:
                     self._main_window.set_simulation_mode(True, missing_str)
-                self.log_signal.emit("⚠️ SİMÜLASYON MODU AKTİF — valf adımları atlanıyor")
+                self.log_signal.emit("⚠️ SIMULATION MODE ACTIVE — valve steps will be skipped")
             else:
                 # Sadece biri eksik — uyar ama devam et
                 QMessageBox.warning(
-                    self, "Kısmi Bağlantı",
-                    f"{missing_str} bağlı değil.\n"
-                    f"O valve'e ait adımlar atlanacak."
+                    self, "Partial Connection",
+                    f"{missing_str} is not connected.\n"
+                    f"Steps for that valve will be skipped."
                 )
                 self._simulation_mode = False
         # ── Paketi oluştur ────────────────────────────────────
@@ -660,7 +661,7 @@ class RecipeTab(QWidget):
                 self._main_window.set_simulation_mode(False)
             if self.package_tab:
                 self.package_tab.discard_unstarted_session()
-            QMessageBox.critical(self, "Recipe Error", f"Recipe başlatılamadı:\n{exc}")
+            QMessageBox.critical(self, "Recipe Error", f"Failed to start recipe:\n{exc}")
             self.log_signal.emit(f"Recipe start error: {exc}")
             return
 

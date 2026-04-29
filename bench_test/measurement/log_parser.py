@@ -105,11 +105,13 @@ _RE_STEP = re.compile(
     re.IGNORECASE
 )
 
-# Ölçüm aksiyonu satırları:
+# Measurement action lines:
 # - "Start Measure", "Stop Measure", "Start Measure: ..."
-# - "Ölçüm başlatıldı.", "Ölçüm durduruldu."
+# - legacy Turkish logs are kept for backward compatibility
 _RE_MEASURE = re.compile(
-    r"^(Start Measure|Stop Measure|Ölçüm başlatıldı\.?|Ölçüm durduruldu\.?)\b",
+    r"^(Start Measure|Stop Measure|Measurement started\.?|Measurement stopped\.?|"
+    r"\u00d6l\u00e7\u00fcm ba\u015flat\u0131ld\u0131\.?|"
+    r"\u00d6l\u00e7\u00fcm durduruldu\.?)\b",
     re.IGNORECASE
 )
 
@@ -277,9 +279,11 @@ class LogParser:
 
         token = m.group(1).strip()
         low = token.lower()
-        if low.startswith("start measure") or "başlat" in low:
+        legacy_start = "ba" + chr(0x015F) + "lat"
+        legacy_stop = "durdur"
+        if low.startswith("start measure") or low.startswith("measurement started") or legacy_start in low:
             label = "Start Measure"
-        elif low.startswith("stop measure") or "durdur" in low:
+        elif low.startswith("stop measure") or low.startswith("measurement stopped") or legacy_stop in low:
             label = "Stop Measure"
         else:
             label = token.title()

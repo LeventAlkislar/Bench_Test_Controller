@@ -85,7 +85,7 @@ class SessionStateMachine(QObject):
         PackageTab.build_package() başarılı olunca çağrılır.
         """
         if self._state not in (IDLE, READY):
-            self._log(f"⚠ build() geçersiz state'de çağrıldı: {self._state}")
+            self._log(f"⚠ build() called in invalid state: {self._state}")
             return
         self._session = session
         self._transition(READY)
@@ -96,7 +96,7 @@ class SessionStateMachine(QObject):
         RecipeTab._start_recipe() tarafından çağrılır.
         """
         if self._state != READY:
-            self._log(f"⚠ start() geçersiz state'de çağrıldı: {self._state}")
+            self._log(f"⚠ start() called in invalid state: {self._state}")
             return
         if self._session:
             self._session.set_status(SessionStatus.IN_PROGRESS)
@@ -109,7 +109,7 @@ class SessionStateMachine(QObject):
         RecipeTab._poll_queue() 'completed'/'finished' mesajında çağrılır.
         """
         if self._state != RUNNING:
-            self._log(f"⚠ finish() geçersiz state'de çağrıldı: {self._state}")
+            self._log(f"⚠ finish() called in invalid state: {self._state}")
             return
         self._timer.stop()
         if self._session:
@@ -124,7 +124,7 @@ class SessionStateMachine(QObject):
         Kullanıcı perspektifinden finish() ile aynı akış: aggregate çalışır.
         """
         if self._state != RUNNING:
-            self._log(f"⚠ stop() geçersiz state'de çağrıldı: {self._state}")
+            self._log(f"⚠ stop() called in invalid state: {self._state}")
             return
         self._timer.stop()
         if self._session:
@@ -169,10 +169,10 @@ class SessionStateMachine(QObject):
             self.aggregate_done.emit(xlsx_path)
         except AggregatorError:
             if not periodic:
-                self._log("⚠ Aggregate: CSV bulunamadı veya okunamadı.")
+                self._log("⚠ Aggregate: CSV not found or could not be read.")
         except Exception as e:
             if not periodic:
-                self._log(f"✗ Aggregate hatası: {e}")
+                self._log(f"✗ Aggregate error: {e}")
         finally:
             if self._state == AGGREGATING:
                 self._on_agg_done()

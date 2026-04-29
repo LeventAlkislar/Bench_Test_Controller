@@ -88,8 +88,8 @@ def find_on_screen(image_path, threshold=0.7, hwnd=None, use_foreground_fallback
 
     if max_val < threshold:
         raise RuntimeError(
-            f"Goruntu ekranda bulunamadi (eslesme: {max_val:.2f} < {threshold}). "
-            f"Dosya: {os.path.basename(image_path)}"
+            f"Image not found on screen (match: {max_val:.2f} < {threshold}). "
+            f"File: {os.path.basename(image_path)}"
         )
 
     h, w = needle.shape[:2]
@@ -133,7 +133,7 @@ def wait_for_image(
         except RuntimeError:
             time.sleep(poll_interval)
     raise TimeoutError(
-        f"'{os.path.basename(image_path)}' {timeout}sn icinde ekranda bulunamadi."
+        f"'{os.path.basename(image_path)}' was not found on screen within {timeout}s."
     )
 
 

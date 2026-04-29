@@ -96,7 +96,7 @@ class MeasurementSession:
         session.save() çağrısıyla diske yazılır.
         """
         if not part_number or not part_number.strip():
-            raise ValueError("Parça numarası boş olamaz.")
+            raise ValueError("Part Number cannot be empty.")
 
         part_number = part_number.strip()
         created_at  = datetime.now()
@@ -120,7 +120,7 @@ class MeasurementSession:
         """Mevcut bir session.json dosyasından oturum yükler."""
         path = os.path.join(session_dir, SESSION_FILE)
         if not os.path.exists(path):
-            raise FileNotFoundError(f"session.json bulunamadı: {path}")
+            raise FileNotFoundError(f"session.json not found: {path}")
 
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)

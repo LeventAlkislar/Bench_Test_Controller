@@ -1,6 +1,6 @@
 # bench_test/measurement/packager.py
 # -*- coding: utf-8 -*-
-"""
+r"""
 Packager
 ========
 Statik dosyaları oturum dizinine kopyalar ve gerektiğinde içeriklerini günceller.
@@ -66,7 +66,7 @@ class Packager:
             Kopyalanan dosyanın tam yolu.
         """
         if not os.path.isfile(source_path):
-            raise PackagerError(f"Dosya bulunamadı: {source_path}")
+            raise PackagerError(f"File not found: {source_path}")
 
         name = dest_name or os.path.basename(source_path)
         dest = os.path.join(self.session.params_dir, name)
@@ -139,7 +139,7 @@ class Packager:
             updated = False
             actions = root.find("actions")
             if actions is None:
-                raise PackagerError(".scr dosyasında <actions> bulunamadı.")
+                raise PackagerError("<actions> not found in .scr file.")
 
             for action in actions.iter("action"):
                 if action.get("type") == "EXPORTCURVES":
@@ -150,13 +150,13 @@ class Packager:
                         break
 
             if not updated:
-                raise PackagerError(".scr dosyasında EXPORTCURVES action'ı bulunamadı.")
+                raise PackagerError("EXPORTCURVES action not found in .scr file.")
 
             # Orijinal encoding'i koruyarak yaz
             tree.write(scr_path, encoding="UTF-8", xml_declaration=True)
 
         except ET.ParseError as e:
-            raise PackagerError(f".scr dosyası parse edilemedi: {e}")
+            raise PackagerError(f"Failed to parse .scr file: {e}")
 
     # ── recipe.json ──────────────────────────────────────────────
 

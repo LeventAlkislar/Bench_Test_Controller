@@ -92,7 +92,7 @@ def find_window(title_keyword, timeout=60, poll_interval=1.0):
         if found:
             return found[0]
         time.sleep(poll_interval)
-    raise TimeoutError(f"'{title_keyword}' penceresi {timeout}sn icinde bulunamadi.")
+    raise TimeoutError(f"'{title_keyword}' window was not found within {timeout}s.")
 
 
 def window_exists(title_keyword) -> bool:
@@ -133,7 +133,7 @@ def _wait_for_dropview_process_exit(timeout=15, poll_interval=0.5):
             return
         time.sleep(poll_interval)
     raise TimeoutError(
-        f"DropView process'i {timeout}sn içinde kapanmadı."
+        f"DropView process did not exit within {timeout}s."
     )
 
 def _focus_window(hwnd, click_title=False, restore_if_iconic=True, sleep_after=SLEEP_AFTER_CLICK):
@@ -145,7 +145,7 @@ def _focus_window(hwnd, click_title=False, restore_if_iconic=True, sleep_after=S
     win32gui.SetForegroundWindow(hwnd)
     time.sleep(sleep_after)
     if win32gui.GetForegroundWindow() != hwnd:
-        print(f"│  UYARI: SetForegroundWindow etkisiz (hwnd={hwnd}), devam ediliyor.")
+        print(f"│  WARNING: SetForegroundWindow had no effect (hwnd={hwnd}); continuing.")
     if click_title:
         rect = win32gui.GetWindowRect(hwnd)
         pyautogui.click((rect[0] + rect[2]) // 2, rect[1] + 10)
@@ -215,10 +215,10 @@ def close_owned_dialogs(owner_hwnd, log_fn=None) -> int:
             time.sleep(SLEEP_AFTER_FOCUS)
             closed += 1
             if log_fn:
-                log_fn(f"│    Dialog kapatıldı: '{title}'")
+                log_fn(f"│    Dialog closed: '{title}'")
         except Exception as e:
             if log_fn:
-                log_fn(f"│    HATA (dialog kapatılırken): {e}")
+                log_fn(f"│    ERROR while closing dialog: {e}")
     return closed
 
 
@@ -290,7 +290,7 @@ def _log_dialog_detected(hwnd, title: str, detail: str):
     owner_title, owner_hwnd = _get_dialog_owner_info(hwnd)
     suffix = f" | {detail}" if detail else ""
     _watchdog_log(
-        f"│  Dialog algılandı: '{title}' [{kind}] "
+        f"│  Dialog detected: '{title}' [{kind}] "
         f"(hwnd={hwnd}, pid={pid}, owner='{owner_title}', owner_hwnd={owner_hwnd}){suffix}"
     )
     _dialog_watchdog_seen[hwnd] = {
@@ -311,7 +311,7 @@ def _log_dialog_closed(hwnd):
     owner_title = info.get("owner_title", "unknown")
     owner_hwnd = info.get("owner_hwnd")
     _watchdog_log(
-        f"│  Dialog kapandı: '{title}' "
+        f"│  Dialog closed: '{title}' "
         f"(hwnd={hwnd}, pid={pid}, owner='{owner_title}', owner_hwnd={owner_hwnd})"
     )
 
@@ -323,11 +323,11 @@ def _auto_dismiss_dialog(hwnd, title: str):
         _focus_window(hwnd, restore_if_iconic=False)
         pyautogui.press("enter")
         _watchdog_log(
-            f"│  Dialog otomatik kapatılıyor: '{title}' "
+            f"│  Auto-dismissing dialog: '{title}' "
             f"(hwnd={hwnd}, pid={pid}, owner='{owner_title}', owner_hwnd={owner_hwnd})"
         )
     except Exception as e:
-        _watchdog_log(f"│  UYARI: Dialog otomatik kapatılamadı ('{title}'): {e}")
+        _watchdog_log(f"│  WARNING: Dialog could not be auto-dismissed ('{title}'): {e}")
 
 
 def _dialog_watchdog_loop():
@@ -364,7 +364,7 @@ def ensure_dialog_watchdog(log_fn=None):
             daemon=True,
         )
         _dialog_watchdog_thread.start()
-        _watchdog_log("│  Dialog watchdog başlatıldı.")
+        _watchdog_log("│  Dialog watchdog started.")
 
 
 def stop_dialog_watchdog():
@@ -456,11 +456,11 @@ def _classify_error_dialog_by_template(log_fn=None, hwnd=None, use_foreground_fa
     min_delta = 0.08
 
     _log(
-        "│  Error template skorları: "
+        "│  Error template scores: "
         f"no_device={score_no_device:.2f}, potentiostat_not_found={score_pot_not_found:.2f}"
     )
     _log(
-        "│  Error template eşik/delta: "
+        "│  Error template threshold/delta: "
         f"min_score={min_score:.2f}, min_delta={min_delta:.2f}"
     )
 
@@ -498,8 +498,8 @@ def _wait_for_connection_result(timeout=30, poll_interval=0.5, log_fn=None) -> s
             if window_exists(ERROR_WINDOW):
                 err_hwnd = find_window(ERROR_WINDOW, timeout=3)
                 text = _read_error_window_text(err_hwnd)
-                shown_text = text if text else "(metin okunamadı)"
-                _log(f"│  DropView Error dialog metni: {shown_text}")
+                shown_text = text if text else "(text could not be read)"
+                _log(f"│  DropView Error dialog text: {shown_text}")
                 try:
                     _focus_window(err_hwnd, restore_if_iconic=False)
                     pyautogui.press("enter")
@@ -507,10 +507,10 @@ def _wait_for_connection_result(timeout=30, poll_interval=0.5, log_fn=None) -> s
                 except Exception:
                     pass
                 if MSG_NO_DEVICE in text:
-                    _log("│  DropView bağlantı hatası sınıflandırıldı: no_device_connected")
+                    _log("│  DropView connection error classified: no_device_connected")
                     return "no_device_connected"
                 if MSG_POTENTIOSTAT_NOT_FOUND in text:
-                    _log("│  DropView bağlantı hatası sınıflandırıldı: potentiostat_not_found")
+                    _log("│  DropView connection error classified: potentiostat_not_found")
                     return "potentiostat_not_found"
 
                 template_result = _classify_error_dialog_by_template(
@@ -519,13 +519,13 @@ def _wait_for_connection_result(timeout=30, poll_interval=0.5, log_fn=None) -> s
                     use_foreground_fallback=False,
                 )
                 if template_result == "no_device_connected":
-                    _log("│  DropView bağlantı hatası template ile sınıflandırıldı: no_device_connected")
+                    _log("│  DropView connection error classified by template: no_device_connected")
                     return "no_device_connected"
                 if template_result == "potentiostat_not_found":
-                    _log("│  DropView bağlantı hatası template ile sınıflandırıldı: potentiostat_not_found")
+                    _log("│  DropView connection error classified by template: potentiostat_not_found")
                     return "potentiostat_not_found"
 
-                _log(f"│  UYARI: Tanımsız DropView Error dialog metni: {shown_text}")
+                _log(f"│  WARNING: Unclassified DropView Error dialog text: {shown_text}")
                 return "unknown_error"
             if _is_dropview_connected():
                 return "connected"
@@ -563,7 +563,7 @@ def _connect_manual(dv_hwnd, target_com: str, log_fn=None) -> str:
             log_fn(msg)
 
     if target_com not in DROPSENS_COM_PORTS:
-        _log(f"│  UYARI: Desteklenmeyen COM portu: {target_com}")
+        _log(f"│  WARNING: Unsupported COM port: {target_com}")
         return "timeout"
 
     safe_sequence(
@@ -578,7 +578,7 @@ def _connect_manual(dv_hwnd, target_com: str, log_fn=None) -> str:
     try:
         manual_hwnd = find_window(MANUAL_CONNECTION_WINDOW, timeout=10)
     except TimeoutError:
-        _log("│  UYARI: Manual Connection penceresi açılmadı.")
+        _log("│  WARNING: Manual Connection window did not open.")
         return "timeout"
 
     time.sleep(SLEEP_AFTER_FOCUS)
@@ -593,7 +593,7 @@ def _connect_manual(dv_hwnd, target_com: str, log_fn=None) -> str:
         pyautogui.click(dx, dy)
         time.sleep(SLEEP_AFTER_CLICK)
     except Exception as e:
-        _log(f"│  UYARI: COM port dropdown açılamadı: {e}")
+        _log(f"│  WARNING: COM port dropdown could not be opened: {e}")
         return "timeout"
 
     com_key = "manual_conn_com3" if target_com == "COM3" else "manual_conn_com10"
@@ -607,7 +607,7 @@ def _connect_manual(dv_hwnd, target_com: str, log_fn=None) -> str:
         pyautogui.click(cx, cy)
         time.sleep(SLEEP_AFTER_CLICK)
     except Exception as e:
-        _log(f"│  UYARI: {target_com} görseli bulunamadı: {e}")
+        _log(f"│  WARNING: {target_com} image not found: {e}")
         return "timeout"
 
     try:
@@ -620,13 +620,13 @@ def _connect_manual(dv_hwnd, target_com: str, log_fn=None) -> str:
         pyautogui.click(bx, by)
         time.sleep(SLEEP_AFTER_COMMAND)
     except Exception as e:
-        _log(f"│  UYARI: Connect butonu bulunamadı: {e}")
+        _log(f"│  WARNING: Connect button not found: {e}")
         return "timeout"
 
     try:
         wait_for_window_close(MANUAL_CONNECTION_WINDOW, timeout=10)
     except TimeoutError:
-        _log("│  UYARI: Manual Connection penceresi kapanmadı.")
+        _log("│  WARNING: Manual Connection window did not close.")
         return "timeout"
 
     return _wait_for_connection_result(timeout=TIMEOUT_CONNECT, log_fn=log_fn)
@@ -642,7 +642,7 @@ def wait_until_connected(timeout=30, poll_interval=1.0):
         if (conn_sc > THRESHOLD_LOW or disc_sc > THRESHOLD_LOW) and conn_sc > disc_sc:
             return
         time.sleep(poll_interval)
-    raise TimeoutError("DropSens bağlantısı zaman aşımına uğradı.")
+    raise TimeoutError("DropSens connection timed out.")
 
 
 def wait_until_disconnected(timeout=10, poll_interval=1.0):
@@ -691,17 +691,17 @@ def _get_dropview_exe() -> str:
             return candidate
 
     from PyQt6.QtWidgets import QApplication, QFileDialog, QMessageBox
-    QMessageBox.information(None, "DropView Bulunamadı",
-        "DropView.exe bulunamadı.\nLütfen DropView.exe dosyasını seçin.")
+    QMessageBox.information(None, "DropView Not Found",
+        "DropView.exe was not found.\nPlease select the DropView.exe file.")
     path, _ = QFileDialog.getOpenFileName(None,
-        "DropView.exe Dosyasını Seç", "",
-        "Executable (*.exe);;Tüm dosyalar (*.*)")
+        "Select DropView.exe File", "",
+        "Executable (*.exe);;All files (*.*)")
 
     if not path:
-        raise FileNotFoundError("DropView.exe seçilmedi, işlem iptal edildi.")
+        raise FileNotFoundError("DropView.exe was not selected; operation cancelled.")
     path = os.path.normpath(path)
     if not os.path.isfile(path):
-        raise FileNotFoundError(f"Seçilen dosya bulunamadı: {path}")
+        raise FileNotFoundError(f"Selected file not found: {path}")
     remember("dropview_exe", path)
     return path
 
@@ -769,7 +769,7 @@ def step_connect_dropsens(target_com: str = None, log_fn=None):
     if _is_dropview_connected():
         return
     if not window_exists(DROPVIEW_WINDOW_NAME):
-        raise RuntimeError("DropView penceresi açık değil.")
+        raise RuntimeError("DropView window is not open.")
 
     dv_hwnd = find_window(DROPVIEW_WINDOW_NAME, timeout=10)
     _focus_window(dv_hwnd)
@@ -777,17 +777,17 @@ def step_connect_dropsens(target_com: str = None, log_fn=None):
     manual_attempts = []
     result = "timeout"
     for com in _resolve_target_dropsens_ports(preferred_port=target_com):
-        _log(f"│  Manuel bağlantı deneniyor: {com}...")
+        _log(f"│  Trying manual connection: {com}...")
         result = _connect_manual(dv_hwnd, com, log_fn=log_fn)
         manual_attempts.append((com, result))
         if result == "connected":
-            _log(f"│  DropSens bağlandı (manuel: {com}).")
+            _log(f"│  DropSens connected (manual: {com}).")
             remember_value("dropsens_com", com)
             return
-        _log(f"│  Manuel bağlantı başarısız ({com}: {result}).")
+        _log(f"│  Manual connection failed ({com}: {result}).")
 
     attempts_str = ", ".join(f"{p}={s}" for p, s in manual_attempts)
-    _log(f"│  Manuel bağlantılar başarısız ({attempts_str}), Ctrl+C ile tekrar deneniyor...")
+    _log(f"│  Manual connections failed ({attempts_str}); retrying with Ctrl+C...")
     safe_sequence(
         dv_hwnd,
         [
@@ -803,16 +803,16 @@ def step_connect_dropsens(target_com: str = None, log_fn=None):
     fallback_result = _wait_for_connection_result(timeout=TIMEOUT_CONNECT, log_fn=log_fn)
     if fallback_result != "connected":
         raise RuntimeError(
-            f"DropSens bağlantısı kurulamadı (manuel: {result}, "
-            f"Ctrl+C: {fallback_result}). Cihazın bağlı ve "
-            f"DropView'in hazır durumda olduğundan emin olun."
+            f"DropSens connection could not be established (manual: {result}, "
+            f"Ctrl+C: {fallback_result}). Make sure the device is connected "
+            f"and DropView is ready."
         )
-    _log("│  DropSens bağlandı (Ctrl+C fallback).")
+    _log("│  DropSens connected (Ctrl+C fallback).")
 
     time.sleep(SLEEP_AFTER_FOCUS)
     if not _is_dropview_connected():
         raise RuntimeError(
-            "DropSens bağlantı sinyali alındı ancak son doğrulama başarısız."
+            "DropSens connection signal was received, but final verification failed."
         )
 
 
@@ -882,7 +882,7 @@ def step_stop_measure(log_fn=None):
 
     wait_for_window_close(MULTISCRIPT_WINDOW, timeout=TIMEOUT_CLOSE_WINDOW)
     if log_fn:
-        log_fn("│  Multiscript Editor kapandı.")
+        log_fn("│  Multiscript Editor closed.")
 
 
 def _force_close_multiscript(log_fn=None) -> bool:
@@ -907,7 +907,7 @@ def _force_close_multiscript(log_fn=None) -> bool:
     try:
         win32gui.PostMessage(ms_hwnd, win32con.WM_CLOSE, 0, 0)
         wait_for_window_close(MULTISCRIPT_WINDOW, timeout=2, poll_interval=0.2)
-        _log("│  Multiscript Editor WM_CLOSE ile kapandı.")
+        _log("│  Multiscript Editor closed via WM_CLOSE.")
         return True
     except Exception:
         pass
@@ -916,12 +916,12 @@ def _force_close_multiscript(log_fn=None) -> bool:
     try:
         safe_sequence(ms_hwnd, [{"type": "hotkey", "keys": ("alt", "f4"), "post_delay": SLEEP_AFTER_COMMAND}], log_fn=log_fn)
         wait_for_window_close(MULTISCRIPT_WINDOW, timeout=3, poll_interval=0.2)
-        _log("│  Multiscript Editor Alt+F4 ile kapandı.")
+        _log("│  Multiscript Editor closed via Alt+F4.")
         return True
     except Exception:
         pass
 
-    _log("│  UYARI: Multiscript Editor hard-fallback ile kapatılamadı.")
+    _log("│  WARNING: Multiscript Editor could not be closed with hard fallback.")
     return False
 
 def step_exit_dropview(config: dict, log_fn=None):
@@ -934,25 +934,25 @@ def step_exit_dropview(config: dict, log_fn=None):
     try:
         # Process yoksa pencere de yoktur, erken çık
         if _get_dropview_pid() is None and not window_exists(DROPVIEW_WINDOW_NAME):
-            _log("│  DropView zaten kapalı.")
+            _log("│  DropView is already closed.")
             return
 
         dv_hwnd = find_window(DROPVIEW_WINDOW_NAME, timeout=10)
 
         # Multiscript Editor hâlâ açıksa Alt+F4 onu kapatır, DropView'i değil
         if window_exists(MULTISCRIPT_WINDOW):
-            _log("│  Multiscript Editor hâlâ açık, önce kapatılıyor...")
+            _log("│  Multiscript Editor is still open; closing it first...")
             try:
                 step_stop_measure(log_fn=_log)
             except Exception as e:
-                _log(f"│  UYARI: Normal stop ile Multiscript kapanamadı: {e}")
+                _log(f"│  WARNING: Multiscript could not be closed with normal stop: {e}")
                 if not _force_close_multiscript(log_fn=_log):
-                    _log("│  UYARI: Multiscript kapanamadı, DropView kapanışı yine de denenecek.")
+                    _log("│  WARNING: Multiscript could not be closed; DropView shutdown will still be attempted.")
 
         # Owned dialog'ları temizle (içeriğe bağımsız)
         closed = close_owned_dialogs(dv_hwnd, log_fn=_log)
         if closed:
-            _log(f"│  {closed} dialog kapatıldı.")
+            _log(f"│  {closed} dialog(s) closed.")
 
         if _is_dropview_connected():
             safe_sequence(
@@ -968,9 +968,9 @@ def step_exit_dropview(config: dict, log_fn=None):
             )
             close_owned_dialogs(dv_hwnd, log_fn=_log)
             wait_until_disconnected(timeout=TIMEOUT_CLOSE_WINDOW)
-            _log("│  DropSens bağlantısı kesildi.")
+            _log("│  DropSens disconnected.")
         else:
-            _log("│  DropSens zaten bağlı değil.")
+            _log("│  DropSens is already disconnected.")
 
         # Alt+F4
         dv_hwnd = find_window(DROPVIEW_WINDOW_NAME, timeout=5)
@@ -993,62 +993,62 @@ def step_exit_dropview(config: dict, log_fn=None):
         window_closed = False
         try:
             wait_for_window_close(DROPVIEW_WINDOW_NAME, timeout=10)
-            _log("│  DropView penceresi kapandı.")
+            _log("│  DropView window closed.")
             window_closed = True
         except TimeoutError:
-            _log("│  UYARI: DropView penceresi kapanmadı.")
+            _log("│  WARNING: DropView window did not close.")
 
         # Process kapandı mı doğrula; pencere kapanmadıysa doğrudan kill'e geç
         process_exited = False
         if window_closed:
             try:
                 _wait_for_dropview_process_exit(timeout=10)
-                _log("│  DropView process'i kapandı.")
+                _log("│  DropView process exited.")
                 process_exited = True
             except TimeoutError:
-                _log("│  UYARI: Process kapanmadı.")
+                _log("│  WARNING: Process did not exit.")
 
         if not process_exited:
             # Kill öncesi koşulsuz Ctrl+D — COM portu düzgün serbest bırakılsın
-            _log("│  Kill öncesi Ctrl+D gönderiliyor...")
+            _log("│  Sending Ctrl+D before kill...")
             try:
                 dv_hwnd_kill = find_window(DROPVIEW_WINDOW_NAME, timeout=3)
                 safe_sequence(dv_hwnd_kill, [{"type": "hotkey", "keys": ("ctrl", "d"), "post_delay": SLEEP_AFTER_COMMAND + 0.5}], log_fn=_log)
-                _log("│  Ctrl+D gönderildi.")
+                _log("│  Ctrl+D sent.")
             except Exception as e:
-                _log(f"│  UYARI: Kill öncesi Ctrl+D başarısız: {e}")
+                _log(f"│  WARNING: Ctrl+D before kill failed: {e}")
 
             pid = get_window_pid(dv_hwnd) or _get_dropview_pid()
             if pid:
-                _log(f"│  DropView zorla kapatılıyor (PID={pid})...")
+                _log(f"│  Force-closing DropView (PID={pid})...")
                 try:
                     psutil.Process(pid).kill()
                     _wait_for_dropview_process_exit(timeout=5)
-                    _log("│  DropView zorla kapatıldı.")
+                    _log("│  DropView force-closed.")
                 except Exception as kill_err:
                     raise RuntimeError(
-                        f"DropView kapatılamadı: {kill_err}"
+                        f"DropView could not be closed: {kill_err}"
                     ) from kill_err
 
                 # Kill sonrası COM port / driver serbest bırakma payı
-                _log("│  COM port serbest bırakılması bekleniyor...")
+                _log("│  Waiting for COM port release...")
                 time.sleep(3.0)
 
                 # Process gerçekten gitti mi son doğrulama
                 if _get_dropview_pid() is not None:
                     raise RuntimeError(
-                        "DropView kill sonrası process hâlâ çalışıyor."
+                        "DropView process is still running after kill."
                     )
-                _log("│  DropView process doğrulandı: kapalı.")
+                _log("│  DropView process verified: closed.")
             else:
                 if not window_closed:
                     raise RuntimeError(
-                        "DropView penceresi kapanmadı ve PID bulunamadı."
+                        "DropView window did not close and PID was not found."
                     )
-                _log("│  DropView process zaten sonlanmış.")
+                _log("│  DropView process has already exited.")
 
-        _log("│  DropView kapatıldı.")
-        _log("│  COM port serbest bırakılması bekleniyor...")
+        _log("│  DropView closed.")
+        _log("│  Waiting for COM port release...")
         time.sleep(2.0)
     finally:
         stop_dialog_watchdog()
@@ -1067,56 +1067,56 @@ def step_start_dropview(config: dict, log_fn=None):
         is_enabled = win32gui.IsWindowEnabled(dv_hwnd)
         has_modal  = len(find_owned_dialogs(dv_hwnd)) > 0
         if not is_enabled or has_modal:
-            _log("│  DropView bozuk/bloklu durumda tespit edildi, temizleniyor...")
+            _log("│  DropView appears broken or blocked; cleaning up...")
             pid = get_window_pid(dv_hwnd)
             if pid:
                 try:
                     psutil.Process(pid).kill()
                     _wait_for_dropview_process_exit(timeout=5)
-                    _log("│  Eski DropView instance'ı kapatıldı.")
+                    _log("│  Old DropView instance closed.")
                 except Exception as e:
-                    _log(f"│  UYARI: Eski instance kapatılamadı: {e}")
+                    _log(f"│  WARNING: Old instance could not be closed: {e}")
         elif _is_dropview_connected():
             hwnd_pid = get_window_pid(dv_hwnd)
             if not hwnd_pid:
-                _log("│  UYARI: Bağlı görünüyor ama pencere PID'si alınamadı, yeniden başlatılacak.")
+                _log("│  WARNING: Appears connected but window PID could not be read; restarting.")
                 try:
                     win32gui.PostMessage(dv_hwnd, win32con.WM_CLOSE, 0, 0)
                     wait_for_window_close(DROPVIEW_WINDOW_NAME, timeout=3, poll_interval=0.2)
-                    _log("│  Şüpheli DropView penceresi kapatıldı.")
+                    _log("│  Suspicious DropView window closed.")
                 except Exception:
-                    _log("│  UYARI: Şüpheli DropView penceresi kapatılamadı, yeniden başlatma denenecek.")
+                    _log("│  WARNING: Suspicious DropView window could not be closed; restart will be attempted.")
             else:
                 try:
                     proc = psutil.Process(hwnd_pid)
                     if proc.is_running() and not _is_dropview_ui_ready(dv_hwnd, timeout=3.0):
                         _log(
-                            f"│  UYARI: DropView bağlı görünüyor ama UI hazır değil "
-                            f"(PID={hwnd_pid}), yeniden başlatılacak."
+                            f"│  WARNING: DropView appears connected but UI is not ready "
+                            f"(PID={hwnd_pid}); restarting."
                         )
                         try:
                             psutil.Process(hwnd_pid).kill()
                             _wait_for_dropview_process_exit(timeout=5)
-                            _log("│  Hazır olmayan DropView instance'ı kapatıldı.")
+                            _log("│  Non-ready DropView instance closed.")
                             proc = psutil.Process(hwnd_pid)
                         except psutil.NoSuchProcess:
                             pass
                         except Exception as e:
-                            _log(f"│  UYARI: Hazır olmayan instance kapatılamadı: {e}")
+                            _log(f"│  WARNING: Non-ready instance could not be closed: {e}")
                     if not proc.is_running():
-                        _log(f"│  UYARI: Bağlı görünüyor ama process çalışmıyor (PID={hwnd_pid}), yeniden başlatılacak.")
+                        _log(f"│  WARNING: Appears connected but process is not running (PID={hwnd_pid}); restarting.")
                     else:
-                        _log(f"│  DropView sağlıklı ve bağlı (PID={hwnd_pid}), devam ediliyor.")
+                        _log(f"│  DropView is healthy and connected (PID={hwnd_pid}); continuing.")
                         time.sleep(0.4)
                         if not _is_dropview_ui_ready(dv_hwnd, timeout=2.0) or not _is_dropview_connected():
                             _log(
-                                f"│  UYARI: Erken sağlık kontrolü tutarsız (PID={hwnd_pid}), "
-                                "yeniden başlatılacak."
+                                f"│  WARNING: Early health check is inconsistent (PID={hwnd_pid}); "
+                                "restarting."
                             )
                         else:
                             return
                 except Exception as e:
-                    _log(f"│  UYARI: DropView process sağlığı doğrulanamadı (PID={hwnd_pid}): {e}")
+                    _log(f"│  WARNING: DropView process health could not be verified (PID={hwnd_pid}): {e}")
     else:
         # Pencere yok ama zombie process olabilir
         pid = _get_dropview_pid()
@@ -1124,9 +1124,9 @@ def step_start_dropview(config: dict, log_fn=None):
             try:
                 psutil.Process(pid).kill()
                 _wait_for_dropview_process_exit(timeout=5)
-                _log("│  Zombie DropView process'i temizlendi.")
+                _log("│  Zombie DropView process cleaned up.")
             except Exception as e:
-                _log(f"│  UYARI: Zombie process kapatılamadı: {e}")
+                _log(f"│  WARNING: Zombie process could not be closed: {e}")
 
     if not window_exists(DROPVIEW_WINDOW_NAME):
         subprocess.Popen([_get_dropview_exe()])
@@ -1139,33 +1139,33 @@ def step_start_dropview(config: dict, log_fn=None):
     manual_attempts = []
     result = "timeout"
     for target_com in _resolve_target_dropsens_ports():
-        _log(f"│  Manuel bağlantı deneniyor: {target_com}...")
+        _log(f"│  Trying manual connection: {target_com}...")
         result = _connect_manual(dv_hwnd, target_com, log_fn=log_fn)
         manual_attempts.append((target_com, result))
         if result == "connected":
-            _log(f"│  DropSens bağlandı (manuel: {target_com}).")
+            _log(f"│  DropSens connected (manual: {target_com}).")
             remember_value("dropsens_com", target_com)
             break
-        _log(f"│  Manuel bağlantı başarısız ({target_com}: {result}).")
+        _log(f"│  Manual connection failed ({target_com}: {result}).")
 
     if result == "connected":
         pass
     elif result in ("no_device_connected", "potentiostat_not_found", "unknown_error", "timeout"):
         attempts_str = ", ".join(f"{port}={status}" for port, status in manual_attempts)
-        _log(f"│  Manuel bağlantılar başarısız ({attempts_str}), Ctrl+C ile tekrar deneniyor...")
+        _log(f"│  Manual connections failed ({attempts_str}); retrying with Ctrl+C...")
         safe_sequence(dv_hwnd, [{"type": "hotkey", "keys": ("ctrl", "c"), "post_delay": SLEEP_AFTER_COMMAND}], log_fn=log_fn)
         fallback_result = _wait_for_connection_result(timeout=TIMEOUT_CONNECT, log_fn=log_fn)
         if fallback_result != "connected":
             raise RuntimeError(
-                f"DropSens bağlantısı kurulamadı (manuel: {attempts_str}, "
-                f"Ctrl+C: {fallback_result}). Cihazın bağlı ve "
-                f"DropView'in hazır durumda olduğundan emin olun."
+                f"DropSens connection could not be established (manual: {attempts_str}, "
+                f"Ctrl+C: {fallback_result}). Make sure the device is connected "
+                f"and DropView is ready."
             )
-        _log("│  DropSens bağlandı (Ctrl+C fallback).")
+        _log("│  DropSens connected (Ctrl+C fallback).")
     else:
         raise RuntimeError(
-            "DropSens bağlantısı zaman aşımına uğradı. "
-            "Cihazın bağlı olduğundan emin olun."
+            "DropSens connection timed out. "
+            "Make sure the device is connected."
         )
 
     # Final doğrulama: render/race gecikmelerine karşı kısa polling + stabilite kontrolü.
@@ -1187,8 +1187,8 @@ def step_start_dropview(config: dict, log_fn=None):
 
     if stable_hits < 2:
         raise RuntimeError(
-            "DropSens bağlantı sinyali alındı ancak son doğrulama başarısız. "
-            "Lütfen tekrar deneyin."
+            "DropSens connection signal was received, but final verification failed. "
+            "Please try again."
         )
 
 def step_start_measure(config: dict, log_fn=None):
@@ -1199,14 +1199,14 @@ def step_start_measure(config: dict, log_fn=None):
     # Alt+S S öncesi: DropView enabled ve modal yok mu doğrula
     if not win32gui.IsWindowEnabled(dv_hwnd):
         raise RuntimeError(
-            "Start Measure hatası: DropView penceresi disabled durumda "
-            "(modal dialog bloklıyor olabilir)."
+            "Start Measure error: DropView window is disabled "
+            "(a modal dialog may be blocking it)."
         )
     owned = find_owned_dialogs(dv_hwnd)
     if owned:
         titles = [win32gui.GetWindowText(h) for h in owned]
         raise RuntimeError(
-            f"Start Measure hatası: DropView'e ait açık dialog var: {titles}"
+            f"Start Measure error: DropView has an open dialog: {titles}"
         )
 
     safe_wait_for_image(
@@ -1229,7 +1229,7 @@ def step_start_measure(config: dict, log_fn=None):
 
     ms_hwnd = find_window(MULTISCRIPT_WINDOW, timeout=15)
     if log_fn:
-        log_fn(f"│  Multiscript Editor açıldı (hwnd={ms_hwnd}).")
+        log_fn(f"│  Multiscript Editor opened (hwnd={ms_hwnd}).")
     time.sleep(SLEEP_AFTER_FOCUS)
 
     lbl_x, lbl_y = safe_find_on_screen(
@@ -1312,7 +1312,7 @@ def step_start_measure(config: dict, log_fn=None):
                 fg_hwnd = win32gui.GetForegroundWindow()
                 fg_title = win32gui.GetWindowText(fg_hwnd) or "(untitled)"
             except Exception:
-                fg_title = "(okunamadı)"
+                fg_title = "(unreadable)"
             try:
                 green_score = match_score_on_screen(
                     _IMG["green_dot_selected"],

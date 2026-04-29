@@ -75,7 +75,7 @@ def _parse_csv(path: str, time_offset: timedelta) -> List[Tuple[datetime, float]
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             lines = f.read().splitlines()
     except OSError as e:
-        raise AggregatorError(f"CSV okunamadı: {path}\n{e}")
+        raise AggregatorError(f"Failed to read CSV: {path}\n{e}")
 
     count = 0
     for line in lines[CSV_DATA_START:]:
@@ -111,7 +111,7 @@ def _collect_csv_files(measurements_dir: str) -> List[str]:
     files = glob.glob(pattern)
     if not files:
         raise AggregatorError(
-            f"CSV dosyası bulunamadı:\n{measurements_dir}")
+            f"CSV file not found:\n{measurements_dir}")
 
     # Oluşturma zamanına göre sırala
     files.sort(key=lambda p: os.path.getctime(p))
@@ -126,8 +126,8 @@ def _write_xlsx(rows: List[Tuple[datetime, float]], output_path: str):
     """
     if not _OPENPYXL_OK:
         raise AggregatorError(
-            "openpyxl kütüphanesi bulunamadı.\n"
-            "Kurmak için: pip install openpyxl")
+            "openpyxl library not found.\n"
+            "Install it with: pip install openpyxl")
 
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -193,7 +193,7 @@ def aggregate(
         all_rows.extend(rows)
 
     if not all_rows:
-        raise AggregatorError("Hiçbir CSV dosyasından veri okunamadı.")
+        raise AggregatorError("No data could be read from any CSV file.")
 
     # Zaman sırasına göre sırala (normalde dosya sırası yeterli,
     # ama güvenli olmak için)

@@ -83,24 +83,24 @@ def prompt_and_generate():
     """
 
     method_file = input(
-        "\n[1] Method dosyasının tam yolu (.tp):\n  > "
+        "\n[1] Full path to method file (.tp):\n  > "
     ).strip()
 
     output_csv = input(
-        "\n[2] Çıktı CSV dosyasının tam yolu (.csv):\n  > "
+        "\n[2] Full path to output CSV file (.csv):\n  > "
     ).strip()
 
     repeat_times = int(input(
-        "\n[3] Tekrar sayısı (ör. 1440 = 24 saat):\n  > "
+        "\n[3] Repeat count (e.g. 1440 = 24 hours):\n  > "
     ).strip())
 
     wait_sec = float(input(
-        "\n[4] Ölçümler arası bekleme süresi (saniye, ör. 47):\n  > "
+        "\n[4] Wait time between measurements (seconds, e.g. 47):\n  > "
     ).strip())
     wait_ms = int(wait_sec * 1000)
 
     output_script_path = input(
-        "\n[5] Üretilecek script dosyasının tam yolu (.scr):\n  > "
+        "\n[5] Full path for generated script file (.scr):\n  > "
     ).strip()
 
     generate_dropview_script(
