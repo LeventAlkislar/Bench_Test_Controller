@@ -350,7 +350,6 @@ class ViewerTab(QWidget):
             return
         if self._session.status != SessionStatus.IN_PROGRESS:
             return
-        print("[ViewerTab] poll_tick | unexpected_timer_refresh")
         self._refresh(reset_view=False)
 
     # ── Session yükleme ───────────────────────────────────────────
@@ -477,10 +476,6 @@ class ViewerTab(QWidget):
 
     def _load_session(self, session: MeasurementSession):
         """Session nesnesini set eder ve grafiği yeniler."""
-        print(
-            f"[ViewerTab] load_session | part={session.part_number} "
-            f"| status={session.status.value} | dir={session.session_dir}"
-        )
         self._session = session
         self._history_sessions = []
 
@@ -516,10 +511,6 @@ class ViewerTab(QWidget):
         MainWindow.switch_display() tarafindan cagrilir.
         live=True ise poll_timer baslatilir.
         """
-        print(
-            f"[ViewerTab] render_session | live={live} | part={session.part_number} "
-            f"| status={session.status.value} | dir={session.session_dir}"
-        )
         self._load_session(session)
         self._set_plot_titles(session.part_number)
         if live and not self._poll_timer.isActive():
@@ -537,14 +528,7 @@ class ViewerTab(QWidget):
 
     def _refresh(self, reset_view: bool = False):
         """Veriyi yeniden okur ve grafiği günceller."""
-        print(
-            f"[ViewerTab] refresh:start | reset_view={reset_view} "
-            f"| session={getattr(self._session, 'session_dir', None)} "
-            f"| status={getattr(getattr(self._session, 'status', None), 'value', None)} "
-            f"| history_count={len(self._history_sessions)}"
-        )
         if not self._session and not self._history_sessions:
-            print("[ViewerTab] refresh:skip | reason=no_session")
             return
 
         # Session durumunu diskten yenile (başka process güncelliyor olabilir)
@@ -573,7 +557,6 @@ class ViewerTab(QWidget):
         self._update_meta()
         self._load_log()
         self._plot_data(reset_view=reset_view)
-        print("[ViewerTab] refresh:end")
 
     def _update_meta(self):
         """Session meta bilgilerini annotation paneline yazar."""
@@ -747,14 +730,6 @@ class ViewerTab(QWidget):
             bottom_timestamps = [item[0] for item in bottom_pairs]
             bottom_currents = [item[1] for item in bottom_pairs]
 
-        print(
-            f"[ViewerTab] plot_data:data_range | reset_view={reset_view} "
-            f"| manual_zoom={self._manual_top_view_active} "
-            f"| saved_range={self._saved_top_view_range} "
-            f"| x=[{timestamps[0] if timestamps else None}, {timestamps[-1] if timestamps else None}] "
-            f"| y=[{min(currents) if currents else None}, {max(currents) if currents else None}]"
-        )
-
         self._set_hover_data(self.plot_widget_top, timestamps, currents)
         if self.plot_widget_bottom:
             self._set_hover_data(
@@ -825,10 +800,8 @@ class ViewerTab(QWidget):
         # Yeni session yüklenince auto-range uygulanır; normal refresh'te ise
         # kullanıcının mevcut zoom/pan görünümü korunur.
         if reset_view or not self._manual_top_view_active or self._saved_top_view_range is None:
-            print("[ViewerTab] plot_data:view_decision | mode=auto_fit")
             self._auto_fit_top_view()
         else:
-            print("[ViewerTab] plot_data:view_decision | mode=apply_saved")
             self._apply_saved_top_view_range()
         self._update_measure_dots_for_plot(self.plot_widget_top)
         if self.plot_widget_bottom:
@@ -837,9 +810,6 @@ class ViewerTab(QWidget):
             # downsample edilmis gorunume gore yeniden hesaplanabiliyor.
             self.plot_widget_bottom.getViewBox().disableAutoRange(axis="y")
             self._update_measure_dots_for_plot(self.plot_widget_bottom)
-        print(
-            f"[ViewerTab] plot_data:view_after | top_view={self.plot_widget_top.getViewBox().viewRange()}"
-        )
         self._rebuilding_top_view = False
 
     def _read_measurement_series(self):
@@ -871,7 +841,6 @@ class ViewerTab(QWidget):
 
     def _read_session_measurement_data(self, session: MeasurementSession):
         if session is None:
-            print("[ViewerTab] read_measurement:skip | reason=session_none")
             return [], []
 
         # xlsx
@@ -886,18 +855,10 @@ class ViewerTab(QWidget):
 
         if xlsx_path and os.path.isfile(xlsx_path) and _OPENPYXL_OK:
             timestamps, currents = self._read_xlsx(xlsx_path)
-            print(
-                f"[ViewerTab] read_measurement | source=xlsx | path={xlsx_path} "
-                f"| points={len(timestamps)} | status={session.status.value}"
-            )
             return timestamps, currents
 
         # xlsx yoksa CSV'lerden oku (canlı mod)
         timestamps, currents = self._read_csvs(session)
-        print(
-            f"[ViewerTab] read_measurement | source=csv | dir={session.measurements_dir} "
-            f"| points={len(timestamps)} | status={session.status.value}"
-        )
         return timestamps, currents
 
     def _build_mean_series(self, timestamps, currents, group_size: int = 5):
@@ -1210,7 +1171,6 @@ class ViewerTab(QWidget):
             if self._applying_top_view_state or self._rebuilding_top_view:
                 return
             if not self._top_plot_has_data():
-                print("[ViewerTab] top_range_changed | skip_no_plot_data")
                 return
             self._save_current_top_view_range(manual=True)
 
@@ -1238,10 +1198,6 @@ class ViewerTab(QWidget):
         }
         if manual:
             self._manual_top_view_active = True
-        print(
-            f"[ViewerTab] save_top_view_range | manual={manual} "
-            f"| saved={self._saved_top_view_range}"
-        )
 
     def _apply_saved_top_view_range(self):
         """Kayıtlı üst grafik aralığını yeniden uygular."""
@@ -1259,10 +1215,6 @@ class ViewerTab(QWidget):
             )
         finally:
             self._applying_top_view_state = False
-        print(
-            f"[ViewerTab] apply_saved_top_view_range | applied={self._saved_top_view_range} "
-            f"| actual={top_view_box.viewRange()}"
-        )
 
     def _auto_fit_top_view(self):
         """Üst grafiğe kontrollü bir kez auto-fit uygular ve sonucu saklar."""
@@ -1276,9 +1228,6 @@ class ViewerTab(QWidget):
             top_view_box.autoRange()
         finally:
             self._applying_top_view_state = False
-        print(
-            f"[ViewerTab] auto_fit_top_view | actual={top_view_box.viewRange()}"
-        )
         self._save_current_top_view_range(manual=False)
 
     def _update_measure_dots_for_plot(self, plot_widget):
@@ -1603,26 +1552,16 @@ class ViewerTab(QWidget):
         state_norm = (state or "").strip().lower()
         mw = self._get_main_window()
         ctx = getattr(mw, "_ctx", None) if mw is not None else None
-        print(
-            f"[ViewerTab] state_changed | state={state_norm} "
-            f"| display_mode={getattr(ctx, 'display_mode', None)} "
-            f"| session={getattr(self._session, 'session_dir', None)} "
-            f"| status={getattr(getattr(self._session, 'status', None), 'value', None)}"
-        )
 
         if state_norm == "running":
             if ctx is not None and ctx.display_mode != "active":
-                print("[ViewerTab] state_changed:running | skip_non_active_display")
                 return
             if self._session:
                 self.live_lbl.setText(f"⟳ Canlı mod ({POLL_INTERVAL_MS // 1000}sn)")
                 self._refresh(reset_view=False)
-            else:
-                print("[ViewerTab] state_changed:running | no_session_loaded")
             return
         if state_norm == "idle":
             if ctx is not None and ctx.display_mode != "active":
-                print("[ViewerTab] state_changed:idle | skip_non_active_display")
                 return
             self._poll_timer.stop()
             self.live_lbl.setText("")
