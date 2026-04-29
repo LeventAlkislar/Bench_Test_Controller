@@ -162,7 +162,7 @@ class MainWindow(QMainWindow):
 
         self.recipe_tab.log_signal.connect(self.setup_tab.write_to_log)
         self.setup_tab.sm.aggregate_done.connect(self._on_aggregate_done)
-        self.setup_tab.sm.log_signal.connect(self.log_tab.append)
+        self.setup_tab.sm.log_signal.connect(self._on_sm_log_signal)
         self.setup_tab.sm.state_changed.connect(self._on_sm_state_changed)
         self.setup_tab.sm.state_changed.connect(self.viewer_tab._on_session_state_changed)
         self.viewer_tab.session_loaded.connect(self._on_browse_session_loaded)
@@ -178,8 +178,14 @@ class MainWindow(QMainWindow):
     def switch_display(self, session, mode: str, history_sessions=None):
         """
         Tum sekmeleri verilen session'a gore yeniden render eder.
-        mode: "empty" | "active" | "archived" | "history"
+        mode: "empty" | "active" | "archived" | "history" | "legacy"
         """
+        session_dir = getattr(session, "session_dir", None)
+        history_count = len(history_sessions or [])
+        print(
+            f"[MainWindow] switch_display | mode={mode} | session_dir={session_dir} "
+            f"| history_count={history_count} | prev_mode={self._ctx.display_mode}"
+        )
         self._ctx.switch(session, mode)
         self._clear_all_tabs()
 
@@ -216,17 +222,43 @@ class MainWindow(QMainWindow):
 
     def _on_sm_state_changed(self, state: str):
         """StateMachine gecislerinde context'i guncelle."""
+        session = self.setup_tab.sm.session or self.setup_tab.package_panel.get_session()
+        print(
+            f"[MainWindow] sm_state_changed | state={state} "
+            f"| display_mode={self._ctx.display_mode} "
+            f"| active_session={getattr(self._ctx.active_session, 'session_dir', None)} "
+            f"| session={getattr(session, 'session_dir', None)}"
+        )
         if state == "ready":
-            session = self.setup_tab.package_panel.get_session()
-            self._ctx.set_active(session)
-            self.switch_display(session, "active")
+            if session is not None:
+                self._ctx.set_active(session)
+            if session is not None and self._ctx.display_mode in ("empty", "active"):
+                self.switch_display(session, "active")
+        elif state == "running":
+            if session is not None:
+                self._ctx.set_active(session)
+            if session is not None and self._ctx.display_mode in ("empty", "active"):
+                self.switch_display(session, "active")
         elif state == "idle":
+            was_live = self._ctx.display_mode == "active"
+            last_active = self._ctx.active_session
             self._ctx.clear_active()
+            if was_live and last_active is not None:
+                self.switch_display(last_active, "archived")
 
     def _on_aggregate_done(self, xlsx: str):
         """Aggregate tamamlandiysa sadece live moddaki Viewer'i yenile."""
+        print(
+            f"[MainWindow] aggregate_done | is_live={self._ctx.is_live} "
+            f"| display_mode={self._ctx.display_mode} | xlsx={xlsx}"
+        )
         if self._ctx.is_live:
             self.viewer_tab._refresh()
+
+    def _on_sm_log_signal(self, msg: str):
+        """Canli session ekrandaysa state machine loglarini LogTab'e aktar."""
+        if self._ctx.is_live:
+            self.log_tab.append(msg)
 
     def _on_browse_session_loaded(self, session_dir: str):
         """Viewer'dan gecmis session secildiginde tum sekmeleri guncelle."""

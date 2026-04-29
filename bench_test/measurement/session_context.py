@@ -11,7 +11,7 @@ Uygulamada aynı anda iki bağımsız session kavramını taşır:
   displayed_session: Ekranda gösterilen session.
                      Yalnızca switch_display() ile değişir.
 
-  display_mode     : "empty" | "active" | "archived"
+  display_mode     : "empty" | "active" | "archived" | "history" | "legacy"
 
 Sahibi: MainWindow — hiçbir sekme doğrudan değiştirmez.
 """
@@ -22,7 +22,7 @@ from typing import Literal, Optional
 
 from bench_test.measurement.session import MeasurementSession
 
-DisplayMode = Literal["empty", "active", "archived", "history"]
+DisplayMode = Literal["empty", "active", "archived", "history", "legacy"]
 
 
 @dataclass
@@ -40,9 +40,6 @@ class SessionContext:
     def clear_active(self) -> None:
         """SM.reset() çağrısından hemen sonra MainWindow tarafından çağrılır."""
         self.active_session = None
-        if self.display_mode == "active":
-            self.display_mode = "empty"
-            self.displayed_session = None
 
     def switch(
         self,
