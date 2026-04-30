@@ -525,7 +525,7 @@ class RecipeTab(QWidget):
         if path:
             self._load_recipe_from_path(path)
 
-    def _load_recipe_from_path(self, path: str):
+    def _load_recipe_from_path(self, path: str, persist: bool = True):
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
@@ -539,7 +539,8 @@ class RecipeTab(QWidget):
             self._update_loops_display();
             self._update_total_time()
             self._current_recipe_path = path
-            remember_value("last_recipe_file", path)
+            if persist:
+                remember_value("last_recipe_file", path)
             if self.package_tab:
                 self.package_tab.package_panel.set_recipe_ref(path)
             self.log_signal.emit(f"Recipe loaded: {path}")
@@ -548,7 +549,10 @@ class RecipeTab(QWidget):
 
     def _restore_last_recipe(self):
         path = get_value("last_recipe_file", "")
-        if not path or not os.path.isfile(path):
+        if not path:
+            return
+        if not os.path.isfile(path):
+            remember_value("last_recipe_file", "")
             return
         self._load_recipe_from_path(path)
 
@@ -566,7 +570,7 @@ class RecipeTab(QWidget):
             recipe_path = candidate if os.path.isfile(candidate) else None
 
         if recipe_path and os.path.isfile(recipe_path):
-            self._load_recipe_from_path(recipe_path)
+            self._load_recipe_from_path(recipe_path, persist=False)
 
         current_session = self.package_tab.get_session() if self.package_tab else None
         is_active = session.status == SessionStatus.IN_PROGRESS

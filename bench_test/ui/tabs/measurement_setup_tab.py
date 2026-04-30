@@ -210,14 +210,16 @@ class MeasurementSetupTab(QWidget):
         if tp_rel:
             tp_abs = path / tp_rel
             if tp_abs.is_file():
-                self.method_panel.load_from_path(str(tp_abs))
+                self.method_panel.load_from_path(str(tp_abs), persist=False)
 
         # .scr → ScriptParamsPanel
         scr_rel = files.get("script", "")
         if scr_rel:
             scr_abs = path / scr_rel
             if scr_abs.is_file():
-                self.script_panel.restore_from_scr(str(scr_abs))
+                self.script_panel.restore_from_scr(
+                    str(scr_abs), log_fn=self.log_signal.emit
+                )
 
     def render_session(self, session) -> None:
         """
@@ -239,7 +241,7 @@ class MeasurementSetupTab(QWidget):
             )
             tp_path = candidate if os.path.isfile(candidate) else ""
         if tp_path and os.path.isfile(tp_path):
-            self.method_panel.load_from_path(tp_path)
+            self.method_panel.load_from_path(tp_path, persist=False)
 
         scr_path = session.get_file_path("script")
         if not scr_path:
@@ -248,7 +250,9 @@ class MeasurementSetupTab(QWidget):
             )
             scr_path = candidate if os.path.isfile(candidate) else ""
         if scr_path and os.path.isfile(scr_path):
-            self.script_panel.restore_from_scr(scr_path)
+            self.script_panel.restore_from_scr(
+                scr_path, log_fn=self.log_signal.emit
+            )
 
         self.package_panel.set_tp_ref(tp_path or "")
         self.package_panel.set_scr_ref(scr_path or "")

@@ -114,7 +114,7 @@ class ScriptEditorTab(QWidget):
             except Exception:
                 pass
 
-    def _load_from_path(self, path: str):
+    def _load_from_path(self, path: str, persist: bool = True):
         import xml.etree.ElementTree as ET
         tree    = ET.parse(path)
         root    = tree.getroot()
@@ -140,7 +140,8 @@ class ScriptEditorTab(QWidget):
         self._current_path = path
         self._modified     = False
         self.path_edit.setText(path)
-        remember("scr_last_used", path)
+        if persist:
+            remember("scr_last_used", path)
         self.scr_changed.emit(path)
         self._update_preview()
 

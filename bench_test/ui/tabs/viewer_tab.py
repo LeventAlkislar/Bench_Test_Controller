@@ -498,7 +498,7 @@ class ViewerTab(QWidget):
         self.live_lbl.setText("")
         self.delete_btn.setEnabled(False)
         if sessions:
-            part_text = f"{sessions[0].part_number} [history: {len(sessions)}]"
+            part_text = f"{sessions[0].part_number} [session: {len(sessions)}]"
         else:
             part_text = ""
         self._refresh(reset_view=True)
@@ -572,7 +572,7 @@ class ViewerTab(QWidget):
                 f"<b>Dir:</b> <small>{os.path.dirname(first.session_dir)}</small>"
             )
             self.session_lbl.setText(
-                f"{first.part_number}  [history: {len(self._history_sessions)}]"
+                f"{first.part_number}  [session: {len(self._history_sessions)}]"
             )
             return
 

@@ -11,6 +11,8 @@ Sinyaller:
     params_changed()  — herhangi bir parametre değiştiğinde yayar
 """
 
+import os
+
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
     QLineEdit, QSpinBox, QDoubleSpinBox,
@@ -43,16 +45,24 @@ class ScriptParamsPanel(QWidget):
 
         self.repeat_spin = QSpinBox()
         self.repeat_spin.setRange(1, 99999)
-        self.repeat_spin.setValue(DEFAULT_REPEAT_COUNT)
+        self.repeat_spin.setValue(get_value("repeat_count", DEFAULT_REPEAT_COUNT))
         self.repeat_spin.valueChanged.connect(self.params_changed)
+        self.repeat_spin.valueChanged.connect(
+            lambda v: remember_value("repeat_count", v)
+        )
         params_form.addRow("Repeat Count:", self.repeat_spin)
 
         self.wait_spin = QDoubleSpinBox()
         self.wait_spin.setRange(1.0, 3600.0)
         self.wait_spin.setDecimals(1)
-        self.wait_spin.setValue(DEFAULT_WAIT_DURATION_SEC)
+        self.wait_spin.setValue(
+            get_value("wait_duration_sec", DEFAULT_WAIT_DURATION_SEC)
+        )
         self.wait_spin.setSuffix(" sn")
         self.wait_spin.valueChanged.connect(self.params_changed)
+        self.wait_spin.valueChanged.connect(
+            lambda v: remember_value("wait_duration_sec", v)
+        )
         params_form.addRow("Wait Duration:", self.wait_spin)
 
 
@@ -185,9 +195,13 @@ class ScriptParamsPanel(QWidget):
         """Method ve CSV yolu doluysa True."""
         return bool(self.method_edit.text()) and bool(self.csv_edit.text())
 
-    def restore_from_scr(self, scr_path: str):
-        """Geçmiş session .scr dosyasından repeat ve wait parametrelerini yükler."""
+    def restore_from_scr(self, scr_path: str, log_fn=None):
+        """
+        Geçmiş session .scr dosyasından repeat ve wait parametrelerini yükler.
+        Değerleri last_paths'a yazmaz; session restore, kullanıcı tercihi değildir.
+        """
         import xml.etree.ElementTree as ET
+
         try:
             tree = ET.parse(scr_path)
             root = tree.getroot()
@@ -196,13 +210,23 @@ class ScriptParamsPanel(QWidget):
                 if atype == "REPEAT":
                     times = action.findtext("times")
                     if times:
+                        self.repeat_spin.blockSignals(True)
                         self.repeat_spin.setValue(int(times))
+                        self.repeat_spin.blockSignals(False)
                 elif atype == "WAIT":
                     time_ms = action.get("timeMS")
                     if time_ms:
+                        self.wait_spin.blockSignals(True)
                         self.wait_spin.setValue(float(time_ms) / 1000.0)
-        except Exception:
-            pass  # Parse hatası sessizce geçilir, mevcut değerler korunur
+                        self.wait_spin.blockSignals(False)
+        except Exception as e:
+            msg = f"[HATA] .scr parse edilemedi ({os.path.basename(scr_path)}): {e}"
+            if log_fn:
+                log_fn(msg)
+            else:
+                import logging
+
+                logging.getLogger(__name__).warning(msg)
 
     def set_response_delay(self, minutes: int, seconds: int):
         """ViewerTab delay_changed sinyalinden güncellenir."""
@@ -230,10 +254,12 @@ class ScriptParamsPanel(QWidget):
         }
 
     def clear(self):
-        """ScriptParamsPanel'i açılış haline getirir."""
-        self.repeat_spin.setValue(DEFAULT_REPEAT_COUNT)
-        self.wait_spin.setValue(DEFAULT_WAIT_DURATION_SEC)
+        """Session'a ait geçici alanları temizler.
+        Kullanıcı tercihlerine (repeat, wait, temp, flow, glucose) dokunmaz.
+        """
         self.method_edit.clear()
         self.method_edit.setStyleSheet("color: #888; font-style: italic;")
         self.csv_edit.clear()
         self.csv_edit.setStyleSheet("color: #888; font-style: italic;")
+        self.delay_lbl.setText("—")
+        self.delay_lbl.setStyleSheet("color: #888; font-style: italic;")

@@ -310,7 +310,7 @@ class PackageTab(QWidget):
             # ScriptEditorTab'ı güncelle → yeni .scr'yi yükle
             new_scr = packager.get_packed_scr_path()
             if new_scr and self.script_tab:
-                self.script_tab._load_from_path(new_scr)
+                self.script_tab._load_from_path(new_scr, persist=False)
                 self._log(f"✓ Script Editor updated → {new_scr}")
 
             # Durum güncelle

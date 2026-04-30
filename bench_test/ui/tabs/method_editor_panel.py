@@ -190,7 +190,7 @@ class MethodEditorPanel(QWidget):
         if path:
             self.load_from_path(path)
 
-    def load_from_path(self, path: str):
+    def load_from_path(self, path: str, persist: bool = True):
         try:
             tree = ET.parse(path)
             root = tree.getroot()
@@ -260,7 +260,8 @@ class MethodEditorPanel(QWidget):
                 self.multi_current_range_lbl.setText("-")
 
             self._current_path = path
-            remember_value("last_method_file", path)
+            if persist:
+                remember_value("last_method_file", path)
             self.file_lbl.setText(os.path.basename(path))
             self.file_lbl.setStyleSheet("color: #4CAF50; font-size: 11px;")
             self.file_lbl.setToolTip(path)
@@ -278,9 +279,8 @@ class MethodEditorPanel(QWidget):
             self.load_from_path(path)
             return
 
-        self.file_lbl.setText(f"Not found: {os.path.basename(path)}")
-        self.file_lbl.setStyleSheet("color: #F44336; font-size: 11px;")
-        self.file_lbl.setToolTip(path)
+        # Dosya artık erişilebilir değil; sessizce boş bırak ve stale kaydı temizle.
+        remember_value("last_method_file", "")
 
     def get_tp_data(self) -> dict:
         return {
