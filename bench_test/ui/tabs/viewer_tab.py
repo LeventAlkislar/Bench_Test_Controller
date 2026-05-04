@@ -6,7 +6,7 @@ ViewerTab
 Ölçüm verilerini (xlsx/CSV) grafik olarak gösterir.
 
 Özellikler:
-- xlsx veya CSV'den Current (uA) vs Time grafiği (pyqtgraph)
+- xlsx veya CSV'den gelen Current (uA) verisini A'ya çevirerek Time grafiği (pyqtgraph)
 - Step geçişleri → turuncu dikey çizgi + etiket
 - Sistem olayları (started/stopped/paused/resumed) → mavi/kırmızı çizgi
 - Manuel notlar → sol annotation panelinde liste
@@ -93,6 +93,7 @@ _PORT_COLOR_DEFAULT = (160, 160, 160, 0)
 
 _C_MEASURE_LINE = (33, 150, 243)
 _HOVER_DISTANCE_PX = 5
+_CURRENT_UA_TO_A = 1e-6
 
 POLL_INTERVAL_MS = 10_000   # 10 saniye
 
@@ -266,7 +267,7 @@ class ViewerTab(QWidget):
         # Zaman ekseni için DateAxisItem
         date_axis = DateAxisItem(orientation="bottom")
         self.plot_widget_top = pg.PlotWidget(axisItems={"bottom": date_axis})
-        self.plot_widget_top.setLabel("left",   "Current", units="uA")
+        self.plot_widget_top.setLabel("left",   "Current", units="A")
         self.plot_widget_top.setLabel("bottom", "Time")
         self.plot_widget_top.showGrid(x=True, y=True, alpha=0.8)
         self.plot_widget_top.getViewBox().setBorder(pg.mkPen((0, 0, 0), width=1))
@@ -298,7 +299,7 @@ class ViewerTab(QWidget):
         self.plot_widget_bottom = pg.PlotWidget(
             axisItems={"bottom": bottom_date_axis}
         )
-        self.plot_widget_bottom.setLabel("left", "Current", units="uA")
+        self.plot_widget_bottom.setLabel("left", "Current", units="A")
         self.plot_widget_bottom.setLabel("bottom", "Time")
         self.plot_widget_bottom.showGrid(x=True, y=True, alpha=0.8)
         self.plot_widget_bottom.getViewBox().setBorder(pg.mkPen((0, 0, 0), width=1))
@@ -738,7 +739,7 @@ class ViewerTab(QWidget):
                 bottom_currents,
             )
 
-        # Ana seri — Current (uA) -> sadece point, çizgi yok
+        # Ana seri — kaynak Current uA gelir; grafikte A olarak çizilir.
         for label, series_timestamps, series_currents in series_data:
             self.plot_widget_top.plot(
                 series_timestamps,
@@ -830,7 +831,7 @@ class ViewerTab(QWidget):
         timestamps, currents = self._read_session_measurement_data(self._session)
         if not timestamps:
             return []
-        return [("Current (uA)", timestamps, currents)]
+        return [("Current", timestamps, currents)]
 
     def _read_measurement_data(self):
         """
@@ -893,7 +894,7 @@ class ViewerTab(QWidget):
                 # openpyxl datetime → unix timestamp
                 if isinstance(ts_val, datetime):
                     timestamps.append(ts_val.timestamp())
-                    currents.append(float(cur_val))
+                    currents.append(float(cur_val) * _CURRENT_UA_TO_A)
             wb.close()
             return timestamps, currents
         except Exception as e:
@@ -934,7 +935,7 @@ class ViewerTab(QWidget):
                         continue
                     ts = ctime + timedelta(seconds=t_s)
                     timestamps.append(ts.timestamp())
-                    currents.append(cur)
+                    currents.append(cur * _CURRENT_UA_TO_A)
                     count += 1
             except Exception:
                 continue
@@ -1069,7 +1070,7 @@ class ViewerTab(QWidget):
         font.setBold(True)  # bold
         line_top.label.setFont(font)
 
-        self.plot_widget_top.addItem(line_top)
+        self.plot_widget_top.addItem(line_top, ignoreBounds=True)
         self._marker_items.append(line_top)
         self._vline_hover_points.append({
             "plot": self.plot_widget_top,
@@ -1095,7 +1096,7 @@ class ViewerTab(QWidget):
             font.setBold(True)  # bold
             line_bottom.label.setFont(font)
 
-            self.plot_widget_bottom.addItem(line_bottom)
+            self.plot_widget_bottom.addItem(line_bottom, ignoreBounds=True)
             self._marker_items.append(line_bottom)
             self._vline_hover_points.append({
                 "plot": self.plot_widget_bottom,
@@ -1125,7 +1126,7 @@ class ViewerTab(QWidget):
                 pen=pg.mkPen(marker_color, width=1),
                 brush=pg.mkBrush(marker_color),
             )
-            plot_widget.addItem(dot)
+            plot_widget.addItem(dot, ignoreBounds=True)
             self._marker_items.append(dot)
             marker_entry["dot"] = dot
             self._measure_dots.append(marker_entry)
@@ -1413,7 +1414,7 @@ class ViewerTab(QWidget):
         x_value = point_data["x"][nearest_index]
         y_value = point_data["y"][nearest_index]
         ts_text = datetime.fromtimestamp(x_value).strftime("%Y-%m-%d %H:%M:%S")
-        label_text = f"Time: {ts_text}\nCurrent: {y_value:.3f} uA"
+        label_text = f"Time: {ts_text}\nCurrent: {y_value / _CURRENT_UA_TO_A:.3f} uA"
         self._show_hover_label(plot_widget, nearest_index, label_text, pos)
 
     def _show_hover_label(self, plot_widget, point_key,
