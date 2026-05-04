@@ -15,6 +15,7 @@ from bench_test.dropview.vision import (
     wait_for_image,
     wait_for_image_gone,
 )
+from bench_test.utils.debug_log import debug_log
 
 
 def _get_window_pid(hwnd) -> int | None:
@@ -57,8 +58,6 @@ def _window_context(hwnd) -> str:
 
 
 def _log_action(log_fn, action: str, hwnd, result: str, retry: int = 0, detail: str = ""):
-    if not log_fn:
-        return
     fg_title = "unknown"
     fg_hwnd = None
     try:
@@ -67,9 +66,11 @@ def _log_action(log_fn, action: str, hwnd, result: str, retry: int = 0, detail: 
     except Exception:
         pass
     suffix = f" | {detail}" if detail else ""
-    log_fn(
+    level = "warning" if result == "fail" else "debug"
+    debug_log(
         f"│  UI action: {action} | {_window_context(hwnd)} | "
-        f"foreground='{fg_title}' (hwnd={fg_hwnd}) | retry={retry} | result={result}{suffix}"
+        f"foreground='{fg_title}' (hwnd={fg_hwnd}) | retry={retry} | result={result}{suffix}",
+        level=level,
     )
 
 

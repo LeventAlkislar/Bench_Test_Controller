@@ -39,6 +39,7 @@ from bench_test.dropview.window_actions import (
     safe_wait_for_image_gone,
 )
 from bench_test.utils.paths import BASE_DIR, ASSETS_DIR, get_last, remember, get_value, remember_value
+from bench_test.utils.debug_log import debug_log
 
 # pyautogui ayarları
 pyautogui.FAILSAFE = PYAUTOGUI_FAILSAFE
@@ -145,7 +146,10 @@ def _focus_window(hwnd, click_title=False, restore_if_iconic=True, sleep_after=S
     win32gui.SetForegroundWindow(hwnd)
     time.sleep(sleep_after)
     if win32gui.GetForegroundWindow() != hwnd:
-        print(f"│  WARNING: SetForegroundWindow had no effect (hwnd={hwnd}); continuing.")
+        debug_log(
+            f"SetForegroundWindow had no effect (hwnd={hwnd}); continuing.",
+            level="warning",
+        )
     if click_title:
         rect = win32gui.GetWindowRect(hwnd)
         pyautogui.click((rect[0] + rect[2]) // 2, rect[1] + 10)
@@ -214,19 +218,14 @@ def close_owned_dialogs(owner_hwnd, log_fn=None) -> int:
             pyautogui.press("enter")
             time.sleep(SLEEP_AFTER_FOCUS)
             closed += 1
-            if log_fn:
-                log_fn(f"│    Dialog closed: '{title}'")
+            debug_log(f"Dialog closed: '{title}'")
         except Exception as e:
-            if log_fn:
-                log_fn(f"│    ERROR while closing dialog: {e}")
+            debug_log(f"ERROR while closing dialog: {e}", level="warning")
     return closed
 
 
 def _watchdog_log(message: str):
-    print(message)
-    log_fn = _dialog_watchdog_log_fn
-    if log_fn:
-        log_fn(message)
+    debug_log(message)
 
 
 def _describe_dialog(hwnd) -> tuple[str, str]:
@@ -439,8 +438,7 @@ def _classify_error_dialog_by_template(log_fn=None, hwnd=None, use_foreground_fa
     bakarak hatayı sınıflandırır.
     """
     def _log(msg):
-        if log_fn:
-            log_fn(msg)
+        debug_log(msg)
 
     score_no_device = match_score_on_screen(
         _IMG["error_no_device_text"],
@@ -489,8 +487,7 @@ def _wait_for_connection_result(timeout=30, poll_interval=0.5, log_fn=None) -> s
         'timeout'                - Zaman aşımı
     """
     def _log(msg):
-        if log_fn:
-            log_fn(msg)
+        debug_log(msg)
 
     start = time.time()
     while time.time() - start < timeout:
@@ -559,8 +556,7 @@ def _connect_manual(dv_hwnd, target_com: str, log_fn=None) -> str:
                   'potentiostat_not_found' / 'unknown_error' / 'timeout'
     """
     def _log(msg):
-        if log_fn:
-            log_fn(msg)
+        debug_log(msg, level="warning")
 
     if target_com not in DROPSENS_COM_PORTS:
         _log(f"│  WARNING: Unsupported COM port: {target_com}")
@@ -763,8 +759,7 @@ def step_launch_dropview():
 def step_connect_dropsens(target_com: str = None, log_fn=None):
     """Manuel COM port seçimi ile DropSens'e bağlanır; başarısız olursa Ctrl+C fallback."""
     def _log(msg):
-        if log_fn:
-            log_fn(msg)
+        debug_log(msg)
 
     if _is_dropview_connected():
         return
@@ -881,8 +876,7 @@ def step_stop_measure(log_fn=None):
     safe_click(ms_hwnd, ex, ey, log_fn=log_fn, post_delay=SLEEP_AFTER_FOCUS)
 
     wait_for_window_close(MULTISCRIPT_WINDOW, timeout=TIMEOUT_CLOSE_WINDOW)
-    if log_fn:
-        log_fn("│  Multiscript Editor closed.")
+    debug_log("Multiscript Editor closed.")
 
 
 def _force_close_multiscript(log_fn=None) -> bool:
@@ -891,9 +885,7 @@ def _force_close_multiscript(log_fn=None) -> bool:
     Basariliysa True, kapanmadiysa False doner.
     """
     def _log(msg):
-        print(msg)
-        if log_fn:
-            log_fn(msg)
+        debug_log(msg)
 
     if not window_exists(MULTISCRIPT_WINDOW):
         return True
@@ -927,9 +919,7 @@ def _force_close_multiscript(log_fn=None) -> bool:
 def step_exit_dropview(config: dict, log_fn=None):
     """Ctrl+D ile bağlantıyı kes + Alt+F4 ile DropView'i kapat."""
     def _log(msg):
-        print(msg)
-        if log_fn:
-            log_fn(msg)
+        debug_log(msg)
 
     try:
         # Process yoksa pencere de yoktur, erken çık
@@ -1055,9 +1045,7 @@ def step_exit_dropview(config: dict, log_fn=None):
 
 def step_start_dropview(config: dict, log_fn=None):
     def _log(msg):
-        print(msg)
-        if log_fn:
-            log_fn(msg)
+        debug_log(msg)
 
     ensure_dialog_watchdog(log_fn=log_fn)
 
@@ -1228,8 +1216,7 @@ def step_start_measure(config: dict, log_fn=None):
     )
 
     ms_hwnd = find_window(MULTISCRIPT_WINDOW, timeout=15)
-    if log_fn:
-        log_fn(f"│  Multiscript Editor opened (hwnd={ms_hwnd}).")
+    debug_log(f"Multiscript Editor opened (hwnd={ms_hwnd}).")
     time.sleep(SLEEP_AFTER_FOCUS)
 
     lbl_x, lbl_y = safe_find_on_screen(
