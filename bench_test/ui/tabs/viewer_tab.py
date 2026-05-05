@@ -38,15 +38,13 @@ try:
 except ImportError:
     _PG_OK = False
 
-try:
-    import openpyxl
-    _OPENPYXL_OK = True
-except ImportError:
-    _OPENPYXL_OK = False
-
 from bench_test.measurement.session import MeasurementSession, SessionStatus
 from bench_test.measurement.legacy_session import LegacySession
 from bench_test.measurement.log_parser import LogParser, ParseResult, StepEvent, SystemEvent
+from bench_test.measurement.data_io import (
+    MeasurementDataError,
+    read_session_measurement_series,
+)
 from bench_test.ui.widgets import _btn
 from bench_test.utils.paths import open_dir, get_value, remember_value
 
@@ -482,7 +480,7 @@ class ViewerTab(QWidget):
 
         # Canlı mod: sadece IN_PROGRESS iken
         if session.status == SessionStatus.IN_PROGRESS:
-            self.live_lbl.setText("⟳ Canlı mod (30sn)")
+            self.live_lbl.setText("⟳ Canlı mod (10sn)")
             self.delete_btn.setEnabled(False)   # Çalışan session silinemez
         else:
             self._poll_timer.stop()
@@ -843,24 +841,14 @@ class ViewerTab(QWidget):
     def _read_session_measurement_data(self, session: MeasurementSession):
         if session is None:
             return [], []
-
-        # xlsx
-        xlsx_path = session.get_file_path("xlsx")
-        if not xlsx_path:
-            # Oluşturulmuş xlsx'i measurements/ altında ara
-            candidate = os.path.join(
-                session.measurements_dir,
-                f"{session.part_number}.xlsx")
-            if os.path.isfile(candidate):
-                xlsx_path = candidate
-
-        if xlsx_path and os.path.isfile(xlsx_path) and _OPENPYXL_OK:
-            timestamps, currents = self._read_xlsx(xlsx_path)
-            return timestamps, currents
-
-        # xlsx yoksa CSV'lerden oku (canlı mod)
-        timestamps, currents = self._read_csvs(session)
-        return timestamps, currents
+        try:
+            return read_session_measurement_series(
+                session,
+                current_scale=_CURRENT_UA_TO_A,
+            )
+        except MeasurementDataError as e:
+            self.log_signal.emit(f"Viewer olcum verisi okuma hatasi: {e}")
+            return [], []
 
     def _build_mean_series(self, timestamps, currents, group_size: int = 5):
         """Alt grafik için grup ortalamalı seri üretir."""
@@ -880,67 +868,6 @@ class ViewerTab(QWidget):
             mean_currents.append(sum(chunk_currents) / len(chunk_currents))
 
         return mean_timestamps, mean_currents
-
-    def _read_xlsx(self, path: str):
-        """xlsx'ten Time/Current kolonlarını okur."""
-        try:
-            wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
-            ws = wb.active
-            timestamps, currents = [], []
-            for row in ws.iter_rows(min_row=2, values_only=True):
-                ts_val, cur_val = row[0], row[1]
-                if ts_val is None or cur_val is None:
-                    continue
-                # openpyxl datetime → unix timestamp
-                if isinstance(ts_val, datetime):
-                    timestamps.append(ts_val.timestamp())
-                    currents.append(float(cur_val) * _CURRENT_UA_TO_A)
-            wb.close()
-            return timestamps, currents
-        except Exception as e:
-            self.log_signal.emit(f"Viewer xlsx okuma hatası: {e}")
-            return [], []
-
-    def _read_csvs(self, session: MeasurementSession):
-        """CSV dosyalarından veri okur (canlı mod fallback)."""
-        import glob
-        from datetime import timedelta
-
-        mdir = session.measurements_dir
-        files = sorted(glob.glob(os.path.join(mdir, "*.csv")),
-                       key=lambda p: os.path.getctime(p))
-        if not files:
-            return [], []
-
-        timestamps, currents = [], []
-        for path in files:
-            try:
-                ctime = datetime.fromtimestamp(os.path.getctime(path))
-                with open(path, "r", encoding="utf-8", errors="replace") as f:
-                    lines = f.read().splitlines()
-                count = 0
-                for line in lines[3:]:   # CSV_DATA_START = 3
-                    if count >= 5:
-                        break
-                    line = line.strip()
-                    if not line:
-                        continue
-                    parts = line.split(";")
-                    if len(parts) < 2:
-                        continue
-                    try:
-                        t_s = float(parts[0].strip().strip('"'))
-                        cur = float(parts[1].strip().strip('"'))
-                    except ValueError:
-                        continue
-                    ts = ctime + timedelta(seconds=t_s)
-                    timestamps.append(ts.timestamp())
-                    currents.append(cur * _CURRENT_UA_TO_A)
-                    count += 1
-            except Exception:
-                continue
-
-        return timestamps, currents
 
     def _draw_glucose_regions(self, data_timestamps: list):
         """Port A step geçişleri arasındaki bölgeleri porta göre renklendirir."""
@@ -1066,7 +993,7 @@ class ViewerTab(QWidget):
             })
 
         font = QFont()
-        font.setPointSize(10)  # daha büyük
+        font.setPointSize(8)  # daha büyük
         font.setBold(True)  # bold
         line_top.label.setFont(font)
 
@@ -1092,7 +1019,7 @@ class ViewerTab(QWidget):
                 })
 
             font = QFont()
-            font.setPointSize(10)  # daha büyük
+            font.setPointSize(8)  # daha büyük
             font.setBold(True)  # bold
             line_bottom.label.setFont(font)
 
@@ -1122,7 +1049,7 @@ class ViewerTab(QWidget):
             }
             dot = pg.ScatterPlotItem(
                 [x], [0.0],
-                size=10,
+                size=8,
                 pen=pg.mkPen(marker_color, width=1),
                 brush=pg.mkBrush(marker_color),
             )
@@ -1391,7 +1318,8 @@ class ViewerTab(QWidget):
         marker_data = self._find_nearest_event_marker(plot_widget, pos)
         if marker_data is not None:
             marker_id = f"marker:{id(marker_data['dot'])}"
-            self._show_hover_label(plot_widget, marker_id, marker_data["label"], pos)
+            label_text = self._format_marker_hover_text(marker_data)
+            self._show_hover_label(plot_widget, marker_id, label_text, pos)
             return
 
         vline_data = self._find_nearest_vline(plot_widget, pos)
@@ -1413,8 +1341,7 @@ class ViewerTab(QWidget):
 
         x_value = point_data["x"][nearest_index]
         y_value = point_data["y"][nearest_index]
-        ts_text = datetime.fromtimestamp(x_value).strftime("%Y-%m-%d %H:%M:%S")
-        label_text = f"Time: {ts_text}\nCurrent: {y_value / _CURRENT_UA_TO_A:.3f} uA"
+        label_text = self._format_data_point_hover_text(x_value, y_value)
         self._show_hover_label(plot_widget, nearest_index, label_text, pos)
 
     def _show_hover_label(self, plot_widget, point_key,
@@ -1540,13 +1467,32 @@ class ViewerTab(QWidget):
             return None
         return best_item
 
+    def _format_data_point_hover_text(self, timestamp: float, current_a: float) -> str:
+        """Measurement point hover bilgisini ortak iki satirli forma cevirir."""
+        return self._format_hover_text({
+            "timestamp": timestamp,
+            "value": f"{current_a / _CURRENT_UA_TO_A:.3f} uA",
+        })
+
+    def _format_marker_hover_text(self, marker_data) -> str:
+        """Event marker hover bilgisini ortak iki satirli forma cevirir."""
+        return self._format_hover_text({
+            "timestamp": marker_data["x"],
+            "value": (marker_data.get("label") or "-").strip() or "-",
+        })
+
     def _format_vline_hover_text(self, vline_data) -> str:
-        """Dikey cizgi hover metnini hazirlar."""
-        ts_text = datetime.fromtimestamp(vline_data["x"]).strftime("%Y-%m-%d %H:%M:%S")
-        label = (vline_data.get("label") or "").strip()
-        if label:
-            return f"Marker: {label}\nTime: {ts_text}"
-        return f"Time: {ts_text}"
+        """Dikey cizgi hover bilgisini ortak iki satirli forma cevirir."""
+        return self._format_hover_text({
+            "timestamp": vline_data["x"],
+            "value": (vline_data.get("label") or "-").strip() or "-",
+        })
+
+    def _format_hover_text(self, payload: dict) -> str:
+        """Hover payload'ini standart Time/Value metnine donusturur."""
+        ts_text = datetime.fromtimestamp(payload["timestamp"]).strftime("%Y-%m-%d %H:%M:%S")
+#        return f"Time: {ts_text}\nValue: {payload['value']}"
+        return f"Value: {payload['value']}\nTime: {ts_text}"
 
     def _on_session_state_changed(self, state: str):
         """MainWindow state_changed bağlantısı için."""

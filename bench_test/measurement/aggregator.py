@@ -20,7 +20,6 @@ Kullanım:
 """
 
 import os
-import glob
 from datetime import datetime, timedelta
 from typing import Optional, List, Tuple
 
@@ -29,21 +28,17 @@ from typing import Optional, List, Tuple
 try:
     import openpyxl
     from openpyxl.styles import Font, PatternFill, Alignment
-    from openpyxl.utils import get_column_letter
     _OPENPYXL_OK = True
 except ImportError:
     _OPENPYXL_OK = False
 
 from bench_test.measurement.session import MeasurementSession
-
-# Her CSV dosyasından alınacak maksimum ölçüm sayısı
-MAX_SAMPLES_PER_FILE = 5
-
-# CSV formatı
-CSV_SEPARATOR    = ";"
-CSV_DATA_START   = 3   # 0-indexed: satır 0=ID, 1=boş, 2=header, 3+=veri
-CSV_COL_TIME     = 0
-CSV_COL_CURRENT  = 1
+from bench_test.measurement.data_io import (
+    MeasurementDataError,
+    collect_csv_files,
+    get_file_time,
+    parse_csv_file,
+)
 
 
 class AggregatorError(Exception):
@@ -53,70 +48,6 @@ class AggregatorError(Exception):
 # ─────────────────────────────────────────────────────────────────
 #  Düşük seviye: GUI bağımsız
 # ─────────────────────────────────────────────────────────────────
-
-def _get_file_time(path: str) -> datetime:
-    """Dosyanın oluşturma zamanını döndürür (Windows: ctime)."""
-    ts = os.path.getctime(path)
-    return datetime.fromtimestamp(ts)
-
-
-def _parse_csv(path: str, time_offset: timedelta) -> List[Tuple[datetime, float]]:
-    """
-    Tek bir CSV dosyasını okur, en fazla MAX_SAMPLES_PER_FILE satır döner.
-
-    Returns
-    -------
-    list of (timestamp, current_uA)
-    """
-    base_time = _get_file_time(path) + time_offset
-    rows = []
-
-    try:
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
-            lines = f.read().splitlines()
-    except OSError as e:
-        raise AggregatorError(f"Failed to read CSV: {path}\n{e}")
-
-    count = 0
-    for line in lines[CSV_DATA_START:]:
-        line = line.strip()
-        if not line:
-            continue
-        if count >= MAX_SAMPLES_PER_FILE:
-            break
-
-        parts = line.split(CSV_SEPARATOR)
-        if len(parts) < 2:
-            continue
-
-        try:
-            time_s  = float(parts[CSV_COL_TIME].strip().strip('"'))
-            current = float(parts[CSV_COL_CURRENT].strip().strip('"'))
-        except ValueError:
-            continue
-
-        timestamp = base_time + timedelta(seconds=time_s)
-        rows.append((timestamp, current))
-        count += 1
-
-    return rows
-
-
-def _collect_csv_files(measurements_dir: str) -> List[str]:
-    """
-    measurements/ dizinindeki CSV dosyalarını oluşturma zamanına göre sıralar.
-    xlsx dosyaları hariç tutulur.
-    """
-    pattern = os.path.join(measurements_dir, "*.csv")
-    files = glob.glob(pattern)
-    if not files:
-        raise AggregatorError(
-            f"CSV file not found:\n{measurements_dir}")
-
-    # Oluşturma zamanına göre sırala
-    files.sort(key=lambda p: os.path.getctime(p))
-    return files
-
 
 def _write_xlsx(rows: List[Tuple[datetime, float]], output_path: str):
     """
@@ -185,11 +116,17 @@ def aggregate(
         Oluşturulan xlsx dosyasının tam yolu.
     """
     offset = timedelta(hours=offset_hours)
-    csv_files = _collect_csv_files(measurements_dir)
+    try:
+        csv_files = collect_csv_files(measurements_dir)
+    except MeasurementDataError as e:
+        raise AggregatorError(str(e))
 
     all_rows: List[Tuple[datetime, float]] = []
     for path in csv_files:
-        rows = _parse_csv(path, offset)
+        try:
+            rows = parse_csv_file(path, offset)
+        except MeasurementDataError as e:
+            raise AggregatorError(str(e))
         all_rows.extend(rows)
 
     if not all_rows:
@@ -256,13 +193,13 @@ class Aggregator:
         from PyQt6.QtWidgets import QMessageBox
 
         try:
-            csv_files = _collect_csv_files(self.session.measurements_dir)
-        except AggregatorError as e:
+            csv_files = collect_csv_files(self.session.measurements_dir)
+        except MeasurementDataError as e:
             QMessageBox.warning(parent, "Aggregator", str(e))
             return None
 
         # İlk dosyanın zamanını göster, offset sor
-        first_file_time = _get_file_time(csv_files[0])
+        first_file_time = get_file_time(csv_files[0])
         offset_hours = self._ask_offset(parent, first_file_time)
         if offset_hours is None:
             return None  # Kullanıcı iptal etti
