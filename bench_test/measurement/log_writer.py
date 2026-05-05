@@ -16,7 +16,7 @@ Kullanım:
     # Recipe bitince:
     writer.close()
 
-PackageTab.build_package() başarılı olunca açılır,
+PackagePanel.build_package() başarılı olunca açılır,
 on_recipe_completed() / on_recipe_aborted() çağrısında kapanır.
 """
 

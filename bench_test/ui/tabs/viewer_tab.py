@@ -11,7 +11,7 @@ ViewerTab
 - Sistem olayları (started/stopped/paused/resumed) → mavi/kırmızı çizgi
 - Manuel notlar → sol annotation panelinde liste
 - Zoom/Pan: fare tekerleği ve sürükleme (pyqtgraph built-in)
-- Aktif session: PackageTab.get_session() ile otomatik yüklenir
+- Aktif session: PackagePanel.get_session() ile otomatik yüklenir
 - Geçmiş session: Browse butonu ile session dizini seçilir
 - Canlı mod: session IN_PROGRESS iken 30sn'de bir yeniler
 """
@@ -354,7 +354,7 @@ class ViewerTab(QWidget):
     # ── Session yükleme ───────────────────────────────────────────
 
     def _load_active_session(self):
-        """PackageTab'dan aktif session'ı al."""
+        """PackagePanel'den aktif session'ı al."""
         session = self._get_active_session()
         if not session:
             QMessageBox.information(self, "Viewer",

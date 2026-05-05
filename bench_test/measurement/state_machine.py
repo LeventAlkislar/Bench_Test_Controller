@@ -20,7 +20,7 @@ Sinyaller:
     aggregate_done(xlsx: str)    — aggregate tamamlandığında emit
     log_signal(msg: str)         — MainWindow log_tab'e bağlanır
 
-Kullanım (PackageTab içinde):
+Kullanım (PackagePanel içinde):
     self.sm = SessionStateMachine()
     self.sm.aggregate_done.connect(self.viewer_tab._refresh)
     self.sm.log_signal.connect(self.log_tab.append)
@@ -49,7 +49,7 @@ class SessionStateMachine(QObject):
     """
     Session ve recipe yaşam döngüsünü yöneten state machine.
 
-    PackageTab tarafından instantiate edilir ve sahiplenilir.
+    PackagePanel tarafından instantiate edilir ve sahiplenilir.
     Tüm geçişler bu sınıf üzerinden yapılır.
     """
 
@@ -82,7 +82,7 @@ class SessionStateMachine(QObject):
     def build(self, session: MeasurementSession):
         """
         Paket oluşturuldu → IDLE veya READY'den READY'e geç.
-        PackageTab.build_package() başarılı olunca çağrılır.
+        PackagePanel.build_package() başarılı olunca çağrılır.
         """
         if self._state not in (IDLE, READY):
             self._log(f"⚠ build() called in invalid state: {self._state}")
@@ -181,7 +181,7 @@ class SessionStateMachine(QObject):
     def _on_agg_done(self):
         """
         Son aggregate tamamlandı → IDLE'a geç.
-        PackageTab'ın _ask_keep_session() akışını tetikler.
+        PackagePanel'in _ask_keep_session() akışını tetikler.
         """
         self._transition(IDLE)
 

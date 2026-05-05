@@ -7,7 +7,7 @@ MeasurementSetupTab içindeki Kolon 1.
 Part Number + Package Root girişi, dosya referansları,
 oturum durumu ve aggregate butonu.
 
-Mevcut PackageTab mantığını taşır; script_tab / recipe_tab
+Mevcut paketleme mantığını taşır; script_tab / recipe_tab
 referansları yerine MeasurementSetupTab sinyalleriyle beslenir.
 """
 
