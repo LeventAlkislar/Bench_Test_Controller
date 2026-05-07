@@ -21,6 +21,7 @@ on_recipe_completed() / on_recipe_aborted() çağrısında kapanır.
 """
 
 import os
+import sys
 from datetime import datetime
 from typing import Optional
 
@@ -59,7 +60,10 @@ class LogWriter:
         self._file   = open(self._path, "a", encoding="utf-8", buffering=1)
         self._closed = False
         # Oturum başlangıç ayracı
+        from bench_test.version import APP_NAME, APP_VERSION
         self._write_raw(f"\n{'─' * 60}")
+        self._write_raw(f"{APP_NAME}  v{APP_VERSION}")
+        self._write_raw(f"Program file: {os.path.basename(sys.executable)}")
         self._write_raw(f"Session opened: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         self._write_raw(f"Part: {self.session.part_number}  |  Dir: {self.session.session_dir}")
         self._write_raw(f"{'─' * 60}")

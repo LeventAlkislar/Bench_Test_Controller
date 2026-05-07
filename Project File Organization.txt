@@ -1,67 +1,247 @@
+**Mimari**
+Proje bir PyQt6 masaüstü uygulaması. Ana akış şöyle:
+
+`UI -> Recipe/Session akışı -> Valve + DropView kontrolü -> Measurement veri/log işleme -> Viewer/Log ekranları`
+
+Katmanlar:
+- `bench_test/ui/`: Kullanıcı arayüzü.
+- `bench_test/recipe/`: Test adımlarını/senaryoları koordine eder.
+- `bench_test/valve/`: Donanım valf haberleşmesi.
+- `bench_test/dropview/`: DropView yazılımını GUI otomasyonu ile sürer.
+- `bench_test/measurement/`: Session, log, paketleme, veri okuma ve agregasyon.
+- `bench_test/utils/`: Yol ve debug yardımcıları.
+- `bench_test/config.py`: Sabitler.
+- `bench_test/version.py`: Uygulama adı/sürümü ve pencere başlığı üretimi.
+
+**Kök Dizin**
+- `main.py`: Uygulamayı başlatır, hata loglamasını kurar, uygulama ikonunu yükler, `MainWindow` açar.
+- `bench_test/`: Asıl kaynak kod.
+- `ui/`: Ekran görüntüsü / referans görseller.
+- `build/`: PyInstaller build ara çıktıları.
+- `dist/`: Üretilmiş `.exe` sürümleri.
+- `.venv/`: Sanal ortam.
+- `.idea/`: IDE ayarları.
+- `bench_test_debug.log`: Debug log dosyası.
+- `BenchTestController*.spec`: Farklı release sürümleri için PyInstaller spec dosyaları.
+- `build_release.ps1`: Release/build otomasyonu.
+- `AGENTS.md`, `SKILL.md`, `*.md`: İç dokümantasyon ve notlar.
+- `Project File Organization.txt`: Proje organizasyon özeti.
+
+**Kaynak Kod Yapısı**
+```text
+bench_test/
+├─ config.py
+├─ version.py
+├─ dropview/
+├─ measurement/
+├─ recipe/
+├─ ui/
+├─ utils/
+└─ valve/
+```
+
+**Dosyalar ve İşlevleri**
+
+`bench_test/config.py`
+- Timeout, polling, pencere adları, COM portlar, eşik değerleri, varsayılan script parametreleri gibi global sabitleri tutar.
+
+`bench_test/version.py`
+- Uygulama adı ve sürüm bilgisini tanımlar.
+- Pencere başlığı metnini üretir.
+
+**UI katmanı: `bench_test/ui/`**
+- `main_window.py`: Ana pencereyi kurar; `Manual Control`, `Measurement Setup`, `Recipe Control`, `Graphics Viewer`, `Full Log` sekmelerini bağlar. Session context, banner’lar ve sekmeler arası senkronizasyon burada yönetilir.
+- `widgets.py`: Ortak UI yardımcıları.
+
+`bench_test/ui/assets/`
+- `app_icon.ico`, `app_logo.png`: Uygulama ikon ve logo dosyaları.
+
+`bench_test/ui/tabs/`
+- `connection_tab.py`: Şu an çok küçük; bağlantı sekmesi için yer tutucu/kalıntı dosya gibi duruyor.
+- `log_tab.py`: Session loglarını ve çalışma loglarını gösterir.
+- `manual_tab.py`: Valfler ve DropView üzerinde manuel operasyonlar.
+- `measurement_setup_tab.py`: Ölçüm kurulumu; package/method/script alt panellerini birleştirir.
+- `method_editor_panel.py`: Method dosyası/parametreleriyle ilgili düzenleme veya görüntüleme paneli.
+- `package_panel.py`: Session oluşturma, klasör/dosya yapısı, paketleme ve temizleme akışı.
+- `recipe_tab.py`: Recipe oluşturma, yükleme, çalıştırma, durdurma ve durum takibi.
+- `script_params_panel.py`: Script üretiminde kullanılan parametreler.
+- `viewer_tab.py`: Session verilerini, grafikleri ve geçmiş oturumları gösterir.
+
+**Recipe katmanı: `bench_test/recipe/`**
+- `models.py`: Recipe veri modelleri.
+- `runner.py`: Recipe adımlarını sıralı şekilde yürütür; valf ve DropView işlemlerini tetikler.
+
+**Valve katmanı: `bench_test/valve/`**
+- `protocol.py`: Cihaz haberleşme protokolü.
+- `base_controller.py`: Ortak valf kontrol tabanı.
+- `multiport.py`: Multiport valf sürücüsü.
+- `injector.py`: Injector valf sürücüsü.
+
+**DropView entegrasyonu: `bench_test/dropview/`**
+- `controller.py`: UI ile DropView otomasyon katmanı arasındaki köprü.
+- `automator.py`: DropView penceresinde buton tıklama, script yükleme, run/stop gibi otomasyon adımlarını yürütür.
+- `script_generator.py`: DropView script içeriği üretir.
+- `vision.py`: Ekran görüntüsü alma ve template matching yardımcıları.
+- `window_actions.py`: Pencere öne alma, güvenli tıklama, hotkey gönderme, odak yönetimi gibi düşük seviye Windows UI aksiyonları.
+- `img/`: Aktif kullanılan referans otomasyon görselleri.
+- `img unused/`: Kullanılmayan/eski görseller.
+
+**Measurement katmanı: `bench_test/measurement/`**
+- `aggregator.py`: Ölçüm çıktılarının birleştirilmesi/toplanması.
+- `data_io.py`: CSV/XLSX okuma katmanı; viewer ve aggregation için ortak veri erişimi sağlar.
+- `legacy_session.py`: Eski session formatlarıyla uyumluluk için yardımcı model/okuma mantığı.
+- `log_parser.py`: Session loglarını parse eder.
+- `log_writer.py`: Çalışma sırasında log satırları yazar.
+- `packager.py`: Session klasör yapısı ve çıktı dosyalarının paketlenmesi.
+- `session.py`: Güncel measurement session modeli ve yükleme/kaydetme.
+- `session_context.py`: Uygulamanın o anda hangi session’ı hangi modda gösterdiğini tutar.
+- `state_machine.py`: Session yaşam döngüsü ve ölçüm durum geçişleri.
+
+**Utils katmanı: `bench_test/utils/`**
+- `paths.py`: Yol yardımcıları, başlangıç dizinleri, dosya seçim akışları.
+- `debug_log.py`: Ayrı debug logger kurar ve `bench_test_debug.log` dosyasına yazar.
+- `last_paths.json`: Son kullanılan yolların kalıcı kaydı.
+
+**Kaynak Dışı Ama Projeye Ait**
+- `ui/*.png`: Sekme ekran görüntüleri.
+- `dist/*.exe`: Release binary’leri.
+- `build/BenchTestController/`: Paketleme/build çıktıları.
+
+**Özet**
+Güncel durumda proje:
+- bir PyQt6 arayüzü,
+- recipe tabanlı test akışı,
+- valf donanımı kontrolü,
+- DropView GUI otomasyonu,
+- session/log/veri işleme ve grafik gösterimi
+
+üzerine kurulu.
+
+```text
 Bench Test Controller
 │
 ├─ main.py
-│  └─ Uygulamayı başlatır
+│  └─ Uygulamayı başlatır, loglamayı kurar, ana pencereyi açar
 │
 ├─ bench_test/
 │  │
-│  ├─ ui/                         Kullanıcı arayüzü katmanı
-│  │  ├─ main_window.py           Ana pencere ve tab organizasyonu
-│  │  ├─ widgets.py               Ortak UI yardımcıları
-│  │  └─ tabs/                    Uygulama sekmeleri
-│  │     ├─ connection_tab.py     Bağlantı yönetimi
-│  │     ├─ manual_tab.py         Manuel kontrol
-│  │     ├─ measurement_setup...  Ölçüm hazırlığı
-│  │     ├─ recipe_tab.py         Recipe çalıştırma ekranı
-│  │     ├─ log_tab.py            Log görüntüleme
-│  │     └─ viewer_tab.py         Grafik/veri görüntüleme
+│  ├─ config.py
+│  │  └─ Global sabitler, timeout, polling, COM port, eşik değerleri
 │  │
-│  ├─ recipe/                     Test akışı / senaryo yürütme
-│  │  ├─ models.py                Recipe veri modelleri
-│  │  └─ runner.py                Adımları sırayla çalıştırır
+│  ├─ version.py
+│  │  └─ Uygulama adı/sürümü ve pencere başlığı üretimi
 │  │
-│  ├─ dropview/                   DropView entegrasyon katmanı
-│  │  ├─ controller.py            UI ile otomasyon arasında köprü
-│  │  ├─ automator.py             Ekran otomasyonu
-│  │  ├─ script_generator.py      DropView script üretimi
-│  │  ├─ vision.py                Görsel eşleme
-│  │  └─ img/                     Otomasyon referans görselleri
+│  ├─ ui/                                  Arayüz katmanı
+│  │  ├─ main_window.py                    Ana pencere, sekmeler, bannerlar, session display akışı
+│  │  ├─ widgets.py                        Ortak UI yardımcıları
+│  │  ├─ assets/
+│  │  │  ├─ app_icon.ico                   Uygulama ikonu
+│  │  │  └─ app_logo.png                   Uygulama logosu
+│  │  └─ tabs/
+│  │     ├─ connection_tab.py              Bağlantı sekmesi/yer tutucu
+│  │     ├─ log_tab.py                     Log görüntüleme
+│  │     ├─ manual_tab.py                  Manuel kontrol ekranı
+│  │     ├─ measurement_setup_tab.py       Ölçüm kurulum sekmesi
+│  │     ├─ method_editor_panel.py         Method parametre/editör paneli
+│  │     ├─ package_panel.py               Session/package yönetimi
+│  │     ├─ recipe_tab.py                  Recipe oluşturma/çalıştırma
+│  │     ├─ script_params_panel.py         Script parametreleri
+│  │     └─ viewer_tab.py                  Grafik ve session görüntüleme
 │  │
-│  ├─ valve/                      Donanım kontrol katmanı
-│  │  ├─ protocol.py              Haberleşme protokolü
-│  │  ├─ base_controller.py       Ortak kontrol davranışları
-│  │  ├─ multiport.py             Multiport valf kontrolü
-│  │  └─ injector.py              Injector valf kontrolü
+│  ├─ recipe/                              Test akışı / senaryo yürütme
+│  │  ├─ models.py                         Recipe veri modeli
+│  │  └─ runner.py                         Recipe adımlarını yürütür
 │  │
-│  ├─ measurement/                Veri / session / log katmanı
-│  │  ├─ session.py               Session yönetimi
-│  │  ├─ log_writer.py            Çalışma logu yazımı
-│  │  ├─ log_parser.py            Çalışma logu çözümleme
-│  │  ├─ packager.py              Dosya paketleme
-│  │  ├─ aggregator.py            Veri birleştirme/toplama
-│  │  └─ state_machine.py         Session durum akışı
+│  ├─ valve/                               Donanım kontrol katmanı
+│  │  ├─ protocol.py                       Haberleşme protokolü
+│  │  ├─ base_controller.py                Ortak valf kontrol tabanı
+│  │  ├─ multiport.py                      Multiport valf sürücüsü
+│  │  └─ injector.py                       Injector valf sürücüsü
 │  │
-│  ├─ utils/                      Yardımcı araçlar
-│  │  └─ paths.py                 Yol/dosya yardımcıları
+│  ├─ dropview/                            DropView otomasyon katmanı
+│  │  ├─ controller.py                     UI ile DropView arasında köprü
+│  │  ├─ automator.py                      DropView GUI otomasyonu
+│  │  ├─ script_generator.py               DropView script üretimi
+│  │  ├─ vision.py                         Görsel eşleme / ekran arama
+│  │  ├─ window_actions.py                 Güvenli pencere/focus/tıklama işlemleri
+│  │  ├─ img/                              Aktif referans görseller
+│  │  └─ img unused/                       Kullanılmayan/eski görseller
 │  │
-│  └─ config.py                   Global sabitler ve ayarlar
+│  ├─ measurement/                         Veri / session / log katmanı
+│  │  ├─ aggregator.py                     Verileri birleştirir/toplar
+│  │  ├─ data_io.py                        CSV/XLSX okuma katmanı
+│  │  ├─ legacy_session.py                 Eski session format desteği
+│  │  ├─ log_parser.py                     Log çözümleme
+│  │  ├─ log_writer.py                     Log yazımı
+│  │  ├─ packager.py                       Dosya paketleme/session çıktıları
+│  │  ├─ session.py                        Güncel session modeli
+│  │  ├─ session_context.py                Aktif/görüntülenen session bağlamı
+│  │  └─ state_machine.py                  Ölçüm durum geçişleri
+│  │
+│  └─ utils/                               Yardımcı araçlar
+│     ├─ paths.py                          Yol/dosya yardımcıları
+│     ├─ debug_log.py                      Debug log altyapısı
+│     └─ last_paths.json                   Son kullanılan yollar
 │
-├─ ui/                            Ekran görüntüsü / tasarım referansları
-├─ dist/                          Paketlenmiş exe çıktıları
-├─ build/                         Derleme ara çıktıları
-├─ v5.0/                          Eski sürüm arşivi
-├─ v7.9/                          Geçiş/kopya sürüm arşivi
-└─ .venv/                         Python sanal ortamı
+├─ ui/
+│  └─ *.png                                Ekran görüntüsü / referans görseller
+│
+├─ build/
+│  └─ ...                                  Derleme ara çıktıları
+│
+├─ dist/
+│  └─ *.exe                                Paketlenmiş sürümler
+│
+├─ BenchTestController*.spec               PyInstaller yapılandırmaları
+├─ build_release.ps1                       Release/build scripti
+├─ bench_test_debug.log                    Debug log çıktısı
+└─ *.md / *.txt                            İç dokümantasyon ve notlar
+```
 
+İş akışı diyagramı:
 
+```text
 Kullanıcı
   ↓
 UI Sekmeleri
   ↓
-Recipe / Controller Katmanı
+Recipe / Session Yönetimi
   ↓
-DropView Otomasyonu + Valf Kontrolü
+Valve Kontrolü + DropView Otomasyonu
   ↓
-Measurement / Session / Log Katmanı
+Measurement / Log / Paketleme
   ↓
-Grafikler, paketler, kayıtlar, loglar
+Viewer + Full Log
+```
+
+Biraz daha mimari bakışla:
+
+```text
+[UI]
+  main_window
+  manual_tab
+  measurement_setup_tab
+  recipe_tab
+  viewer_tab
+  log_tab
+      ↓
+[Application Flow]
+  recipe.runner
+  measurement.state_machine
+  measurement.session_context
+      ↓
+[Device / External Control]
+  valve.*
+  dropview.controller
+  dropview.automator
+  dropview.window_actions
+  dropview.vision
+      ↓
+[Data Layer]
+  measurement.session
+  measurement.log_writer
+  measurement.log_parser
+  measurement.data_io
+  measurement.aggregator
+  measurement.packager
+```
