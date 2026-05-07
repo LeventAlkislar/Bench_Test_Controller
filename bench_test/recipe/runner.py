@@ -42,6 +42,7 @@ class RecipeRunner(threading.Thread):
         self.recipe_start_t   = None
         self.current_loop_index = 0
         self.current_loop_count = 0
+        self.measurement_running = False
 
     def pause(self):
         self.pause_event.clear()
@@ -77,6 +78,31 @@ class RecipeRunner(threading.Thread):
         except Exception:
             return False
 
+    def _is_measurement_window_open(self) -> bool:
+        try:
+            from bench_test.dropview import automator
+            return automator.window_exists(automator.MULTISCRIPT_WINDOW)
+        except Exception:
+            return False
+
+    def _stop_measurement_for_recipe_stop(self) -> bool:
+        if self.dropview_ctrl is None:
+            return True
+        if not self.measurement_running and not self._is_measurement_window_open():
+            return True
+
+        ok = self.dropview_ctrl.do_stop_measure(log_fn=self._log)
+        if ok:
+            self.measurement_running = False
+            return True
+
+        self.status_queue.put((
+            "stop_failed",
+            "Recipe stop requested, but DropSens measurement could not be stopped. "
+            "Session was not finalized; stop the measurement manually or retry Stop Recipe."
+        ))
+        return False
+
     def _execute_step(self, step: RecipeStep, step_num, total_steps, loop_info=""):
         if self.stop_event.is_set():
             return False
@@ -107,6 +133,7 @@ class RecipeRunner(threading.Thread):
                 self.status_queue.put(("error", f"Step {step_num}: Start Measure failed."))
                 self._cleanup_dropview(step_num)
                 return False
+            self.measurement_running = True
 
         elif action == "stop_measure" and dv:
             self._log("Stopping measurement...")
@@ -114,6 +141,7 @@ class RecipeRunner(threading.Thread):
             if not ok:
                 self.status_queue.put(("error", f"Step {step_num}: Stop Measure failed."))
                 return False
+            self.measurement_running = False
 
         elif action == "exit_dropview" and dv:
             self._log("Closing DropView...")
@@ -121,8 +149,12 @@ class RecipeRunner(threading.Thread):
             if not ok:
                 self.status_queue.put(("error", f"Step {step_num}: Exit DropView failed."))
                 return False
+            self.measurement_running = False
 
         # ── Valf A ────────────────────────────────────────────
+        if self.stop_event.is_set():
+            return False
+
         if step.port > 0 and self.controller_a and self.controller_a.is_connected():
             self.status_queue.put(("switching", f"{loop_info}Valve A -> Port {step.port}"))
             r = self.controller_a.switch_port(step.port)
@@ -233,10 +265,16 @@ class RecipeRunner(threading.Thread):
             total = len(expanded)
             for step_num, idx in enumerate(expanded, 1):
                 if self.stop_event.is_set():
-                    break
+                    if self._stop_measurement_for_recipe_stop():
+                        self.status_queue.put(("stopped", "Recipe stopped."))
+                    return
                 step = steps[idx]
                 ok = self._execute_step(step, step_num, total, loop_info)
                 if not ok:
+                    if self.stop_event.is_set():
+                        if self._stop_measurement_for_recipe_stop():
+                            self.status_queue.put(("stopped", "Recipe stopped."))
+                        return
                     self.status_queue.put(("stopped", "Recipe stopped."))
                     return
 

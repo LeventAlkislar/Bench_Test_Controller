@@ -581,9 +581,11 @@ class RecipeTab(QWidget):
             and self.package_tab.sm.state == "running"
         ):
             is_active = True
-        self.start_btn.setEnabled(is_active)
+        self.start_btn.setEnabled(True)
         self.pause_btn.setEnabled(is_active)
         self.stop_btn.setEnabled(is_active)
+        if not is_active:
+            self.pause_btn.setText("Pause")
         if not is_active:
             self.status_lbl.setText(f"[{session.status.value}] {session.part_number}")
 
@@ -682,17 +684,40 @@ class RecipeTab(QWidget):
                 self.log_signal.emit("Recipe resumed")
 
     def _stop_recipe(self):
+        if not (self.recipe_runner and self.recipe_runner.is_alive()):
+            self._retry_stop_measurement()
+            return
         self.stop_event.set()
-        self._reset_run_metrics()
-        self.start_btn.setEnabled(True); self.pause_btn.setEnabled(False); self.pause_btn.setText("Pause")
-        self.stop_btn.setEnabled(False); self.status_lbl.setText("Stopped")
-        self.progress.setValue(0); self.progress_lbl.setText("0%")
-        if self.package_tab:                                  # ← YENİ
-            self.package_tab.on_recipe_aborted()              # ← YENİ
-        self._simulation_mode = False
-        if self._main_window:
-            self._main_window.set_simulation_mode(False)
-        self.log_signal.emit("Recipe stopped")
+        if self.recipe_runner:
+            self.recipe_runner.resume()
+        self.start_btn.setEnabled(False)
+        self.pause_btn.setEnabled(False)
+        self.pause_btn.setText("Pause")
+        self.stop_btn.setEnabled(False)
+        self.status_lbl.setText("Stopping recipe... waiting for DropSens measurement to stop")
+
+    def _retry_stop_measurement(self):
+        self.start_btn.setEnabled(False)
+        self.pause_btn.setEnabled(False)
+        self.pause_btn.setText("Pause")
+        self.stop_btn.setEnabled(False)
+        self.status_lbl.setText("Retrying DropSens measurement stop...")
+
+        def _run():
+            if not self.dv_ctrl:
+                self.status_queue.put(("stopped", "Recipe stopped."))
+                return
+            ok = self.dv_ctrl.do_stop_measure(log_fn=lambda msg: self.status_queue.put(("log", msg)))
+            if ok:
+                self.status_queue.put(("stopped", "Recipe stopped."))
+            else:
+                self.status_queue.put((
+                    "stop_failed",
+                    "DropSens measurement could not be stopped. "
+                    "Session was not finalized; stop the measurement manually or retry Stop Recipe."
+                ))
+
+        threading.Thread(target=_run, daemon=True).start()
 
     def _poll_queue(self):
         try:
@@ -746,9 +771,26 @@ class RecipeTab(QWidget):
                     self.log_signal.emit(str(data))
                 elif msg_type == "stopped":
                     self._reset_run_metrics()
-                    self.status_lbl.setText(f"Stopped: {data}"); self.log_signal.emit(str(data))
+                    self.status_lbl.setText(f"Aborted: {data}"); self.log_signal.emit(str(data))
+                    self.start_btn.setEnabled(True)
+                    self.pause_btn.setEnabled(False)
+                    self.pause_btn.setText("Pause")
+                    self.stop_btn.setEnabled(False)
+                    self.progress.setValue(0)
+                    self.progress_lbl.setText("0%")
+                    self._simulation_mode = False
+                    if self._main_window:
+                        self._main_window.set_simulation_mode(False)
                     if self.package_tab:
                         self.package_tab.on_recipe_aborted()
+                elif msg_type == "stop_failed":
+                    self.status_lbl.setText(f"Stop failed: {data}")
+                    self.start_btn.setEnabled(False)
+                    self.pause_btn.setEnabled(False)
+                    self.pause_btn.setText("Pause")
+                    self.stop_btn.setEnabled(True)
+                    QMessageBox.critical(self, "Recipe Stop Failed", str(data))
+                    self.log_signal.emit(f"Recipe stop failed: {data}")
                 elif msg_type == "error":
                     self._reset_run_metrics()
                     self.status_lbl.setText(f"ERROR: {data}")

@@ -23,7 +23,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtGui import QFont
 
-from bench_test.measurement.session import MeasurementSession
+from bench_test.measurement.session import MeasurementSession, SessionStatus
 from bench_test.measurement.packager import Packager, PackagerError
 from bench_test.measurement.aggregator import Aggregator
 from bench_test.measurement.log_writer import LogWriter
@@ -251,8 +251,24 @@ class PackagePanel(QWidget):
         recipe_path : RecipeTab._current_recipe_path
         """
         if self._session is not None:
-            self._log("⚠ Active session already exists — reusing current session.")
-            return True
+            if self.sm.state == AGGREGATING:
+                QMessageBox.warning(
+                    self,
+                    "Session Busy",
+                    "The previous session is still aggregating. Wait for it to finish before starting a new recipe.",
+                )
+                return False
+            if self.sm.state in ("ready", "running") and self._session.status in (
+                SessionStatus.PENDING,
+                SessionStatus.IN_PROGRESS,
+            ):
+                self._log("⚠ Active session already exists — reusing current session.")
+                return True
+
+            self._close_log_writer()
+            self._session = None
+            self._log_writer = None
+            self.sm.reset()
 
         part_number  = self.part_number_edit.text().strip()
         package_root = self.package_root_edit.text().strip()
@@ -415,8 +431,8 @@ class PackagePanel(QWidget):
 
     def on_recipe_aborted(self):
         if self._session:
-            self._set_status(f"Stopped: {self._session.part_number}", _COLOR_ERROR)
-            self._log("Session stopped.")
+            self._set_status(f"Aborted: {self._session.part_number}", _COLOR_ERROR)
+            self._log("Session aborted.")
         self.sm.stop()
 
     # ── Aggregator ────────────────────────────────────────────────
