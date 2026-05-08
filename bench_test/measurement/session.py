@@ -78,6 +78,7 @@ class MeasurementSession:
         status: SessionStatus = SessionStatus.PENDING,
         files: Optional[dict] = None,
         notes: str = "",
+        experiment_params: Optional[dict] = None,
     ):
         self.session_dir  = session_dir
         self.part_number  = part_number
@@ -85,6 +86,7 @@ class MeasurementSession:
         self.status       = status
         self.files        = files or {}
         self.notes        = notes
+        self.experiment_params = experiment_params or {}
 
     # ── Fabrika metotları ─────────────────────────────────────────
 
@@ -132,6 +134,7 @@ class MeasurementSession:
             status       = SessionStatus(data.get("status", SessionStatus.PENDING)),
             files        = data.get("files", {}),
             notes        = data.get("notes", ""),
+            experiment_params = data.get("experiment_params") or {},
         )
 
     # ── Durum güncelleme ──────────────────────────────────────────
@@ -195,6 +198,7 @@ class MeasurementSession:
             "status"      : self.status.value,
             "files"       : self.files,
             "notes"       : self.notes,
+            "experiment_params": self.experiment_params,
         }
         path = os.path.join(self.session_dir, SESSION_FILE)
         with open(path, "w", encoding="utf-8") as f:
@@ -210,6 +214,7 @@ class MeasurementSession:
             "measurements_dir": self.measurements_dir,
             "files"           : self.files,
             "notes"           : self.notes,
+            "experiment_params": self.experiment_params,
         }
 
     def __repr__(self) -> str:

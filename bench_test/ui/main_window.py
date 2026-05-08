@@ -170,7 +170,7 @@ class MainWindow(QMainWindow):
             self._on_clear_session
         )
         self.viewer_tab.delay_changed.connect(
-            self.setup_tab.script_panel.set_response_delay
+            self.setup_tab.on_response_delay_changed
         )
 
         self.dv_ctrl.start_polling()

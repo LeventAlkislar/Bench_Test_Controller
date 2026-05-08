@@ -240,7 +240,13 @@ class PackagePanel(QWidget):
 
     # ── Build Package — RecipeTab tarafından çağrılır ─────────────
 
-    def build_package(self, tp_path: str, scr_params: dict, recipe_path: str) -> bool:
+    def build_package(
+        self,
+        tp_path: str,
+        scr_params: dict,
+        recipe_path: str,
+        experiment_params: dict = None,
+    ) -> bool:
         """
         Recipe başlamadan önce paketi oluşturur.
 
@@ -249,6 +255,7 @@ class PackagePanel(QWidget):
         tp_path     : MethodEditorPanel'den gelen kaynak .tp yolu
         scr_params  : ScriptParamsPanel.get_scr_params() çıktısı
         recipe_path : RecipeTab._current_recipe_path
+        experiment_params: Session'a yazilacak deney kosullari snapshot'i
         """
         if self._session is not None:
             if self.sm.state == AGGREGATING:
@@ -296,6 +303,7 @@ class PackagePanel(QWidget):
 
         try:
             self._session = MeasurementSession.create(package_root, part_number)
+            self._session.experiment_params = dict(experiment_params or {})
             packager = Packager(self._session)
 
             # .tp kopyala
@@ -511,6 +519,18 @@ class PackagePanel(QWidget):
 
     def get_session(self) -> MeasurementSession:
         return self._session
+
+    def update_experiment_params(self, params: dict) -> bool:
+        """Aktif session'in deney parametrelerini session.json'a yazar."""
+        if self._session is None:
+            return False
+        self._session.experiment_params = dict(params or {})
+        try:
+            self._session.save()
+            return True
+        except Exception as e:
+            self._log(f"Experiment params could not be saved: {e}")
+            return False
 
     def clear_display(self):
         """Sadece ekranda gorunen session alanlarini temizler."""

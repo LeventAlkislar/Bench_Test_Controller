@@ -134,6 +134,7 @@ class RecipeTab(QWidget):
         self._main_window = None
         self._running_loop_text = "-"
         self._elapsed_time_text = "-"
+        self._display_experiment_params = {}
 
         self._build()
         self._restore_last_recipe()
@@ -331,10 +332,14 @@ class RecipeTab(QWidget):
         self.table.setRowCount(len(self.recipe_steps))
         for i, step in enumerate(self.recipe_steps):
             loop_info = self._get_loop_info(i + 1)
-            glucose_map = get_value("port_glucose", {})
+            glucose_map = self._current_glucose_map()
             if step.port > 0:
                 mg = glucose_map.get(str(step.port))
-                port_display = f"{mg} mg/dL" if mg is not None and mg >= 0 else f"Port {step.port}"
+                try:
+                    mg_val = float(mg) if mg is not None else None
+                except (TypeError, ValueError):
+                    mg_val = None
+                port_display = f"{mg_val:.0f} mg/dL" if mg_val is not None and mg_val >= 0 else f"Port {step.port}"
             else:
                 port_display = "-"
             vals = [
@@ -464,6 +469,12 @@ class RecipeTab(QWidget):
                 return f"Loop x{loop.loop_count}"
         return ""
 
+    def _current_glucose_map(self) -> dict:
+        glucose_map = self._display_experiment_params.get("port_glucose")
+        if isinstance(glucose_map, dict) and glucose_map:
+            return glucose_map
+        return get_value("port_glucose", {})
+
     @staticmethod
     def _format_elapsed_text(total_min: float) -> str:
         d = int(total_min // (24 * 60))
@@ -562,6 +573,7 @@ class RecipeTab(QWidget):
         Session snapshot'indaki recipe.json'dan recipe'yi yukler.
         Aktif recipe runner'a dokunmaz.
         """
+        self._display_experiment_params = getattr(session, "experiment_params", {}) or {}
         recipe_path = session.get_file_path("recipe")
         if not recipe_path:
             candidate = os.path.join(
@@ -818,6 +830,7 @@ class RecipeTab(QWidget):
         self.step_loops.clear()
         self._current_recipe_path = ""
         self._ignoring_changes = False
+        self._display_experiment_params = {}
 
         self.name_edit.setText("New Recipe")
         self.loop_spin.setValue(1)

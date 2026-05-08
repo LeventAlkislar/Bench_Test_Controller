@@ -46,7 +46,7 @@ from bench_test.measurement.data_io import (
     read_session_measurement_series,
 )
 from bench_test.ui.widgets import _btn
-from bench_test.utils.paths import open_dir, get_value, remember_value
+from bench_test.utils.paths import open_dir, get_value
 
 # ── Renkler ───────────────────────────────────────────────────────
 _C_STEP_LINE    = (255,   0,   0)   # Kırmızı  — STEP (Sx Px) marker
@@ -122,6 +122,7 @@ class ViewerTab(QWidget):
         self._hover_state: dict = {}
         self._event_marker_points: list = []
         self._vline_hover_points: list = []
+        self._restoring_response_delay = False
         self.plot_widget_top = None
         self.plot_widget_bottom = None
 
@@ -330,12 +331,39 @@ class ViewerTab(QWidget):
         return self._delay_min_spin.value() * 60.0 + self._delay_sec_spin.value()
 
     def _on_delay_changed(self):
-        """Spinbox değişince kaydet, sinyal yay, grafiği yenile."""
-        remember_value("response_delay_min", self._delay_min_spin.value())
-        remember_value("response_delay_sec", self._delay_sec_spin.value())
+        """Spinbox değişince sinyal yay, grafiği yenile."""
+        if self._restoring_response_delay:
+            return
         self.delay_changed.emit(self._delay_min_spin.value(), self._delay_sec_spin.value())
         if self._session:
             self._refresh()
+
+    def get_response_delay_params(self) -> dict:
+        """Session experiment_params icin response delay alanlarini dondurur."""
+        return {
+            "response_delay_min": self._delay_min_spin.value(),
+            "response_delay_sec": self._delay_sec_spin.value(),
+        }
+
+    def restore_response_delay(self, params: dict):
+        """Session experiment_params alanindan response delay degerlerini yukler."""
+        if not params:
+            return
+        self._restoring_response_delay = True
+        try:
+            if "response_delay_min" in params:
+                self._delay_min_spin.setValue(int(params["response_delay_min"]))
+            if "response_delay_sec" in params:
+                self._delay_sec_spin.setValue(int(params["response_delay_sec"]))
+        finally:
+            self._restoring_response_delay = False
+
+    def restore_default_response_delay(self):
+        """experiment_params olmayan eski session icin son delay tercihini yukler."""
+        self.restore_response_delay({
+            "response_delay_min": get_value("response_delay_min", 0),
+            "response_delay_sec": get_value("response_delay_sec", 0),
+        })
 
     # ── Zamanlayıcı ───────────────────────────────────────────────
     def _setup_poll_timer(self):
@@ -477,6 +505,7 @@ class ViewerTab(QWidget):
         """Session nesnesini set eder ve grafiği yeniler."""
         self._session = session
         self._history_sessions = []
+        self.restore_response_delay(getattr(session, "experiment_params", {}))
 
         # Canlı mod: sadece IN_PROGRESS iken
         if session.status == SessionStatus.IN_PROGRESS:
@@ -1173,12 +1202,23 @@ class ViewerTab(QWidget):
     def _step_label(self, ev: StepEvent) -> str:
         """Step marker için kısa etiket: '50.0 mg/dL' veya 'P3'"""
         if ev.port_a:
-            glucose_map = get_value("port_glucose", {})
+            glucose_map = self._current_glucose_map()
             mg = glucose_map.get(str(ev.port_a))
             if mg is not None:
-                return f"{float(mg):.0f} mg/dL"
+                try:
+                    return f"{float(mg):.0f} mg/dL"
+                except (TypeError, ValueError):
+                    pass
             return f"P{ev.port_a}"
         return ""
+
+    def _current_glucose_map(self) -> dict:
+        """Tekil session varsa once session snapshot'ini, yoksa son tercihi kullanir."""
+        params = getattr(self._session, "experiment_params", {}) if self._session else {}
+        glucose_map = params.get("port_glucose") if isinstance(params, dict) else None
+        if isinstance(glucose_map, dict) and glucose_map:
+            return glucose_map
+        return get_value("port_glucose", {})
 
     def _delete_session(self):
         """Yüklü session dizinini kullanıcı onayı alarak siler."""

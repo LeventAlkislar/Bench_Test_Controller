@@ -27,9 +27,11 @@ from bench_test.utils.paths import get_value, remember_value
 
 class ScriptParamsPanel(QWidget):
     params_changed = pyqtSignal()
+    experiment_params_changed = pyqtSignal(dict)
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._restoring_experiment_params = False
         self._build_ui()
 
     # ── UI ────────────────────────────────────────────────────────
@@ -93,9 +95,7 @@ class ScriptParamsPanel(QWidget):
         self.temp_spin.setDecimals(1)
         self.temp_spin.setSuffix(" °C")
         self.temp_spin.setValue(get_value("temperature_c", 25.0))
-        self.temp_spin.valueChanged.connect(
-            lambda v: remember_value("temperature_c", v)
-        )
+        self.temp_spin.valueChanged.connect(self._on_experiment_params_changed)
         exp_form.addRow("Temperature:", self.temp_spin)
 
         # ── Akış hızı  ayarları ─────────────
@@ -104,9 +104,7 @@ class ScriptParamsPanel(QWidget):
         self.flow_spin.setDecimals(1)
         self.flow_spin.setSuffix(" mL/min")
         self.flow_spin.setValue(get_value("flow_rate_ml_min", 0.0))
-        self.flow_spin.valueChanged.connect(
-            lambda v: remember_value("flow_rate_ml_min", v)
-        )
+        self.flow_spin.valueChanged.connect(self._on_experiment_params_changed)
         exp_form.addRow("Flow Rate:", self.flow_spin)
 
         # ── Görüntüleyici ayarları (salt-okunur) ─────────────
@@ -237,13 +235,80 @@ class ScriptParamsPanel(QWidget):
             self.delay_lbl.setText(f"{minutes} min  {seconds} sec")
             self.delay_lbl.setStyleSheet("color: #4CAF50; font-style: normal;")
 
-    def _save_glucose_map(self):
-        """Port-glikoz eşlemesini last_paths.json'a yazar. -1.0 = boş (tire)."""
+    def get_experiment_params(self) -> dict:
+        """Session'a yazilacak deney parametre snapshot'ini dondurur."""
+        return {
+            "temperature_c": self.temp_spin.value(),
+            "flow_rate_ml_min": self.flow_spin.value(),
+            "port_glucose": self._collect_glucose_map(include_empty=True),
+        }
+
+    def restore_experiment_params(self, params: dict):
+        """Session experiment_params alanindan deney kosullarini panele yukler."""
+        if not params:
+            return
+
+        self._restoring_experiment_params = True
+        try:
+            if "temperature_c" in params:
+                self.temp_spin.setValue(float(params["temperature_c"]))
+            if "flow_rate_ml_min" in params:
+                self.flow_spin.setValue(float(params["flow_rate_ml_min"]))
+
+            glucose = params.get("port_glucose")
+            if isinstance(glucose, dict):
+                for port, spin in self._glucose_spins.items():
+                    saved_val = glucose.get(str(port))
+                    if saved_val is None:
+                        spin.setValue(-1.0)
+                        continue
+                    saved_val = float(saved_val)
+                    if saved_val < 0:
+                        spin.setValue(-1.0)
+                    else:
+                        spin.setValue(float(saved_val))
+        finally:
+            self._restoring_experiment_params = False
+
+    def restore_default_experiment_params(self):
+        """experiment_params olmayan eski session icin son tercih/default degerleri yukler."""
+        default_glucose = {
+            "1": 0,
+            "2": 40,
+            "3": 65,
+            "4": 125,
+            "5": 215,
+            "6": 300,
+            "7": 400,
+            "8": None,
+        }
+        self.restore_experiment_params({
+            "temperature_c": get_value("temperature_c", 25.0),
+            "flow_rate_ml_min": get_value("flow_rate_ml_min", 0.0),
+            "port_glucose": get_value("port_glucose", default_glucose),
+        })
+
+    def _collect_glucose_map(self, include_empty: bool = False) -> dict:
         mapping = {
             str(port): (spin.value() if spin.value() >= 0 else None)
             for port, spin in self._glucose_spins.items()
         }
-        remember_value("port_glucose", mapping)
+        if include_empty:
+            return mapping
+        return {
+            port: value
+            for port, value in mapping.items()
+            if value is not None
+        }
+
+    def _save_glucose_map(self):
+        """Port-glikoz eşlemesi degisince ust katmana bildirir."""
+        self._on_experiment_params_changed()
+
+    def _on_experiment_params_changed(self):
+        if self._restoring_experiment_params:
+            return
+        self.experiment_params_changed.emit(self.get_experiment_params())
 
     def get_glucose_map(self) -> dict:
         """Viewer için {port_int: mg_dl_float} döner. Boş portlar dahil edilmez."""

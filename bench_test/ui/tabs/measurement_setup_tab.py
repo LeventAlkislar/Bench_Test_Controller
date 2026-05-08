@@ -34,6 +34,7 @@ from bench_test.measurement.session import SessionStatus
 from bench_test.ui.tabs.package_panel       import PackagePanel
 from bench_test.ui.tabs.method_editor_panel import MethodEditorPanel
 from bench_test.ui.tabs.script_params_panel import ScriptParamsPanel
+from bench_test.utils.paths import remember_value
 
 
 def _divider() -> QFrame:
@@ -108,6 +109,9 @@ class MeasurementSetupTab(QWidget):
 
         # PackagePanel log sinyalini yukarı ilet
         self.package_panel.log_signal.connect(self.log_signal)
+        self.script_panel.experiment_params_changed.connect(
+            self._on_script_experiment_params_changed
+        )
 
         # recipe_tab referansı varsa recipe dosyasını izle
         if self.recipe_tab and hasattr(self.recipe_tab, "scr_changed"):
@@ -148,6 +152,7 @@ class MeasurementSetupTab(QWidget):
 
         tp_path    = self.method_panel.get_current_path()
         scr_params = self.script_panel.get_scr_params()
+        experiment_params = self.get_experiment_params()
 
         # CSV yolu henüz placeholder ise güncelle
         if not scr_params.get("output_csv"):
@@ -158,6 +163,7 @@ class MeasurementSetupTab(QWidget):
             tp_path    = tp_path,
             scr_params = scr_params,
             recipe_path= recipe_path,
+            experiment_params=experiment_params,
         )
 
     def write_to_log(self, msg: str):
@@ -171,6 +177,88 @@ class MeasurementSetupTab(QWidget):
 
     def get_session(self):
         return self.package_panel.get_session()
+
+    def get_experiment_params(self) -> dict:
+        """Script panel ve viewer delay alanlarini tek session snapshot'inda toplar."""
+        params = self.script_panel.get_experiment_params()
+        mw = self._get_main_window()
+        if mw and hasattr(mw, "viewer_tab"):
+            params.update(mw.viewer_tab.get_response_delay_params())
+        return params
+
+    def _get_main_window(self):
+        w = self.parent()
+        while w:
+            if hasattr(w, "switch_display"):
+                return w
+            w = w.parent() if hasattr(w, "parent") else None
+        return None
+
+    def _on_script_experiment_params_changed(self, _params: dict):
+        self._persist_experiment_params(self.get_experiment_params())
+
+    def on_response_delay_changed(self, minutes: int, seconds: int):
+        """Viewer delay degisince label'i gunceller ve session/global kaydi yapar."""
+        self.script_panel.set_response_delay(minutes, seconds)
+        self._persist_experiment_params(self.get_experiment_params())
+
+    def _persist_experiment_params(self, params: dict):
+        """Moda gore experiment_params'i session.json ve/veya last_paths'a yazar."""
+        mw = self._get_main_window()
+        ctx = getattr(mw, "_ctx", None) if mw is not None else None
+        mode = getattr(ctx, "display_mode", "empty") if ctx is not None else "empty"
+
+        if mode in ("empty", "active"):
+            self._remember_experiment_defaults(params)
+
+        session = None
+        if ctx is not None and mode in ("active", "archived"):
+            session = ctx.displayed_session
+        if session is None and mode == "active":
+            session = self.package_panel.get_session()
+
+        if mode == "history":
+            return
+        if session is None:
+            return
+
+        session.experiment_params = dict(params or {})
+        try:
+            session.save()
+        except Exception as e:
+            self.log_signal.emit(f"Experiment params could not be saved: {e}")
+
+        current_session = self.package_panel.get_session()
+        if (
+            current_session is not None
+            and current_session.session_dir == session.session_dir
+        ):
+            current_session.experiment_params = dict(params or {})
+
+        if mw and hasattr(mw, "viewer_tab"):
+            viewer_session = getattr(mw.viewer_tab, "_session", None)
+            if (
+                viewer_session is not None
+                and viewer_session.session_dir == session.session_dir
+            ):
+                viewer_session.experiment_params = dict(params or {})
+                mw.viewer_tab._refresh()
+
+        if mw and hasattr(mw, "recipe_tab"):
+            mw.recipe_tab._display_experiment_params = dict(params or {})
+            mw.recipe_tab._refresh_table()
+
+    def _remember_experiment_defaults(self, params: dict):
+        """Yeni/aktif akista son kullanici tercihlerini last_paths.json'a yazar."""
+        for key in (
+            "temperature_c",
+            "flow_rate_ml_min",
+            "response_delay_min",
+            "response_delay_sec",
+            "port_glucose",
+        ):
+            if key in params:
+                remember_value(key, params[key])
 
     @property
     def sm(self):
@@ -221,6 +309,16 @@ class MeasurementSetupTab(QWidget):
                     str(scr_abs), log_fn=self.log_signal.emit
                 )
 
+        experiment_params = data.get("experiment_params") or {}
+        if experiment_params:
+            self.script_panel.restore_experiment_params(experiment_params)
+            self.script_panel.set_response_delay(
+                int(experiment_params.get("response_delay_min", 0)),
+                int(experiment_params.get("response_delay_sec", 0)),
+            )
+        else:
+            self.script_panel.restore_default_experiment_params()
+
     def render_session(self, session) -> None:
         """
         MainWindow.switch_display() tarafindan cagrilir.
@@ -252,6 +350,27 @@ class MeasurementSetupTab(QWidget):
         if scr_path and os.path.isfile(scr_path):
             self.script_panel.restore_from_scr(
                 scr_path, log_fn=self.log_signal.emit
+            )
+
+        experiment_params = getattr(session, "experiment_params", {}) or {}
+        if experiment_params:
+            self.script_panel.restore_experiment_params(experiment_params)
+            self.script_panel.set_response_delay(
+                int(experiment_params.get("response_delay_min", 0)),
+                int(experiment_params.get("response_delay_sec", 0)),
+            )
+        else:
+            self.script_panel.restore_default_experiment_params()
+            mw = self._get_main_window()
+            if mw and hasattr(mw, "viewer_tab"):
+                mw.viewer_tab.restore_default_response_delay()
+                delay_params = mw.viewer_tab.get_response_delay_params()
+                self.script_panel.set_response_delay(
+                    delay_params["response_delay_min"],
+                    delay_params["response_delay_sec"],
+                )
+            self.log_signal.emit(
+                "Session has no experiment_params; using current defaults."
             )
 
         self.package_panel.set_tp_ref(tp_path or "")
