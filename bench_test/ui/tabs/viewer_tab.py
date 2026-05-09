@@ -28,7 +28,7 @@ from PyQt6.QtWidgets import (
     QTextEdit, QScrollArea, QFrame, QSizePolicy,
     QMessageBox
 )
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QRectF
 from PyQt6.QtGui import QFont, QColor
 
 try:
@@ -37,6 +37,70 @@ try:
     _PG_OK = True
 except ImportError:
     _PG_OK = False
+
+if _PG_OK:
+    class VerticalDateAxisItem(DateAxisItem):
+        """Date axis with compact two-line timestamp labels rotated 90 degrees."""
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            tick_font = QFont()
+            tick_font.setPointSize(9)
+            self.setHeight(70)
+            self.setStyle(
+                tickFont=tick_font,
+                tickTextOffset=8,
+                textFillLimits=[(0, 10)],
+            )
+
+        def tickStrings(self, values, scale, spacing):
+            labels = []
+            for value in values:
+                try:
+                    labels.append(
+                        datetime.fromtimestamp(value).strftime("%y-%m-%d\n%H:%M:%S")
+                    )
+                except (OverflowError, ValueError, OSError):
+                    labels.append("")
+            return labels
+
+        def drawPicture(self, painter, axisSpec, tickSpecs, textSpecs):
+            painter.setRenderHint(painter.RenderHint.Antialiasing, False)
+            painter.setRenderHint(painter.RenderHint.TextAntialiasing, True)
+
+            pen, p1, p2 = axisSpec
+            painter.setPen(pen)
+            painter.drawLine(p1, p2)
+
+            for tick_pen, tick_p1, tick_p2 in tickSpecs:
+                painter.setPen(tick_pen)
+                painter.drawLine(tick_p1, tick_p2)
+
+            if self.style["tickFont"] is not None:
+                painter.setFont(self.style["tickFont"])
+            painter.setPen(self.textPen())
+            painter.setClipRect(self.boundingRect().toAlignedRect())
+
+            for rect, _flags, text in textSpecs:
+                if self.orientation != "bottom":
+                    painter.drawText(rect, int(Qt.AlignmentFlag.AlignCenter), text)
+                    continue
+
+                painter.save()
+                painter.translate(rect.center().x(), rect.top() + rect.width() / 2.0)
+                painter.rotate(-90)
+                rotated_rect = QRectF(
+                    -rect.width() / 2.0,
+                    -rect.height() / 2.0,
+                    rect.width(),
+                    rect.height(),
+                )
+                painter.drawText(
+                    rotated_rect,
+                    int(Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextDontClip),
+                    text,
+                )
+                painter.restore()
 
 from bench_test.measurement.session import MeasurementSession, SessionStatus
 from bench_test.measurement.legacy_session import LegacySession
@@ -263,8 +327,8 @@ class ViewerTab(QWidget):
         pg.setConfigOption("background", pg.mkColor(*_C_BG))
         pg.setConfigOption("foreground", "k")   # siyah yazı
 
-        # Zaman ekseni için DateAxisItem
-        date_axis = DateAxisItem(orientation="bottom")
+        # Zaman ekseni için dikey etiketli tarih ekseni
+        date_axis = VerticalDateAxisItem(orientation="bottom")
         self.plot_widget_top = pg.PlotWidget(axisItems={"bottom": date_axis})
         self.plot_widget_top.setLabel("left",   "Current", units="A")
         self.plot_widget_top.setLabel("bottom", "Time")
@@ -294,7 +358,7 @@ class ViewerTab(QWidget):
         bottom_group_layout = QVBoxLayout(bottom_group)
         bottom_group_layout.setContentsMargins(10, 10, 10, 10)
 
-        bottom_date_axis = DateAxisItem(orientation="bottom")
+        bottom_date_axis = VerticalDateAxisItem(orientation="bottom")
         self.plot_widget_bottom = pg.PlotWidget(
             axisItems={"bottom": bottom_date_axis}
         )
@@ -317,6 +381,7 @@ class ViewerTab(QWidget):
         # Üst grafik ile aynı eksen davranışı
         self.plot_widget_bottom.setXLink(self.plot_widget_top)
         self.plot_widget_bottom.setYLink(self.plot_widget_top)
+        self._apply_empty_time_axis()
 
         bottom_group_layout.addWidget(self.plot_widget_bottom)
         layout.addWidget(bottom_group)
@@ -1268,6 +1333,7 @@ class ViewerTab(QWidget):
             self.plot_widget_top.clear()
         if self.plot_widget_bottom:
             self.plot_widget_bottom.clear()
+        self._apply_empty_time_axis()
         self._clear_hover_data()
         mw = self._get_main_window()
         if mw and hasattr(mw, "set_part_banner"):
@@ -1277,11 +1343,34 @@ class ViewerTab(QWidget):
         """Veri yoksa grafik alanına mesaj yazar."""
         if not self.plot_widget_top:
             return
+        x_start, x_end, x_mid = self._empty_time_axis_range()
         text = pg.TextItem(
             "Veri bulunamadı.\nÖnce Aggregator çalıştırın veya CSV bekleyin.",
             color=(150, 150, 150), anchor=(0.5, 0.5))
         self.plot_widget_top.addItem(text)
-        text.setPos(0, 0)
+        text.setPos(x_mid, 0)
+        self._apply_empty_time_axis(x_start, x_end)
+
+    def _empty_time_axis_range(self):
+        """Veri yokken epoch yerine bugunun tarih araligini kullanir."""
+        today_start = datetime.now().replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        today_end = today_start.replace(hour=23, minute=59, second=59)
+        x_start = today_start.timestamp()
+        x_end = today_end.timestamp()
+        return x_start, x_end, (x_start + x_end) / 2.0
+
+    def _apply_empty_time_axis(self, x_start: float = None, x_end: float = None):
+        """Bos grafiklerde X ekseninin bugunun tarihlerini gostermesini saglar."""
+        if x_start is None or x_end is None:
+            x_start, x_end, _ = self._empty_time_axis_range()
+        if self.plot_widget_top:
+            self.plot_widget_top.getViewBox().disableAutoRange(axis="x")
+            self.plot_widget_top.setXRange(x_start, x_end, padding=0)
+        if self.plot_widget_bottom:
+            self.plot_widget_bottom.getViewBox().disableAutoRange(axis="x")
+            self.plot_widget_bottom.setXRange(x_start, x_end, padding=0)
 
     def _ensure_hover_tracking(self, plot_widget):
         """Grafikte fare hareketini izleyip yakın noktalar için tooltip gösterir."""
@@ -1581,3 +1670,4 @@ class ViewerTab(QWidget):
             self.plot_widget_top.clear()
         if self.plot_widget_bottom:
             self.plot_widget_bottom.clear()
+        self._apply_empty_time_axis()

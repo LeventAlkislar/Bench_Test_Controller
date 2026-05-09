@@ -110,47 +110,6 @@ class RecipeRunner(threading.Thread):
         action = step.dropview_action
         dv     = self.dropview_ctrl
 
-        if action == "start_dropview" and dv:
-            self._log("Launching DropView and connecting DropSens...")
-            ok = dv.do_start_dropview(log_fn=self._log)
-            if not ok:
-                self.status_queue.put(("error", f"Step {step_num}: Start DropView failed."))
-                self._cleanup_dropview(step_num)
-                return False
-
-        elif action == "start_measure" and dv:
-            if not self._check_dropview_connected():
-                self.status_queue.put(("error",
-                    f"Step {step_num}: DropView is not connected — measurement could not be started. "
-                    "Please add a Start DropView step first."))
-                self._cleanup_dropview(step_num)
-                return False
-            scr_path = self.session_scr_path or step.dropview_scr
-            if scr_path:
-                self._log(f"Script: {scr_path}")
-            ok = dv.do_start_measure(scr_path, log_fn=self._log)
-            if not ok:
-                self.status_queue.put(("error", f"Step {step_num}: Start Measure failed."))
-                self._cleanup_dropview(step_num)
-                return False
-            self.measurement_running = True
-
-        elif action == "stop_measure" and dv:
-            self._log("Stopping measurement...")
-            ok = dv.do_stop_measure(log_fn=self._log)
-            if not ok:
-                self.status_queue.put(("error", f"Step {step_num}: Stop Measure failed."))
-                return False
-            self.measurement_running = False
-
-        elif action == "exit_dropview" and dv:
-            self._log("Closing DropView...")
-            ok = dv.do_exit_dropview(log_fn=self._log)
-            if not ok:
-                self.status_queue.put(("error", f"Step {step_num}: Exit DropView failed."))
-                return False
-            self.measurement_running = False
-
         # ── Valf A ────────────────────────────────────────────
         if self.stop_event.is_set():
             return False
@@ -184,49 +143,97 @@ class RecipeRunner(threading.Thread):
             state_name = InjectorValveController.STATE_NAMES.get(step.valve_b_state, "")
             self._log(f"SIMULATED: Valve B -> {state_name} (not connected, skipped)")
 
-        if step.duration_minutes <= 0:
-            return True
+        if self.stop_event.is_set():
+            return False
+
+        if action == "start_dropview" and dv:
+            self._log("Launching DropView and connecting DropSens...")
+            ok = dv.do_start_dropview(log_fn=self._log)
+            if not ok:
+                self.status_queue.put(("error", f"Step {step_num}: Start DropView failed."))
+                self._cleanup_dropview(step_num)
+                return False
+
+        elif action == "start_measure" and dv:
+            if not self._check_dropview_connected():
+                self.status_queue.put(("error",
+                    f"Step {step_num}: DropView is not connected - measurement could not be started. "
+                    "Please add a Start DropView step first."))
+                self._cleanup_dropview(step_num)
+                return False
+            scr_path = self.session_scr_path or step.dropview_scr
+            if scr_path:
+                self._log(f"Script: {scr_path}")
+            ok = dv.do_start_measure(scr_path, log_fn=self._log)
+            if not ok:
+                self.status_queue.put(("error", f"Step {step_num}: Start Measure failed."))
+                self._cleanup_dropview(step_num)
+                return False
+            self.measurement_running = True
+
+        if self.stop_event.is_set():
+            return False
 
         # ── Süre bekleme döngüsü ──────────────────────────────
-        parts = []
-        if step.port > 0:
-            parts.append(f"A:Port {step.port}")
-        if step.valve_b_state > 0:
-            parts.append(f"B:{'Load' if step.valve_b_state==1 else 'Inject'}")
-        if action != "none":
-            parts.append(f"DV:{DROPVIEW_LABELS.get(action, action)}")
-        valve_str = ", ".join(parts) if parts else "No valve change"
+        if step.duration_minutes > 0:
+            parts = []
+            if step.port > 0:
+                parts.append(f"A:Port {step.port}")
+            if step.valve_b_state > 0:
+                parts.append(f"B:{'Load' if step.valve_b_state==1 else 'Inject'}")
+            if action != "none":
+                parts.append(f"DV:{DROPVIEW_LABELS.get(action, action)}")
+            valve_str = ", ".join(parts) if parts else "No valve change"
+    
+            running_msg = f"{loop_info}Step {step_num}/{total_steps}: {valve_str} for {step.duration_minutes:.1f} min"
+            if step.description:
+                running_msg += f"  |  {step.description}"
+            self.status_queue.put(("running", running_msg))
+    
+            duration_sec = step.duration_minutes * 60
+            start_t = time.time()
+            while time.time() - start_t < duration_sec:
+                if self.stop_event.is_set():
+                    return False
+                self.pause_event.wait()
+                elapsed   = time.time() - start_t
+                remaining = (duration_sec - elapsed) / 60
+                self.status_queue.put(("progress", {
+                    "step": step_num,
+                    "total_steps": total_steps,
+                    "elapsed_min": elapsed / 60,
+                    "overall_elapsed_min": (time.time() - self.recipe_start_t) / 60 if self.recipe_start_t else elapsed / 60,
+                    "remaining_min": remaining,
+                    "remaining_minutes": remaining,
+                    "duration_min": step.duration_minutes,
+                    "total_minutes": step.duration_minutes,
+                    "port": step.port,
+                    "valve_b_state": step.valve_b_state,
+                    "description": step.description,
+                    "loop_info": loop_info,
+                    "loop_index": self.current_loop_index,
+                    "loop_count": self.current_loop_count,
+                }))
+                time.sleep(1.0)
 
-        running_msg = f"{loop_info}Step {step_num}/{total_steps}: {valve_str} for {step.duration_minutes:.1f} min"
-        if step.description:
-            running_msg += f"  |  {step.description}"
-        self.status_queue.put(("running", running_msg))
+        if self.stop_event.is_set():
+            return False
 
-        duration_sec = step.duration_minutes * 60
-        start_t = time.time()
-        while time.time() - start_t < duration_sec:
-            if self.stop_event.is_set():
+        if action == "stop_measure" and dv:
+            self._log("Stopping measurement...")
+            ok = dv.do_stop_measure(log_fn=self._log)
+            if not ok:
+                self.status_queue.put(("error", f"Step {step_num}: Stop Measure failed."))
                 return False
-            self.pause_event.wait()
-            elapsed   = time.time() - start_t
-            remaining = (duration_sec - elapsed) / 60
-            self.status_queue.put(("progress", {
-                "step": step_num,
-                "total_steps": total_steps,
-                "elapsed_min": elapsed / 60,
-                "overall_elapsed_min": (time.time() - self.recipe_start_t) / 60 if self.recipe_start_t else elapsed / 60,
-                "remaining_min": remaining,
-                "remaining_minutes": remaining,
-                "duration_min": step.duration_minutes,
-                "total_minutes": step.duration_minutes,
-                "port": step.port,
-                "valve_b_state": step.valve_b_state,
-                "description": step.description,
-                "loop_info": loop_info,
-                "loop_index": self.current_loop_index,
-                "loop_count": self.current_loop_count,
-            }))
-            time.sleep(1.0)
+            self.measurement_running = False
+
+        elif action == "exit_dropview" and dv:
+            self._log("Closing DropView...")
+            ok = dv.do_exit_dropview(log_fn=self._log)
+            if not ok:
+                self.status_queue.put(("error", f"Step {step_num}: Exit DropView failed."))
+                return False
+            self.measurement_running = False
 
         return True
 
