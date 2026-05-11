@@ -19,7 +19,7 @@ ViewerTab
 import os
 import shutil
 from bisect import bisect_left
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, List
 
 from PyQt6.QtWidgets import (
@@ -109,6 +109,7 @@ from bench_test.measurement.data_io import (
     MeasurementDataError,
     read_session_measurement_series,
 )
+from bench_test.measurement.dropsens_io import read_pad_measurement
 from bench_test.ui.widgets import _btn
 from bench_test.utils.paths import open_dir, get_value
 
@@ -170,6 +171,7 @@ class ViewerTab(QWidget):
         self.package_tab   = package_tab
         self._session      : Optional[MeasurementSession] = None
         self._history_sessions: List[MeasurementSession] = []
+        self._dropsens_pad = None
         self._parse_result : Optional[ParseResult]        = None
         self._marker_items : list = []   # grafikteki marker öğeleri
 
@@ -209,6 +211,7 @@ class ViewerTab(QWidget):
         toolbar.addWidget(_btn("Load Active Session", self._load_active_session, "#FF9800"))
         toolbar.addWidget(_btn("Refresh",             self._refresh_or_load, "#4CAF50"))
         toolbar.addWidget(_btn("Load Session",     self._browse_session,       "#2196F3"))
+        toolbar.addWidget(_btn("Load DropSens PAD", self._browse_dropsens_pad, "#607D8B"))
 
         self.delete_btn = _btn("Delete Session", self._delete_session,  "#F44336")
         self.delete_btn.setEnabled(False)
@@ -400,7 +403,7 @@ class ViewerTab(QWidget):
         if self._restoring_response_delay:
             return
         self.delay_changed.emit(self._delay_min_spin.value(), self._delay_sec_spin.value())
-        if self._session:
+        if self._session or self._history_sessions or self._dropsens_pad:
             self._refresh()
 
     def get_response_delay_params(self) -> dict:
@@ -488,7 +491,7 @@ class ViewerTab(QWidget):
     def _refresh_or_load(self):
         """Refresh: yüklü oturumu yeniler; yoksa aktif oturumu yükler."""
         self._reset_auto_follow()
-        if self._session or self._history_sessions:
+        if self._session or self._history_sessions or self._dropsens_pad:
             self._refresh(reset_view=True)
         else:
             self._load_active_session()
@@ -565,11 +568,43 @@ class ViewerTab(QWidget):
                             "Seçilen dizinde tanınan veri bulunamadı.\n"
                             "session.json, standart xlsx veya CSV dosyası aranır.")
 
+    def _browse_dropsens_pad(self):
+        """Standalone DropSens PAD dosyası seçer ve grafikte gösterir."""
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "DropSens PAD Dosyası Seç",
+            "",
+            "DropSens PAD (*.mtp);;All Files (*)",
+        )
+        if not path:
+            return
+
+        try:
+            measurement = read_pad_measurement(path)
+        except MeasurementDataError as e:
+            QMessageBox.warning(self, "DropSens PAD", str(e))
+            return
+
+        self._reset_auto_follow()
+        self._session = None
+        self._history_sessions = []
+        self._dropsens_pad = measurement
+        self._parse_result = None
+        self._poll_timer.stop()
+        self.live_lbl.setText("")
+        self.delete_btn.setEnabled(False)
+        self._refresh(reset_view=True)
+        self._set_plot_titles(measurement.part_number)
+        mw = self._get_main_window()
+        if mw and hasattr(mw, "set_part_banner"):
+            mw.set_part_banner(measurement.part_number)
+
 
     def _load_session(self, session: MeasurementSession):
         """Session nesnesini set eder ve grafiği yeniler."""
         self._session = session
         self._history_sessions = []
+        self._dropsens_pad = None
         self.restore_response_delay(getattr(session, "experiment_params", {}))
 
         # Canlı mod: sadece IN_PROGRESS iken
@@ -587,6 +622,7 @@ class ViewerTab(QWidget):
         """Bir part altindaki tum session verilerini yukler."""
         self._session = None
         self._history_sessions = list(sessions)
+        self._dropsens_pad = None
         self._poll_timer.stop()
         self.live_lbl.setText("")
         self.delete_btn.setEnabled(False)
@@ -621,13 +657,16 @@ class ViewerTab(QWidget):
 
     def _refresh(self, reset_view: bool = False):
         """Veriyi yeniden okur ve grafiği günceller."""
-        if not self._session and not self._history_sessions:
+        if not self._session and not self._history_sessions and not self._dropsens_pad:
             return
 
         # Session durumunu diskten yenile (başka process güncelliyor olabilir)
         try:
-            json_path = os.path.join(self._session.session_dir, "session.json")
-            if os.path.isfile(json_path):
+            if self._session is not None:
+                json_path = os.path.join(self._session.session_dir, "session.json")
+            else:
+                json_path = ""
+            if json_path and os.path.isfile(json_path):
                 refreshed = MeasurementSession.load(self._session.session_dir)
                 self._session = refreshed
         except Exception:
@@ -653,6 +692,16 @@ class ViewerTab(QWidget):
 
     def _update_meta(self):
         """Session meta bilgilerini annotation paneline yazar."""
+        if self._dropsens_pad:
+            m = self._dropsens_pad
+            self.meta_lbl.setText(
+                f"<b>Part:</b> {m.part_number}<br>"
+                f"<b>Mode:</b> DropSens PAD<br>"
+                f"<b>File:</b> <small>{m.path}</small>"
+            )
+            self.session_lbl.setText(f"{m.part_number}  [DropSens PAD]")
+            return
+
         if self._history_sessions:
             first = self._history_sessions[0]
             created_start = first.created_at.strftime("%Y-%m-%d %H:%M:%S")
@@ -701,6 +750,16 @@ class ViewerTab(QWidget):
 
     def _load_log(self):
         """Log dosyasını parse eder, annotation panellerini doldurur."""
+        if self._dropsens_pad:
+            log_path = getattr(self._dropsens_pad, "recipe_log_path", "") or ""
+            if log_path and os.path.isfile(log_path):
+                self._parse_result = LogParser().parse(log_path)
+            else:
+                self._parse_result = None
+            self.notes_edit.setPlainText("")
+            self.sys_edit.setPlainText("")
+            return
+
         log_paths = self._find_logs()
         if not log_paths:
             self._parse_result = None
@@ -799,6 +858,8 @@ class ViewerTab(QWidget):
         currents = []
         bottom_timestamps = []
         bottom_currents = []
+        mean_group_size = 21 if self._dropsens_pad else 5
+        centered_mean = bool(self._dropsens_pad)
 
         for _, series_timestamps, series_currents in series_data:
             timestamps.extend(series_timestamps)
@@ -806,7 +867,8 @@ class ViewerTab(QWidget):
             mean_ts, mean_cur = self._build_mean_series(
                 series_timestamps,
                 series_currents,
-                group_size=5,
+                group_size=mean_group_size,
+                centered=centered_mean,
             )
             bottom_timestamps.extend(mean_ts)
             bottom_currents.extend(mean_cur)
@@ -862,7 +924,8 @@ class ViewerTab(QWidget):
                 mean_ts, mean_cur = self._build_mean_series(
                     series_timestamps,
                     series_currents,
-                    group_size=5,
+                    group_size=mean_group_size,
+                    centered=centered_mean,
                 )
                 self.plot_widget_bottom.plot(
                     mean_ts,
@@ -907,6 +970,12 @@ class ViewerTab(QWidget):
 
     def _read_measurement_series(self):
         """Tek session veya history modu icin olcum serilerini okur."""
+        if self._dropsens_pad:
+            timestamps, currents = self._read_dropsens_pad_data()
+            if not timestamps:
+                return []
+            return [("Current", timestamps, currents)]
+
         if self._history_sessions:
             all_series = []
             for session in self._history_sessions:
@@ -944,18 +1013,60 @@ class ViewerTab(QWidget):
             self.log_signal.emit(f"Viewer olcum verisi okuma hatasi: {e}")
             return [], []
 
-    def _build_mean_series(self, timestamps, currents, group_size: int = 5):
-        """Alt grafik için grup ortalamalı seri üretir."""
+    def _read_dropsens_pad_data(self):
+        """Loaded DropSens PAD file data as unix timestamps and current in A."""
+        measurement = self._dropsens_pad
+        if measurement is None or not measurement.curves:
+            return [], []
+
+        curve = measurement.curves[0]
+        times = curve.points.get("time", [])
+        currents_ua = curve.points.get("i1", [])
+        total = min(len(times), len(currents_ua))
+        if total <= 0:
+            return [], []
+
+        base_time = measurement.base_time
+        timestamps = [
+            (base_time + timedelta(seconds=times[idx])).timestamp()
+            for idx in range(total)
+        ]
+        currents = [currents_ua[idx] * _CURRENT_UA_TO_A for idx in range(total)]
+        return timestamps, currents
+
+    def _build_mean_series(
+        self,
+        timestamps,
+        currents,
+        group_size: int = 5,
+        centered: bool = False,
+    ):
+        """Alt grafik için blok veya merkezli kayan pencere ortalaması üretir."""
         if not timestamps or not currents or group_size <= 1:
             return list(timestamps), list(currents)
 
         mean_timestamps = []
         mean_currents = []
         total = min(len(timestamps), len(currents))
+        window = max(1, int(group_size))
 
-        for start in range(0, total, group_size):
-            chunk_times = timestamps[start:start + group_size]
-            chunk_currents = currents[start:start + group_size]
+        if not centered:
+            for start in range(0, total, window):
+                end = min(total, start + window)
+                chunk_times = timestamps[start:end]
+                chunk_currents = currents[start:end]
+                if not chunk_times or not chunk_currents:
+                    continue
+                mean_timestamps.append(sum(chunk_times) / len(chunk_times))
+                mean_currents.append(sum(chunk_currents) / len(chunk_currents))
+            return mean_timestamps, mean_currents
+
+        half_window = window // 2
+        for idx in range(total):
+            start = max(0, idx - half_window)
+            end = min(total, idx + half_window + 1)
+            chunk_times = timestamps[start:end]
+            chunk_currents = currents[start:end]
             if not chunk_times or not chunk_currents:
                 continue
             mean_timestamps.append(sum(chunk_times) / len(chunk_times))
@@ -968,6 +1079,7 @@ class ViewerTab(QWidget):
         if not self._parse_result or not data_timestamps:
             return
 
+        t_min = min(data_timestamps)
         t_max = max(data_timestamps)
         offset = self._get_offset_sec()
 
@@ -988,8 +1100,10 @@ class ViewerTab(QWidget):
                      if i + 1 < len(port_events)
                      else t_max)
 
-            if t_end <= t_start:
+            if t_end <= t_start or t_end < t_min or t_start > t_max:
                 continue
+            t_start = max(t_start, t_min)
+            t_end = min(t_end, t_max)
 
             rgba = _PORT_COLORS.get(ev.port_a, _PORT_COLOR_DEFAULT)
             brush = pg.mkBrush(*rgba)
@@ -1013,7 +1127,7 @@ class ViewerTab(QWidget):
         if not data_timestamps:
             return
 
-        t_min = min(data_timestamps)-120
+        t_min = min(data_timestamps)
         t_max = max(data_timestamps)
         self._draw_glucose_regions(data_timestamps)
 
@@ -1021,10 +1135,10 @@ class ViewerTab(QWidget):
         offset = self._get_offset_sec()
         for ev in self._parse_result.step_events:
             t_raw = ev.timestamp.timestamp()
-            if not (t_min <= t_raw <= t_max):
-                continue
 
             if getattr(ev, "marker_kind", "step") == "measure":
+                if not (t_min <= t_raw <= t_max):
+                    continue
                 is_start = getattr(ev, "marker_label", "") == "Start Measure"
                 self._add_measure_marker(
                     t_raw,  # offset yok
@@ -1034,8 +1148,8 @@ class ViewerTab(QWidget):
                 continue
 
             t = t_raw + offset
-
-            label = self._step_label(ev)
+            if not (t_min <= t <= t_max):
+                continue
 
             label = self._step_label(ev)
 
@@ -1646,6 +1760,8 @@ class ViewerTab(QWidget):
     def clear(self):
         """ViewerTab'ı açılış haline getirir."""
         self._session = None
+        self._history_sessions = []
+        self._dropsens_pad = None
         self._parse_result = None
         self._marker_items.clear()
         self._measure_dots.clear()

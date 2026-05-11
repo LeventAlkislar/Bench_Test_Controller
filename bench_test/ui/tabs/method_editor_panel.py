@@ -129,7 +129,7 @@ class MethodEditorPanel(QWidget):
         for pid, unit in meas_params:
             spin = self._dspin(
                 decimals=2,
-                rng=(-10.0, 10.0) if pid.startswith("E") else (0.0, 9999.0),
+                rng=(-10.0, 10.0) if pid.startswith("E") else (0.0, 85000.0),
             )
             self._meas[pid] = spin
             meas_grid.addWidget(QLabel(f"{pid} [{unit}]"), row, col)

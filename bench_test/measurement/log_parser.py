@@ -105,6 +105,17 @@ _RE_STEP = re.compile(
     re.IGNORECASE
 )
 
+_RE_LEGACY_LOOP_STEP = re.compile(
+    r"Loop\s+(\d+)/(\d+),\s*Step\s+(\d+)/(\d+):\s*"
+    r"Port\s+(\d+)(?:\s+for\s+([\d.]+)\s+min)?",
+    re.IGNORECASE
+)
+
+_RE_MANUAL_PORT_SWITCH = re.compile(
+    r"Successfully switched to port\s+(\d+)",
+    re.IGNORECASE
+)
+
 # Measurement action lines:
 # - "Start Measure", "Stop Measure", "Start Measure: ..."
 # - legacy Turkish logs are kept for backward compatibility
@@ -131,7 +142,8 @@ _RE_IGNORE = re.compile(
     r"added recipe step:|cleared all step loops|"
     r"session (opened|closed)|[-─]{5,}|"
     r"part:|session opened:|"
-    r"step loop \d+/\d+ \(steps \d+-\d+\): switching:)",
+    r"step loop \d+/\d+ \(steps \d+-\d+\): switching:|"
+    r"loop \d+/\d+:\s*switching to port \d+)",
     re.IGNORECASE
 )
 
@@ -213,6 +225,16 @@ class LogParser:
                     continue
 
             # Ölçüm aksiyonu olayı mı? (Start/Stop Measure)
+            legacy_step_ev = self._parse_legacy_loop_step(ts, content, raw_line)
+            if legacy_step_ev:
+                result.step_events.append(legacy_step_ev)
+                continue
+
+            manual_switch_ev = self._parse_manual_port_switch(ts, content, raw_line)
+            if manual_switch_ev:
+                result.step_events.append(manual_switch_ev)
+                continue
+
             measure_ev = self._parse_measure(ts, content, raw_line)
             if measure_ev:
                 result.step_events.append(measure_ev)
@@ -264,6 +286,53 @@ class LogParser:
             loop_info   = loop_info,
             marker_kind = "step",
             raw_line    = raw_line,
+        )
+
+    def _parse_legacy_loop_step(
+        self,
+        ts: datetime,
+        content: str,
+        raw_line: str,
+    ) -> Optional[StepEvent]:
+        """'Loop X/Y, Step N/M: Port P for D min' eski log satirini parse eder."""
+        m = _RE_LEGACY_LOOP_STEP.match(content)
+        if not m:
+            return None
+
+        duration = float(m.group(6)) if m.group(6) else None
+        return StepEvent(
+            timestamp    = ts,
+            step_no      = int(m.group(3)),
+            total_steps  = int(m.group(4)),
+            port_a       = int(m.group(5)),
+            valve_b      = None,
+            duration_min = duration,
+            loop_info    = f"Loop {m.group(1)}/{m.group(2)}",
+            marker_kind  = "step",
+            raw_line     = raw_line,
+        )
+
+    def _parse_manual_port_switch(
+        self,
+        ts: datetime,
+        content: str,
+        raw_line: str,
+    ) -> Optional[StepEvent]:
+        """Başarılı manuel 'Successfully switched to port X' satırını parse eder."""
+        m = _RE_MANUAL_PORT_SWITCH.search(content)
+        if not m:
+            return None
+
+        return StepEvent(
+            timestamp    = ts,
+            step_no      = 0,
+            total_steps  = 0,
+            port_a       = int(m.group(1)),
+            valve_b      = None,
+            duration_min = None,
+            loop_info    = "Manual",
+            marker_kind  = "step",
+            raw_line     = raw_line,
         )
 
     def _parse_measure(
