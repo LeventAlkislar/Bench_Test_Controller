@@ -23,7 +23,12 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtGui import QFont
 
-from bench_test.measurement.session import MeasurementSession, SessionStatus
+from bench_test.measurement.session import (
+    MEASUREMENT_MODE_CONTINUOUS_PAD,
+    MEASUREMENT_MODE_SCRIPT_PAD,
+    MeasurementSession,
+    SessionStatus,
+)
 from bench_test.measurement.packager import Packager, PackagerError
 from bench_test.measurement.aggregator import Aggregator
 from bench_test.measurement.log_writer import LogWriter
@@ -246,6 +251,7 @@ class PackagePanel(QWidget):
         scr_params: dict,
         recipe_path: str,
         experiment_params: dict = None,
+        measurement_mode: str = MEASUREMENT_MODE_SCRIPT_PAD,
     ) -> bool:
         """
         Recipe başlamadan önce paketi oluşturur.
@@ -296,6 +302,9 @@ class PackagePanel(QWidget):
                 "Load a .tp file from the Measurement Setup tab.")
             return False
 
+        measurement_mode = measurement_mode or MEASUREMENT_MODE_SCRIPT_PAD
+        continuous_pad = measurement_mode == MEASUREMENT_MODE_CONTINUOUS_PAD
+
         if not scr_params.get("method_file"):
             QMessageBox.warning(self, "Warning",
                 "Script parameters are incomplete.")
@@ -304,6 +313,8 @@ class PackagePanel(QWidget):
         try:
             self._session = MeasurementSession.create(package_root, part_number)
             self._session.experiment_params = dict(experiment_params or {})
+            self._session.measurement_mode = measurement_mode
+            self._session.save()
             packager = Packager(self._session)
 
             # .tp kopyala
@@ -311,20 +322,26 @@ class PackagePanel(QWidget):
             self._log(f"✓ .tp copied: {os.path.basename(tp_path)}")
 
             # .scr üret ve kopyala
-            from bench_test.dropview.script_generator import generate_dropview_script
-            import tempfile
-            with tempfile.NamedTemporaryFile(suffix=".scr", delete=False) as tmp:
-                tmp_path = tmp.name
-            generate_dropview_script(
-                method_file=scr_params["method_file"],
-                output_csv=scr_params["output_csv"],
-                repeat_times=scr_params["repeat_times"],
-                wait_ms=scr_params["wait_ms"],
-                output_script_path=tmp_path,
-            )
-            packager.pack_script(tmp_path)
-            os.unlink(tmp_path)
-            self._log("✓ .scr generated and copied.")
+            if continuous_pad:
+                self._log("Continuous PAD mode: .scr generation skipped.")
+            else:
+                from bench_test.dropview.script_generator import generate_dropview_script
+                import tempfile
+                with tempfile.NamedTemporaryFile(suffix=".scr", delete=False) as tmp:
+                    tmp_path = tmp.name
+                try:
+                    generate_dropview_script(
+                        method_file=scr_params["method_file"],
+                        output_csv=scr_params["output_csv"],
+                        repeat_times=scr_params["repeat_times"],
+                        wait_ms=scr_params["wait_ms"],
+                        output_script_path=tmp_path,
+                    )
+                    packager.pack_script(tmp_path)
+                finally:
+                    if os.path.isfile(tmp_path):
+                        os.unlink(tmp_path)
+                self._log("✓ .scr generated and copied.")
 
             # recipe.json
             if recipe_path and os.path.isfile(recipe_path):
@@ -344,7 +361,7 @@ class PackagePanel(QWidget):
             packager.finalize()
 
             # Referansları güncelle
-            self.set_scr_ref(packager.get_packed_scr_path())
+            self.set_scr_ref("" if continuous_pad else packager.get_packed_scr_path())
             self.set_tp_ref(self._session.tp_path if hasattr(self._session, "tp_path") else tp_path)
             self.set_recipe_ref(effective_recipe_path)
 
@@ -352,7 +369,7 @@ class PackagePanel(QWidget):
             self._set_status(f"Aktif: {part_number} / {session_name}", _COLOR_RUNNING)
             self.session_dir_lbl.setText(self._session.session_dir)
             self.session_id_edit.setText(session_name)
-            self.aggregate_btn.setEnabled(True)
+            self.aggregate_btn.setEnabled(not continuous_pad)
 
             self._log_writer = LogWriter(self._session)
             self._log_writer.open()

@@ -9,6 +9,10 @@ from bench_test.recipe.models import Recipe, RecipeStep
 from bench_test.dropview.controller import DropViewController
 from bench_test.valve.multiport import ValveController
 from bench_test.valve.injector import InjectorValveController
+from bench_test.measurement.session import (
+    MEASUREMENT_MODE_CONTINUOUS_PAD,
+    MEASUREMENT_MODE_SCRIPT_PAD,
+)
 
 # DropView aksiyon sabitleri
 DROPVIEW_ACTIONS = ["none", "start_dropview", "start_measure", "stop_measure", "exit_dropview"]
@@ -27,6 +31,8 @@ class RecipeRunner(threading.Thread):
                  status_queue: queue.Queue, stop_event: threading.Event,
                  dropview_ctrl: Optional[DropViewController] = None,
                  session_scr_path: str = "",
+                 session_tp_path: str = "",
+                 measurement_mode: str = MEASUREMENT_MODE_SCRIPT_PAD,
                  simulation_mode: bool = False):
         super().__init__(daemon=True)
         self.controller_a     = controller_a
@@ -36,6 +42,8 @@ class RecipeRunner(threading.Thread):
         self.stop_event       = stop_event
         self.dropview_ctrl    = dropview_ctrl
         self.session_scr_path = session_scr_path
+        self.session_tp_path  = session_tp_path
+        self.measurement_mode = measurement_mode or MEASUREMENT_MODE_SCRIPT_PAD
         self.simulation_mode  = simulation_mode
         self.pause_event      = threading.Event()
         self.pause_event.set()
@@ -91,7 +99,10 @@ class RecipeRunner(threading.Thread):
         if not self.measurement_running and not self._is_measurement_window_open():
             return True
 
-        ok = self.dropview_ctrl.do_stop_measure(log_fn=self._log)
+        if self.measurement_mode == MEASUREMENT_MODE_CONTINUOUS_PAD:
+            ok = self.dropview_ctrl.do_stop_continuous_pad(log_fn=self._log)
+        else:
+            ok = self.dropview_ctrl.do_stop_measure(log_fn=self._log)
         if ok:
             self.measurement_running = False
             return True
@@ -161,15 +172,26 @@ class RecipeRunner(threading.Thread):
                     "Please add a Start DropView step first."))
                 self._cleanup_dropview(step_num)
                 return False
-            scr_path = self.session_scr_path or step.dropview_scr
-            if scr_path:
-                self._log(f"Script: {scr_path}")
-            ok = dv.do_start_measure(scr_path, log_fn=self._log)
-            if not ok:
-                self.status_queue.put(("error", f"Step {step_num}: Start Measure failed."))
-                self._cleanup_dropview(step_num)
-                return False
-            self.measurement_running = True
+            if self.measurement_mode == MEASUREMENT_MODE_CONTINUOUS_PAD:
+                tp_path = self.session_tp_path
+                if tp_path:
+                    self._log(f"Continuous PAD method: {tp_path}")
+                ok = dv.do_start_continuous_pad(tp_path, log_fn=self._log)
+                if not ok:
+                    self.status_queue.put(("error", f"Step {step_num}: Continuous PAD Start failed."))
+                    self._cleanup_dropview(step_num)
+                    return False
+                self.measurement_running = True
+            else:
+                scr_path = self.session_scr_path or step.dropview_scr
+                if scr_path:
+                    self._log(f"Script: {scr_path}")
+                ok = dv.do_start_measure(scr_path, log_fn=self._log)
+                if not ok:
+                    self.status_queue.put(("error", f"Step {step_num}: Start Measure failed."))
+                    self._cleanup_dropview(step_num)
+                    return False
+                self.measurement_running = True
 
         if self.stop_event.is_set():
             return False
@@ -221,7 +243,10 @@ class RecipeRunner(threading.Thread):
 
         if action == "stop_measure" and dv:
             self._log("Stopping measurement...")
-            ok = dv.do_stop_measure(log_fn=self._log)
+            if self.measurement_mode == MEASUREMENT_MODE_CONTINUOUS_PAD:
+                ok = dv.do_stop_continuous_pad(log_fn=self._log)
+            else:
+                ok = dv.do_stop_measure(log_fn=self._log)
             if not ok:
                 self.status_queue.put(("error", f"Step {step_num}: Stop Measure failed."))
                 return False

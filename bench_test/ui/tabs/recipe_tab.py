@@ -20,7 +20,7 @@ from PyQt6.QtGui import QColor, QFont
 from bench_test.valve.multiport import ValveController
 from bench_test.valve.injector import InjectorValveController
 from bench_test.dropview.controller import DropViewController
-from bench_test.measurement.session import SessionStatus
+from bench_test.measurement.session import MEASUREMENT_MODE_CONTINUOUS_PAD, SessionStatus
 from bench_test.recipe.models import Recipe, RecipeStep, StepLoop
 from bench_test.recipe.runner import RecipeRunner, DROPVIEW_ACTIONS, DROPVIEW_LABELS, DROPVIEW_ZERO_DURATION_OK
 from bench_test.utils.paths import (
@@ -659,15 +659,21 @@ class RecipeTab(QWidget):
                         self.loop_spin.value(), self.step_loops.copy())
         # Packager'ın ürettiği patch'li .scr yolunu al
         session_scr = ""
+        session_tp = ""
+        measurement_mode = ""
         if self.package_tab:
             session = self.package_tab.get_session()
             if session:
                 session_scr = session.get_file_path("script") or ""
+                session_tp = session.get_file_path("tp") or ""
+                measurement_mode = getattr(session, "measurement_mode", "")
 
         try:
             self.recipe_runner = RecipeRunner(
                 self.ctrl_a, self.ctrl_b, recipe, self.status_queue, self.stop_event,
                 self.dv_ctrl, session_scr_path=session_scr,
+                session_tp_path=session_tp,
+                measurement_mode=measurement_mode,
                 simulation_mode=self._simulation_mode)
             self._reset_run_metrics()
             self.recipe_runner.start()
@@ -683,7 +689,16 @@ class RecipeTab(QWidget):
             self.log_signal.emit(f"Recipe start error: {exc}")
             return
 
-        self.start_btn.setEnabled(False); self.pause_btn.setEnabled(True); self.stop_btn.setEnabled(True)
+        continuous_pad = measurement_mode == MEASUREMENT_MODE_CONTINUOUS_PAD
+        self.start_btn.setEnabled(False)
+        self.pause_btn.setEnabled(not continuous_pad)
+        self.stop_btn.setEnabled(True)
+        if continuous_pad:
+            self.pause_btn.setToolTip(
+                "Continuous PAD pause will be enabled after segment stop/start automation is wired."
+            )
+        else:
+            self.pause_btn.setToolTip("")
         self.log_signal.emit(f"Recipe started: {recipe.name}")
 
     def _pause_recipe(self):
@@ -719,7 +734,17 @@ class RecipeTab(QWidget):
             if not self.dv_ctrl:
                 self.status_queue.put(("stopped", "Recipe stopped."))
                 return
-            ok = self.dv_ctrl.do_stop_measure(log_fn=lambda msg: self.status_queue.put(("log", msg)))
+            mode = ""
+            if self.package_tab and self.package_tab.get_session():
+                mode = getattr(self.package_tab.get_session(), "measurement_mode", "")
+            if mode == MEASUREMENT_MODE_CONTINUOUS_PAD:
+                ok = self.dv_ctrl.do_stop_continuous_pad(
+                    log_fn=lambda msg: self.status_queue.put(("log", msg))
+                )
+            else:
+                ok = self.dv_ctrl.do_stop_measure(
+                    log_fn=lambda msg: self.status_queue.put(("log", msg))
+                )
             if ok:
                 self.status_queue.put(("stopped", "Recipe stopped."))
             else:

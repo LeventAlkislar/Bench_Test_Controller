@@ -164,6 +164,7 @@ class MeasurementSetupTab(QWidget):
             scr_params = scr_params,
             recipe_path= recipe_path,
             experiment_params=experiment_params,
+            measurement_mode=scr_params.get("measurement_mode"),
         )
 
     def write_to_log(self, msg: str):

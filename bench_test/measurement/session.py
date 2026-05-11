@@ -48,6 +48,9 @@ DIR_MEASUREMENTS = "measurements"
 DIR_LOGS         = "logs"
 SESSION_FILE     = "session.json"
 
+MEASUREMENT_MODE_SCRIPT_PAD = "script_pad"
+MEASUREMENT_MODE_CONTINUOUS_PAD = "continuous_pad"
+
 
 class MeasurementSession:
     """
@@ -79,6 +82,7 @@ class MeasurementSession:
         files: Optional[dict] = None,
         notes: str = "",
         experiment_params: Optional[dict] = None,
+        measurement_mode: str = MEASUREMENT_MODE_SCRIPT_PAD,
     ):
         self.session_dir  = session_dir
         self.part_number  = part_number
@@ -87,6 +91,7 @@ class MeasurementSession:
         self.files        = files or {}
         self.notes        = notes
         self.experiment_params = experiment_params or {}
+        self.measurement_mode = measurement_mode or MEASUREMENT_MODE_SCRIPT_PAD
 
     # ── Fabrika metotları ─────────────────────────────────────────
 
@@ -135,6 +140,10 @@ class MeasurementSession:
             files        = data.get("files", {}),
             notes        = data.get("notes", ""),
             experiment_params = data.get("experiment_params") or {},
+            measurement_mode = data.get(
+                "measurement_mode",
+                MEASUREMENT_MODE_SCRIPT_PAD,
+            ),
         )
 
     # ── Durum güncelleme ──────────────────────────────────────────
@@ -199,6 +208,7 @@ class MeasurementSession:
             "files"       : self.files,
             "notes"       : self.notes,
             "experiment_params": self.experiment_params,
+            "measurement_mode": self.measurement_mode,
         }
         path = os.path.join(self.session_dir, SESSION_FILE)
         with open(path, "w", encoding="utf-8") as f:
@@ -215,6 +225,7 @@ class MeasurementSession:
             "files"           : self.files,
             "notes"           : self.notes,
             "experiment_params": self.experiment_params,
+            "measurement_mode" : self.measurement_mode,
         }
 
     def __repr__(self) -> str:

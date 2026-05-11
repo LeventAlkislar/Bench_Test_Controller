@@ -35,7 +35,11 @@ from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 
 from bench_test.config import AGGREGATE_INTERVAL_MS
 from bench_test.measurement.aggregator import Aggregator, AggregatorError
-from bench_test.measurement.session import MeasurementSession, SessionStatus
+from bench_test.measurement.session import (
+    MEASUREMENT_MODE_CONTINUOUS_PAD,
+    MeasurementSession,
+    SessionStatus,
+)
 
 
 # ── State sabitleri ───────────────────────────────────────────────
@@ -160,6 +164,12 @@ class SessionStateMachine(QObject):
         AGGREGATING state'inde ise _on_agg_done() çağrılır.
         """
         if not self._session:
+            return
+        if getattr(self._session, "measurement_mode", "") == MEASUREMENT_MODE_CONTINUOUS_PAD:
+            if not periodic:
+                self._log("Continuous PAD: xlsx aggregate skipped; .mtp segments remain available in Viewer.")
+            if self._state == AGGREGATING:
+                self._on_agg_done()
             return
 
         try:

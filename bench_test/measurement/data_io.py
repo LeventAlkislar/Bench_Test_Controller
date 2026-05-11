@@ -12,6 +12,8 @@ import os
 from datetime import datetime, timedelta
 from typing import List, Tuple
 
+from bench_test.measurement.session import MEASUREMENT_MODE_CONTINUOUS_PAD
+
 try:
     import openpyxl
     OPENPYXL_OK = True
@@ -42,6 +44,16 @@ def collect_csv_files(measurements_dir: str) -> List[str]:
     files = glob.glob(pattern)
     if not files:
         raise MeasurementDataError(f"CSV file not found:\n{measurements_dir}")
+    files.sort(key=lambda p: os.path.getctime(p))
+    return files
+
+
+def collect_mtp_files(measurements_dir: str) -> List[str]:
+    """Return DropSens PAD segment files in measurement order."""
+    pattern = os.path.join(measurements_dir, "*.mtp")
+    files = glob.glob(pattern)
+    if not files:
+        raise MeasurementDataError(f"DropSens PAD file not found:\n{measurements_dir}")
     files.sort(key=lambda p: os.path.getctime(p))
     return files
 
@@ -159,6 +171,15 @@ def read_session_measurement_series(
     if xlsx_path and OPENPYXL_OK:
         return read_xlsx_measurement_series(xlsx_path, current_scale=current_scale)
 
+    if getattr(session, "measurement_mode", "") == MEASUREMENT_MODE_CONTINUOUS_PAD:
+        try:
+            return read_session_pad_segment_series(
+                session.measurements_dir,
+                current_scale=current_scale,
+            )
+        except MeasurementDataError:
+            return [], []
+
     try:
         return read_csv_measurement_series(
             session.measurements_dir,
@@ -166,3 +187,34 @@ def read_session_measurement_series(
         )
     except MeasurementDataError:
         return [], []
+
+
+def read_session_pad_segment_series(
+    measurements_dir: str,
+    current_scale: float = 1.0,
+) -> Tuple[List[float], List[float]]:
+    """Read all AutoSave PAD .mtp segment files as one time-aware series."""
+    # Local import avoids a module cycle: dropsens_io reuses MeasurementDataError.
+    from bench_test.measurement.dropsens_io import read_pad_measurement
+
+    timestamps: List[float] = []
+    currents: List[float] = []
+
+    for path in collect_mtp_files(measurements_dir):
+        measurement = read_pad_measurement(path)
+        if not measurement.curves:
+            continue
+        curve = measurement.curves[0]
+        times = curve.points.get("time", [])
+        currents_ua = curve.points.get("i1", [])
+        total = min(len(times), len(currents_ua))
+        for idx in range(total):
+            ts = measurement.base_time + timedelta(seconds=times[idx])
+            timestamps.append(ts.timestamp())
+            currents.append(currents_ua[idx] * current_scale)
+
+    if not timestamps:
+        raise MeasurementDataError(f"No PAD segment data found:\n{measurements_dir}")
+
+    pairs = sorted(zip(timestamps, currents), key=lambda item: item[0])
+    return [item[0] for item in pairs], [item[1] for item in pairs]

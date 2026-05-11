@@ -16,11 +16,15 @@ import os
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
     QLineEdit, QSpinBox, QDoubleSpinBox,
-    QGroupBox, QLabel
+    QGroupBox, QLabel, QComboBox
 )
 from PyQt6.QtCore import pyqtSignal, Qt
 
 from bench_test.config import DEFAULT_REPEAT_COUNT, DEFAULT_WAIT_DURATION_SEC
+from bench_test.measurement.session import (
+    MEASUREMENT_MODE_CONTINUOUS_PAD,
+    MEASUREMENT_MODE_SCRIPT_PAD,
+)
 from bench_test.ui.widgets import _btn
 from bench_test.utils.paths import get_value, remember_value
 
@@ -40,6 +44,22 @@ class ScriptParamsPanel(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
+
+        mode_grp = QGroupBox("Measurement Mode")
+        mode_form = QFormLayout(mode_grp)
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItem("Script PAD", MEASUREMENT_MODE_SCRIPT_PAD)
+        self.mode_combo.addItem("Continuous PAD", MEASUREMENT_MODE_CONTINUOUS_PAD)
+        saved_mode = get_value("measurement_mode", MEASUREMENT_MODE_SCRIPT_PAD)
+        mode_idx = self.mode_combo.findData(saved_mode)
+        self.mode_combo.setCurrentIndex(mode_idx if mode_idx >= 0 else 0)
+        self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
+        mode_form.addRow("Mode:", self.mode_combo)
+        self.mode_hint_lbl = QLabel("")
+        self.mode_hint_lbl.setWordWrap(True)
+        self.mode_hint_lbl.setStyleSheet("color: #888; font-size: 11px;")
+        mode_form.addRow("", self.mode_hint_lbl)
+        layout.addWidget(mode_grp)
 
         # ── Kullanıcı parametreleri ───────────────────────────
         params_grp = QGroupBox("Script Parameters")
@@ -84,6 +104,7 @@ class ScriptParamsPanel(QWidget):
         params_form.addRow("CSV File:", self.csv_edit)
 
         layout.addWidget(params_grp)
+        self._apply_mode_to_ui()
 
         # ── Deney koşulları ───────────────────────────────────
         exp_grp = QGroupBox("Experiment Conditions")
@@ -178,6 +199,36 @@ class ScriptParamsPanel(QWidget):
 
     # ── Dışa veri ─────────────────────────────────────────────────
 
+    def get_measurement_mode(self) -> str:
+        """Return the selected measurement mode identifier."""
+        return self.mode_combo.currentData() or MEASUREMENT_MODE_SCRIPT_PAD
+
+    def set_measurement_mode(self, mode: str):
+        """Restore a measurement mode without assuming it is still available."""
+        idx = self.mode_combo.findData(mode)
+        self.mode_combo.setCurrentIndex(idx if idx >= 0 else 0)
+
+    def _on_mode_changed(self):
+        mode = self.get_measurement_mode()
+        remember_value("measurement_mode", mode)
+        self._apply_mode_to_ui()
+        self.params_changed.emit()
+
+    def _apply_mode_to_ui(self):
+        continuous = self.get_measurement_mode() == MEASUREMENT_MODE_CONTINUOUS_PAD
+        self.repeat_spin.setEnabled(not continuous)
+        self.wait_spin.setEnabled(not continuous)
+        self.csv_edit.setEnabled(not continuous)
+        if continuous:
+            self.mode_hint_lbl.setText(
+                "Loads the .tp directly. DropView AutoSave .mtp files are used; "
+                "live CSV plotting and script repeat/wait are disabled."
+            )
+        else:
+            self.mode_hint_lbl.setText(
+                "Generates a .scr file and exports CSV files during measurement."
+            )
+
     def get_scr_params(self) -> dict:
         """
         MeasurementSetupTab tarafından .scr üretmek için kullanılır.
@@ -187,10 +238,13 @@ class ScriptParamsPanel(QWidget):
             "output_csv":   self.csv_edit.text().strip(),
             "repeat_times": self.repeat_spin.value(),
             "wait_ms":      int(self.wait_spin.value() * 1000),
+            "measurement_mode": self.get_measurement_mode(),
         }
 
     def is_ready(self) -> bool:
         """Method ve CSV yolu doluysa True."""
+        if self.get_measurement_mode() == MEASUREMENT_MODE_CONTINUOUS_PAD:
+            return bool(self.method_edit.text())
         return bool(self.method_edit.text()) and bool(self.csv_edit.text())
 
     def restore_from_scr(self, scr_path: str, log_fn=None):

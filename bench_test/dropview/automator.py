@@ -879,6 +879,36 @@ def step_stop_measure(log_fn=None):
     debug_log("Multiscript Editor closed.")
 
 
+def step_start_continuous_pad(config: dict, log_fn=None):
+    """
+    Placeholder for direct DropView PAD start.
+
+    Continuous PAD intentionally avoids the Multiscript Editor. The exact
+    DropView menu/toolbar state checks must be wired against the real
+    AutoSave As workflow before this action is allowed to drive hardware.
+    """
+    method_path = (config or {}).get("method_path", "")
+    if not method_path or not os.path.isfile(method_path):
+        raise RuntimeError(f"Continuous PAD method file not found: {method_path}")
+    raise RuntimeError(
+        "Continuous PAD DropView automation is not configured yet. "
+        "Define the verified Load Method, Run, Stop and AutoSave state checks first."
+    )
+
+
+def step_stop_continuous_pad(log_fn=None):
+    """
+    Placeholder for direct DropView PAD stop.
+
+    The implementation must stop the active PAD segment and verify that the
+    AutoSave .mtp file is closed/stable before the recipe state advances.
+    """
+    raise RuntimeError(
+        "Continuous PAD DropView stop automation is not configured yet. "
+        "Define file-stability verification for AutoSave .mtp segments first."
+    )
+
+
 def _force_close_multiscript(log_fn=None) -> bool:
     """
     Multiscript Editor'u buton-gorsel bagimliligi olmadan kapatmayi dener.

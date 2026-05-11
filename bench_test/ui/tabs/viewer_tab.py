@@ -102,7 +102,11 @@ if _PG_OK:
                 )
                 painter.restore()
 
-from bench_test.measurement.session import MeasurementSession, SessionStatus
+from bench_test.measurement.session import (
+    MEASUREMENT_MODE_CONTINUOUS_PAD,
+    MeasurementSession,
+    SessionStatus,
+)
 from bench_test.measurement.legacy_session import LegacySession
 from bench_test.measurement.log_parser import LogParser, ParseResult, StepEvent, SystemEvent
 from bench_test.measurement.data_io import (
@@ -608,13 +612,17 @@ class ViewerTab(QWidget):
         self.restore_response_delay(getattr(session, "experiment_params", {}))
 
         # Canlı mod: sadece IN_PROGRESS iken
-        if session.status == SessionStatus.IN_PROGRESS:
+        continuous_pad = (
+            getattr(session, "measurement_mode", "") == MEASUREMENT_MODE_CONTINUOUS_PAD
+        )
+
+        if session.status == SessionStatus.IN_PROGRESS and not continuous_pad:
             self.live_lbl.setText("⟳ Canlı mod (10sn)")
             self.delete_btn.setEnabled(False)   # Çalışan session silinemez
         else:
             self._poll_timer.stop()
-            self.live_lbl.setText("")
-            self.delete_btn.setEnabled(True)
+            self.live_lbl.setText("Continuous PAD (.mtp)" if continuous_pad else "")
+            self.delete_btn.setEnabled(session.status != SessionStatus.IN_PROGRESS)
 
         self._refresh(reset_view=True)
 
@@ -736,9 +744,15 @@ class ViewerTab(QWidget):
             "error"      : "#F44336",
             "pending"    : "#888888",
         }.get(s.status.value, "#888888")
+        mode_label = (
+            "Continuous PAD"
+            if getattr(s, "measurement_mode", "") == MEASUREMENT_MODE_CONTINUOUS_PAD
+            else "Script PAD"
+        )
 
         self.meta_lbl.setText(
             f"<b>Part:</b> {s.part_number}<br>"
+            f"<b>Mode:</b> {mode_label}<br>"
             f"<b>Created:</b> {created}<br>"
             f"<b>Status:</b> <span style='color:{status_color}'>"
             f"{s.status.value}</span><br>"
