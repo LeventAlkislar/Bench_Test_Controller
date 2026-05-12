@@ -9,6 +9,7 @@ from bench_test.config import (
     THRESHOLD_LOW,
     DROPVIEW_WINDOW_NAME,
 )
+from bench_test.utils.debug_log import debug_log
 
 
 class DropViewController(QObject):
@@ -124,7 +125,7 @@ class DropViewController(QObject):
             return False
         try:
             config = {"script_path": scr_path}
-            if log_fn: log_fn(f"Loading script: {scr_path}")
+            debug_log(f"Loading script: {scr_path}")
             automator.step_start_measure(config, log_fn=log_fn)
             if log_fn: log_fn("Measurement started.")
             return True

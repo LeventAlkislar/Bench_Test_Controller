@@ -466,7 +466,13 @@ def _ensure_dropview_ready(action_name: str, log_fn=None):
     return dv_hwnd
 
 
-def _paste_path_into_file_dialog(hwnd, file_path: str, log_fn=None):
+def _paste_path_into_file_dialog(
+    hwnd,
+    file_path: str,
+    log_fn=None,
+    submit: bool = False,
+    submit_delay: float = 0.8,
+):
     _focus_window(hwnd, restore_if_iconic=False, sleep_after=SLEEP_AFTER_FOCUS)
     win32clipboard.OpenClipboard()
     try:
@@ -489,9 +495,29 @@ def _paste_path_into_file_dialog(hwnd, file_path: str, log_fn=None):
         [
             {"type": "hotkey", "keys": ("ctrl", "a"), "post_delay": 0.1},
             {"type": "hotkey", "keys": ("ctrl", "v"), "post_delay": SLEEP_AFTER_CLICK},
+            *(
+                [{"type": "press", "key": "enter", "post_delay": submit_delay}]
+                if submit
+                else []
+            ),
         ],
         log_fn=log_fn,
     )
+
+
+def _submit_file_dialog_or_fallback(
+    hwnd,
+    title: str,
+    button_text: str,
+    image_key: str,
+    log_fn=None,
+    timeout: float = 2.0,
+) -> None:
+    try:
+        _wait_for_hwnd_close(hwnd, title, timeout=timeout)
+        return
+    except TimeoutError:
+        _click_button(hwnd, button_text, image_key, log_fn=log_fn, post_delay=SLEEP_AFTER_COMMAND)
 
 
 def _dialog_belongs_to_owner(hwnd, owner_hwnd) -> bool:
@@ -573,7 +599,7 @@ def _wait_for_optional_dialog_close(
         )
     except TimeoutError:
         return False
-    _log(log_fn, f"Waiting for DropView dialog to close: {win32gui.GetWindowText(hwnd) or title_keyword}")
+    debug_log(f"Waiting for DropView dialog to close: {win32gui.GetWindowText(hwnd) or title_keyword}")
     _wait_for_hwnd_close(hwnd, title_keyword, timeout=close_timeout)
     return True
 
@@ -611,7 +637,7 @@ def _click_popup_image(image_key: str, log_fn=None, threshold=THRESHOLD_LOW, pos
     pyautogui.click(x, y)
     if post_delay > 0:
         time.sleep(post_delay)
-    _log(log_fn, f"Popup image clicked: {os.path.basename(image_path)}")
+    debug_log(f"Popup image clicked: {os.path.basename(image_path)}")
 
 
 def _find_child_by_text(hwnd, text: str, exact: bool = False) -> int | None:
@@ -763,13 +789,14 @@ def _accept_if_dialog_present(
             continue
         _focus_window(hwnd, restore_if_iconic=False, sleep_after=SLEEP_AFTER_FOCUS)
         try:
-            _click_button(hwnd, "Yes", "yes_btn", log_fn=log_fn, post_delay=SLEEP_AFTER_COMMAND)
-        except Exception:
             safe_sequence(
                 hwnd,
-                [{"type": "hotkey", "keys": ("alt", "y"), "post_delay": SLEEP_AFTER_COMMAND}],
+                [{"type": "hotkey", "keys": ("alt", "y"), "post_delay": 0.3}],
                 log_fn=log_fn,
             )
+            _wait_for_hwnd_close(hwnd, title_keyword, timeout=1.0)
+        except Exception:
+            _click_button(hwnd, "Yes", "yes_btn", log_fn=log_fn, post_delay=SLEEP_AFTER_COMMAND)
         _wait_for_hwnd_close(hwnd, title_keyword, timeout=5.0)
         return True
     return False
@@ -1330,7 +1357,7 @@ def step_start_continuous_pad(config: dict, log_fn=None):
     _continuous_pad_last_snapshot = before
     _continuous_pad_measurements_dir = measurements_dir
     _continuous_pad_active_file = ""
-    _log(log_fn, "Continuous PAD: starting segment with Ctrl+R...")
+    debug_log("Continuous PAD: starting segment with Ctrl+R...")
     try:
         safe_sequence(
             dv_hwnd,
@@ -1338,7 +1365,7 @@ def step_start_continuous_pad(config: dict, log_fn=None):
             log_fn=log_fn,
         )
     except Exception as exc:
-        _log(log_fn, f"Continuous PAD: Ctrl+R failed ({exc}); trying Alt+D -> R.")
+        debug_log(f"Continuous PAD: Ctrl+R failed ({exc}); trying Alt+D -> R.")
         safe_sequence(
             dv_hwnd,
             [
@@ -1378,10 +1405,7 @@ def step_start_continuous_pad(config: dict, log_fn=None):
         titles = [win32gui.GetWindowText(h) for h in blocking]
         raise RuntimeError(f"Continuous PAD start left an unexpected dialog open: {titles}")
 
-    _log(
-        log_fn,
-        "Continuous PAD segment started; .mtp file will be verified after Stop/AutoSave closes it.",
-    )
+    debug_log("Continuous PAD segment started; .mtp file will be verified after Stop/AutoSave closes it.")
 
 
 def step_stop_continuous_pad(log_fn=None):
@@ -1389,7 +1413,7 @@ def step_stop_continuous_pad(log_fn=None):
     global _continuous_pad_active_file
 
     dv_hwnd = _ensure_dropview_ready("Continuous PAD stop", log_fn=log_fn)
-    _log(log_fn, "Continuous PAD: stopping segment with Ctrl+S...")
+    debug_log("Continuous PAD: stopping segment with Ctrl+S...")
     try:
         safe_sequence(
             dv_hwnd,
@@ -1397,7 +1421,7 @@ def step_stop_continuous_pad(log_fn=None):
             log_fn=log_fn,
         )
     except Exception as exc:
-        _log(log_fn, f"Continuous PAD: Ctrl+S failed ({exc}); trying Alt+D -> S.")
+        debug_log(f"Continuous PAD: Ctrl+S failed ({exc}); trying Alt+D -> S.")
         safe_sequence(
             dv_hwnd,
             [
@@ -1427,7 +1451,7 @@ def step_stop_continuous_pad(log_fn=None):
         )
     stable_path = _wait_for_stable_mtp(stable_target)
     _continuous_pad_active_file = ""
-    _log(log_fn, f"Continuous PAD segment file closed: {stable_path}")
+    debug_log(f"Continuous PAD segment file closed: {stable_path}")
 
 
 def step_configure_continuous_pad_autosave(config: dict, log_fn=None):
@@ -1451,7 +1475,7 @@ def step_configure_continuous_pad_autosave(config: dict, log_fn=None):
     )
     if _continuous_pad_autosave_key == autosave_key:
         return
-    _log(log_fn, f"Continuous PAD: configuring AutoSave As -> {save_base}")
+    debug_log(f"Continuous PAD: configuring AutoSave As -> {save_base}")
     safe_sequence(
         dv_hwnd,
         [{"type": "hotkey", "keys": ("alt", "f"), "post_delay": SLEEP_AFTER_FOCUS}],
@@ -1474,8 +1498,14 @@ def step_configure_continuous_pad_autosave(config: dict, log_fn=None):
         owner_hwnd=dv_hwnd,
         image_key="save_as_node_dialog",
     )
-    _paste_path_into_file_dialog(save_hwnd, save_base, log_fn=log_fn)
-    _click_button(save_hwnd, "Save", "save_btn", log_fn=log_fn, post_delay=SLEEP_AFTER_COMMAND)
+    _paste_path_into_file_dialog(save_hwnd, save_base, log_fn=log_fn, submit=True)
+    _submit_file_dialog_or_fallback(
+        save_hwnd,
+        "Save as",
+        "Save",
+        "save_btn",
+        log_fn=log_fn,
+    )
     _continuous_pad_autosave_key = autosave_key
 
 
@@ -1493,7 +1523,7 @@ def step_load_continuous_pad_method(config: dict, log_fn=None):
     if _continuous_pad_method_path == method_key:
         return
 
-    _log(log_fn, f"Continuous PAD: loading method -> {method_path}")
+    debug_log(f"Continuous PAD: loading method -> {method_path}")
     safe_sequence(
         dv_hwnd,
         [
@@ -1518,8 +1548,14 @@ def step_load_continuous_pad_method(config: dict, log_fn=None):
         image_key="load_method_open_dialog",
         exact=True,
     )
-    _paste_path_into_file_dialog(open_hwnd, method_path, log_fn=log_fn)
-    _click_button(open_hwnd, "Open", "open_btn", log_fn=log_fn, post_delay=SLEEP_AFTER_COMMAND)
+    _paste_path_into_file_dialog(open_hwnd, method_path, log_fn=log_fn, submit=True)
+    _submit_file_dialog_or_fallback(
+        open_hwnd,
+        "Load method...",
+        "Open",
+        "open_btn",
+        log_fn=log_fn,
+    )
 
     nodes_hwnd = _find_dialog_by_title(
         "Select nodes to apply",

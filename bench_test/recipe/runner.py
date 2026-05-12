@@ -80,14 +80,14 @@ class RecipeRunner(threading.Thread):
         try:
             from bench_test.dropview import automator
             if automator.window_exists(automator.DROPVIEW_WINDOW_NAME):
-                self._log(f"| Cleaning up DropView after step {step_num} error...")
-                ok = self.dropview_ctrl.do_exit_dropview(log_fn=self._log)
+                self._debug_log(f"| Cleaning up DropView after step {step_num} error...")
+                ok = self.dropview_ctrl.do_exit_dropview(log_fn=self._debug_log)
                 if ok:
-                    self._log("| DropView cleanup completed.")
+                    self._debug_log("| DropView cleanup completed.")
                 else:
-                    self._log("| WARNING: DropView cleanup was attempted but returned failure.")
+                    self._debug_log("| WARNING: DropView cleanup was attempted but returned failure.")
         except Exception as e:
-            self._log(f"| WARNING: DropView cleanup failed: {e}")
+            self._debug_log(f"| WARNING: DropView cleanup failed: {e}")
 
     def _log(self, msg):
         self.status_queue.put(("log", msg))
@@ -102,7 +102,7 @@ class RecipeRunner(threading.Thread):
         log = log_fn or self._log
         tp_path = self.session_tp_path
         if tp_path:
-            log(f"Continuous PAD method: {tp_path}")
+            debug_log(f"Continuous PAD method: {tp_path}")
         ok = self.dropview_ctrl.do_start_continuous_pad(
             tp_path,
             measurements_dir=self.session_measurements_dir,
@@ -218,6 +218,7 @@ class RecipeRunner(threading.Thread):
                     return False
             time.sleep(0.3)
             self.controller_a.wait_for_completion(timeout=20.0)
+            self._log(f"{loop_info}Valve A: At port {step.port}")
         elif step.port > 0 and self.simulation_mode:
             self._log(f"SIMULATED: Valve A -> Port {step.port} (not connected, skipped)")
 
@@ -233,6 +234,7 @@ class RecipeRunner(threading.Thread):
                     return False
             time.sleep(0.3)
             self.controller_b.wait_for_completion(timeout=20.0)
+            self._log(f"{loop_info}Valve B: {state_name} position")
         elif step.valve_b_state > 0 and self.simulation_mode:
             state_name = InjectorValveController.STATE_NAMES.get(step.valve_b_state, "")
             self._log(f"SIMULATED: Valve B -> {state_name} (not connected, skipped)")
@@ -241,7 +243,7 @@ class RecipeRunner(threading.Thread):
             return False
 
         if action == "start_dropview" and dv:
-            self._log("Launching DropView and connecting DropSens...")
+            self._debug_log("Launching DropView and connecting DropSens...")
             ok = dv.do_start_dropview(log_fn=self._log)
             if not ok:
                 self.status_queue.put(("error", f"Step {step_num}: Start DropView failed."))
@@ -257,7 +259,7 @@ class RecipeRunner(threading.Thread):
                 return False
             if self.measurement_mode == MEASUREMENT_MODE_CONTINUOUS_PAD:
                 if self.measurement_running:
-                    self._log(
+                    self._debug_log(
                         "Continuous PAD start skipped: measurement is already running. "
                         "Continuing current segment for this step."
                     )
@@ -270,7 +272,7 @@ class RecipeRunner(threading.Thread):
             else:
                 scr_path = self.session_scr_path or step.dropview_scr
                 if scr_path:
-                    self._log(f"Script: {scr_path}")
+                    self._debug_log(f"Script: {scr_path}")
                 ok = dv.do_start_measure(scr_path, log_fn=self._log)
                 if not ok:
                     self.status_queue.put(("error", f"Step {step_num}: Start Measure failed."))
@@ -339,7 +341,7 @@ class RecipeRunner(threading.Thread):
             return False
 
         if action == "stop_measure" and dv:
-            self._log("Stopping measurement...")
+            self._debug_log("Stopping measurement...")
             if self.measurement_mode == MEASUREMENT_MODE_CONTINUOUS_PAD:
                 ok = dv.do_stop_continuous_pad(log_fn=self._log)
             else:
@@ -350,7 +352,7 @@ class RecipeRunner(threading.Thread):
             self.measurement_running = False
 
         elif action == "exit_dropview" and dv:
-            self._log("Closing DropView...")
+            self._debug_log("Closing DropView...")
             ok = dv.do_exit_dropview(log_fn=self._log)
             if not ok:
                 self.status_queue.put(("error", f"Step {step_num}: Exit DropView failed."))

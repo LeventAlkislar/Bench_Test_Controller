@@ -40,6 +40,7 @@ from bench_test.measurement.session import (
     MeasurementSession,
     SessionStatus,
 )
+from bench_test.utils.debug_log import debug_log
 
 
 # ── State sabitleri ───────────────────────────────────────────────
@@ -167,7 +168,7 @@ class SessionStateMachine(QObject):
             return
         if getattr(self._session, "measurement_mode", "") == MEASUREMENT_MODE_CONTINUOUS_PAD:
             if not periodic:
-                self._log("Continuous PAD: xlsx aggregate skipped; .mtp segments remain available in Viewer.")
+                debug_log("Continuous PAD: xlsx aggregate skipped; .mtp segments remain available in Viewer.")
             if self._state == AGGREGATING:
                 self._on_agg_done()
             return

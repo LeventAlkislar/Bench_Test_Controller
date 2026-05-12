@@ -791,7 +791,9 @@ class RecipeTab(QWidget):
                     if data.get("description"): st += f" ({data['description']})"
                     self.status_lbl.setText(st)
                     self.progress.setValue(int(pct)); self.progress_lbl.setText(f"{pct:.0f}%")
-                elif msg_type in ("switching", "running", "log"):
+                elif msg_type == "switching":
+                    self.status_lbl.setText(str(data))
+                elif msg_type in ("running", "log"):
                     self.status_lbl.setText(str(data)); self.log_signal.emit(str(data))
                 elif msg_type == "completed":
                     self._reset_run_metrics()
