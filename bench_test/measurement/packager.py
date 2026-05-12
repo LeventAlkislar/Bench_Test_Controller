@@ -75,7 +75,7 @@ class Packager:
 
     # ── .tp dosyası ──────────────────────────────────────────────
 
-    def pack_tp(self, tp_path: str) -> str:
+    def pack_tp(self, tp_path: str, duration_s: float = None) -> str:
         """
         .tp dosyasını measurement_parameters/ altına kopyalar.
 
@@ -86,9 +86,24 @@ class Packager:
         """
         dest_name = f"{self.session.part_number}.tp"
         dest = self._copy_to_params(tp_path, dest_name)
+        if duration_s is not None:
+            self._patch_tp_duration(dest, duration_s)
         self.session.register_file("tp", dest)
         self.session.save()
         return dest
+
+    def _patch_tp_duration(self, tp_path: str, duration_s: float):
+        """Update PAD method duration in the packaged .tp copy."""
+        try:
+            tree = ET.parse(tp_path)
+            root = tree.getroot()
+            param = root.find(".//commonUserParameters/parameter[@id='t']")
+            if param is None:
+                raise PackagerError("Measurement duration parameter t not found in .tp file.")
+            param.text = f"{duration_s:.2f}"
+            tree.write(tp_path, encoding="UTF-8", xml_declaration=True)
+        except ET.ParseError as e:
+            raise PackagerError(f"Failed to parse .tp file: {e}")
 
     # ── .scr dosyası ─────────────────────────────────────────────
 

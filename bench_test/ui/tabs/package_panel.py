@@ -318,7 +318,8 @@ class PackagePanel(QWidget):
             packager = Packager(self._session)
 
             # .tp kopyala
-            packager.pack_tp(tp_path)
+            tp_duration_s = 85000.0 if continuous_pad else None
+            packager.pack_tp(tp_path, duration_s=tp_duration_s)
             self._log(f"✓ .tp copied: {os.path.basename(tp_path)}")
 
             # .scr üret ve kopyala

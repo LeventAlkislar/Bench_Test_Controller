@@ -130,6 +130,7 @@ _C_GRID         = (210, 210, 210)   # Açık gri ızgara
 # Sistem event renklerine göre renk eşleme
 _SYSTEM_COLORS = {
     "started" : _C_STARTED,
+    "completed": _C_STARTED,
     "stopped" : _C_STOPPED,
     "error"   : _C_STOPPED,
     "paused"  : _C_PAUSED,
@@ -872,8 +873,9 @@ class ViewerTab(QWidget):
         currents = []
         bottom_timestamps = []
         bottom_currents = []
-        mean_group_size = 21 if self._dropsens_pad else 5
-        centered_mean = bool(self._dropsens_pad)
+        continuous_pad_view = self._is_continuous_pad_view()
+        mean_group_size = 21 if self._dropsens_pad or continuous_pad_view else 5
+        centered_mean = bool(self._dropsens_pad or continuous_pad_view)
 
         for _, series_timestamps, series_currents in series_data:
             timestamps.extend(series_timestamps)
@@ -1008,6 +1010,16 @@ class ViewerTab(QWidget):
             return []
         return [("Current", timestamps, currents)]
 
+    def _is_continuous_pad_view(self) -> bool:
+        if self._session is not None:
+            return getattr(self._session, "measurement_mode", "") == MEASUREMENT_MODE_CONTINUOUS_PAD
+        if self._history_sessions:
+            return any(
+                getattr(session, "measurement_mode", "") == MEASUREMENT_MODE_CONTINUOUS_PAD
+                for session in self._history_sessions
+            )
+        return False
+
     def _read_measurement_data(self):
         """
         xlsx varsa xlsx'ten, yoksa CSV'lerden okur.
@@ -1083,7 +1095,7 @@ class ViewerTab(QWidget):
             chunk_currents = currents[start:end]
             if not chunk_times or not chunk_currents:
                 continue
-            mean_timestamps.append(sum(chunk_times) / len(chunk_times))
+            mean_timestamps.append(timestamps[idx])
             mean_currents.append(sum(chunk_currents) / len(chunk_currents))
 
         return mean_timestamps, mean_currents
@@ -1143,6 +1155,9 @@ class ViewerTab(QWidget):
 
         t_min = min(data_timestamps)
         t_max = max(data_timestamps)
+        marker_margin = max(5.0, min(60.0, (t_max - t_min) * 0.02))
+        marker_min = t_min - marker_margin
+        marker_max = t_max + marker_margin
         self._draw_glucose_regions(data_timestamps)
 
         # Step marker'ları
@@ -1151,7 +1166,7 @@ class ViewerTab(QWidget):
             t_raw = ev.timestamp.timestamp()
 
             if getattr(ev, "marker_kind", "step") == "measure":
-                if not (t_min <= t_raw <= t_max):
+                if not (marker_min <= t_raw <= marker_max):
                     continue
                 is_start = getattr(ev, "marker_label", "") == "Start Measure"
                 self._add_measure_marker(
@@ -1162,7 +1177,7 @@ class ViewerTab(QWidget):
                 continue
 
             t = t_raw + offset
-            if not (t_min <= t <= t_max):
+            if not (marker_min <= t <= marker_max):
                 continue
 
             label = self._step_label(ev)
@@ -1180,7 +1195,7 @@ class ViewerTab(QWidget):
         # Sistem event marker'ları
         for ev in self._parse_result.system_events:
             t = ev.timestamp.timestamp()
-            if not (t_min <= t <= t_max):
+            if not (marker_min <= t <= marker_max):
                 continue
             color = _SYSTEM_COLORS.get(ev.event_type, _C_PAUSED)
             self._add_measure_marker(
@@ -1219,7 +1234,7 @@ class ViewerTab(QWidget):
         font.setBold(True)  # bold
         line_top.label.setFont(font)
 
-        self.plot_widget_top.addItem(line_top, ignoreBounds=True)
+        self.plot_widget_top.addItem(line_top, ignoreBounds=False)
         self._marker_items.append(line_top)
         self._vline_hover_points.append({
             "plot": self.plot_widget_top,
@@ -1245,7 +1260,7 @@ class ViewerTab(QWidget):
             font.setBold(True)  # bold
             line_bottom.label.setFont(font)
 
-            self.plot_widget_bottom.addItem(line_bottom, ignoreBounds=True)
+            self.plot_widget_bottom.addItem(line_bottom, ignoreBounds=False)
             self._marker_items.append(line_bottom)
             self._vline_hover_points.append({
                 "plot": self.plot_widget_bottom,
@@ -1290,6 +1305,7 @@ class ViewerTab(QWidget):
         """Hover icin sistem event etiketini doner."""
         labels = {
             "started": "START",
+            "completed": "DONE",
             "stopped": "STOP",
             "paused": "PAUSE",
             "resumed": "RESUME",

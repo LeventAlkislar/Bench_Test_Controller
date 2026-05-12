@@ -27,6 +27,10 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import pyqtSignal, Qt
 
+from bench_test.measurement.session import (
+    MEASUREMENT_MODE_CONTINUOUS_PAD,
+    MEASUREMENT_MODE_SCRIPT_PAD,
+)
 from bench_test.utils.paths import get_value, remember_value, open_file
 from bench_test.ui.widgets import _btn
 
@@ -37,6 +41,7 @@ class MethodEditorPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._current_path = ""
+        self._measurement_mode = MEASUREMENT_MODE_SCRIPT_PAD
         self._build_ui()
         self._restore_last_method()
 
@@ -265,6 +270,7 @@ class MethodEditorPanel(QWidget):
             self.file_lbl.setText(os.path.basename(path))
             self.file_lbl.setStyleSheet("color: #4CAF50; font-size: 11px;")
             self.file_lbl.setToolTip(path)
+            self._apply_measurement_mode_to_ui()
             self.tp_loaded.emit(path)
 
         except Exception as e:
@@ -299,6 +305,30 @@ class MethodEditorPanel(QWidget):
     def get_current_path(self) -> str:
         return self._current_path
 
+    def set_measurement_mode(self, mode: str):
+        self._measurement_mode = mode or MEASUREMENT_MODE_SCRIPT_PAD
+        self._apply_measurement_mode_to_ui()
+
+    def _apply_measurement_mode_to_ui(self):
+        if not hasattr(self, "_meas"):
+            return
+
+        t_spin = self._meas.get("t")
+        if t_spin is None:
+            return
+
+        continuous = self._measurement_mode == MEASUREMENT_MODE_CONTINUOUS_PAD
+        if continuous:
+            t_spin.blockSignals(True)
+            t_spin.setValue(t_spin.maximum())
+            t_spin.blockSignals(False)
+            t_spin.setToolTip(
+                "Continuous PAD uses DropView AutoSave; duration is controlled by the recipe."
+            )
+        else:
+            t_spin.setToolTip("")
+        t_spin.setEnabled(not continuous)
+
     def clear(self):
         """MethodEditorPanel'i açılış haline getirir."""
         self._current_path = ""
@@ -322,3 +352,4 @@ class MethodEditorPanel(QWidget):
         self.multi_channel_lbl.setText("-")
         self.multi_current_range_lbl.setText("-")
         self.multi_ei_spin.setValue(0.0)
+        self._apply_measurement_mode_to_ui()

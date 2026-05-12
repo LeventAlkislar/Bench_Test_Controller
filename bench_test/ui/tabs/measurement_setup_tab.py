@@ -112,6 +112,9 @@ class MeasurementSetupTab(QWidget):
         self.script_panel.experiment_params_changed.connect(
             self._on_script_experiment_params_changed
         )
+        self.script_panel.measurement_mode_changed.connect(
+            self.method_panel.set_measurement_mode
+        )
 
         # recipe_tab referansı varsa recipe dosyasını izle
         if self.recipe_tab and hasattr(self.recipe_tab, "scr_changed"):
@@ -125,6 +128,9 @@ class MeasurementSetupTab(QWidget):
 
         self.package_panel._update_csv_path()
         self.package_panel._refresh_status()
+        self.method_panel.set_measurement_mode(
+            self.script_panel.get_measurement_mode()
+        )
 
         tp_path = self.method_panel.get_current_path()
         if tp_path:

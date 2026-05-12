@@ -9,6 +9,7 @@ use the same interpretation of measurement files.
 
 import glob
 import os
+import re
 from datetime import datetime, timedelta
 from typing import List, Tuple
 
@@ -208,8 +209,20 @@ def read_session_pad_segment_series(
         times = curve.points.get("time", [])
         currents_ua = curve.points.get("i1", [])
         total = min(len(times), len(currents_ua))
+        base_time = measurement.base_time
+        if total > 0:
+            segment_end = _autosave_end_time_from_filename(path)
+            if segment_end is None:
+                try:
+                    # Continuous PAD AutoSave writes the file when the segment stops,
+                    # so file mtime is closer to segment end than segment start.
+                    segment_end = datetime.fromtimestamp(os.path.getmtime(path))
+                except OSError:
+                    segment_end = None
+            if segment_end is not None:
+                base_time = segment_end - timedelta(seconds=times[total - 1])
         for idx in range(total):
-            ts = measurement.base_time + timedelta(seconds=times[idx])
+            ts = base_time + timedelta(seconds=times[idx])
             timestamps.append(ts.timestamp())
             currents.append(currents_ua[idx] * current_scale)
 
@@ -218,3 +231,19 @@ def read_session_pad_segment_series(
 
     pairs = sorted(zip(timestamps, currents), key=lambda item: item[0])
     return [item[0] for item in pairs], [item[1] for item in pairs]
+
+
+def _autosave_end_time_from_filename(path: str) -> datetime | None:
+    """Parse DropView AutoSave suffix like SIL_12_05_2026_08_14_24.mtp."""
+    name = os.path.splitext(os.path.basename(path))[0]
+    match = re.search(
+        r"_(\d{2})_(\d{2})_(\d{4})_(\d{2})_(\d{2})_(\d{2})$",
+        name,
+    )
+    if not match:
+        return None
+    day, month, year, hour, minute, second = map(int, match.groups())
+    try:
+        return datetime(year, month, day, hour, minute, second)
+    except ValueError:
+        return None

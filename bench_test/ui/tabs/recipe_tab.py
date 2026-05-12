@@ -437,7 +437,7 @@ class RecipeTab(QWidget):
         if r < len(self.recipe_steps):
             s = self.recipe_steps[r]
             ns = RecipeStep(s.port, s.duration_minutes, s.description + " (copy)",
-                            s.valve_b_state, s.dropview_action)
+                            s.valve_b_state, "none")
             self.recipe_steps.insert(r+1, ns)
             self._refresh_table(); self._update_total_time()
 

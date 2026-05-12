@@ -121,6 +121,7 @@ _RE_MANUAL_PORT_SWITCH = re.compile(
 # - legacy Turkish logs are kept for backward compatibility
 _RE_MEASURE = re.compile(
     r"^(Start Measure|Stop Measure|Measurement started\.?|Measurement stopped\.?|"
+    r"Continuous PAD segment started\.?|Continuous PAD segment stopped\.?|"
     r"\u00d6l\u00e7\u00fcm ba\u015flat\u0131ld\u0131\.?|"
     r"\u00d6l\u00e7\u00fcm durduruldu\.?)\b",
     re.IGNORECASE
@@ -128,11 +129,12 @@ _RE_MEASURE = re.compile(
 
 # Sistem olayları
 _SYSTEM_PATTERNS = {
-    "started" : re.compile(r"started recipe", re.IGNORECASE),
+    "started" : re.compile(r"started recipe|recipe started", re.IGNORECASE),
     "stopped" : re.compile(r"recipe stopped|stopped by user", re.IGNORECASE),
     "paused"  : re.compile(r"recipe paused", re.IGNORECASE),
     "resumed" : re.compile(r"recipe resumed", re.IGNORECASE),
     "error"   : re.compile(r"recipe error|error:", re.IGNORECASE),
+    "completed": re.compile(r"recipe .*completed|recipe complete|session completed", re.IGNORECASE),
 }
 
 # Yok sayılacak satırlar (grafik veya annotation'a eklenmez)
@@ -350,9 +352,19 @@ class LogParser:
         low = token.lower()
         legacy_start = "ba" + chr(0x015F) + "lat"
         legacy_stop = "durdur"
-        if low.startswith("start measure") or low.startswith("measurement started") or legacy_start in low:
+        if (
+            low.startswith("start measure")
+            or low.startswith("measurement started")
+            or low.startswith("continuous pad segment started")
+            or legacy_start in low
+        ):
             label = "Start Measure"
-        elif low.startswith("stop measure") or low.startswith("measurement stopped") or legacy_stop in low:
+        elif (
+            low.startswith("stop measure")
+            or low.startswith("measurement stopped")
+            or low.startswith("continuous pad segment stopped")
+            or legacy_stop in low
+        ):
             label = "Stop Measure"
         else:
             label = token.title()

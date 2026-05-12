@@ -32,6 +32,7 @@ from bench_test.utils.paths import get_value, remember_value
 class ScriptParamsPanel(QWidget):
     params_changed = pyqtSignal()
     experiment_params_changed = pyqtSignal(dict)
+    measurement_mode_changed = pyqtSignal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -212,6 +213,7 @@ class ScriptParamsPanel(QWidget):
         mode = self.get_measurement_mode()
         remember_value("measurement_mode", mode)
         self._apply_mode_to_ui()
+        self.measurement_mode_changed.emit(mode)
         self.params_changed.emit()
 
     def _apply_mode_to_ui(self):

@@ -177,6 +177,12 @@ class RecipeRunner(threading.Thread):
                 self._cleanup_dropview(step_num)
                 return False
             if self.measurement_mode == MEASUREMENT_MODE_CONTINUOUS_PAD:
+                if self.measurement_running:
+                    self._log(
+                        "Continuous PAD start skipped: measurement is already running. "
+                        "Use Stop Measure before starting a new segment."
+                    )
+                    return True
                 tp_path = self.session_tp_path
                 if tp_path:
                     self._log(f"Continuous PAD method: {tp_path}")
