@@ -141,12 +141,31 @@ class DropViewController(QObject):
             if log_fn: log_fn(f"Stop Measure error: {e}")
             return False
 
-    def do_start_continuous_pad(self, tp_path: str, log_fn=None) -> bool:
+    def do_start_continuous_pad(
+        self,
+        tp_path: str,
+        measurements_dir: str = "",
+        part_number: str = "",
+        log_fn=None,
+    ) -> bool:
         if not tp_path:
             if log_fn: log_fn("DropView: .tp file path is empty - Continuous PAD could not be started.")
             return False
+        if not measurements_dir:
+            if log_fn: log_fn("DropView: measurements directory is empty - Continuous PAD could not be started.")
+            return False
+        if not part_number:
+            if log_fn: log_fn("DropView: part number is empty - Continuous PAD could not be started.")
+            return False
         try:
-            automator.step_start_continuous_pad({"method_path": tp_path}, log_fn=log_fn)
+            automator.step_start_continuous_pad(
+                {
+                    "method_path": tp_path,
+                    "measurements_dir": measurements_dir,
+                    "part_number": part_number,
+                },
+                log_fn=log_fn,
+            )
             if log_fn: log_fn("Continuous PAD segment started.")
             return True
         except Exception as e:

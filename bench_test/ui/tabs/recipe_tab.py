@@ -660,12 +660,16 @@ class RecipeTab(QWidget):
         # Packager'ın ürettiği patch'li .scr yolunu al
         session_scr = ""
         session_tp = ""
+        session_measurements_dir = ""
+        part_number = ""
         measurement_mode = ""
         if self.package_tab:
             session = self.package_tab.get_session()
             if session:
                 session_scr = session.get_file_path("script") or ""
                 session_tp = session.get_file_path("tp") or ""
+                session_measurements_dir = session.measurements_dir
+                part_number = session.part_number
                 measurement_mode = getattr(session, "measurement_mode", "")
 
         try:
@@ -673,6 +677,8 @@ class RecipeTab(QWidget):
                 self.ctrl_a, self.ctrl_b, recipe, self.status_queue, self.stop_event,
                 self.dv_ctrl, session_scr_path=session_scr,
                 session_tp_path=session_tp,
+                session_measurements_dir=session_measurements_dir,
+                part_number=part_number,
                 measurement_mode=measurement_mode,
                 simulation_mode=self._simulation_mode)
             self._reset_run_metrics()

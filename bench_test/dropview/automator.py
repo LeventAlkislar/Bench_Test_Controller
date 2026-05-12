@@ -66,10 +66,34 @@ _IMG = {k: os.path.join(_IMG_DIR, v) for k, v in {
     "manual_conn_dropdown_arrow":   "manual_connection_dropdown_arrow.png",
     "error_no_device_text":         "No device connected.png",
     "error_potentiostat_text":      "Potentiostat not found.png",
+    "autosave_as_menu_item":        "autosave_as_menu_item.png",
+    "select_nodes_unchecked":       "select_nodes_to_apply_dialog.png",
+    "select_nodes_checked":         "select_nodes_to_apply_checked_dialog.png",
+    "accept_btn":                   "accept_btn.png",
+    "save_as_node_dialog":          "save_as_node_dialog.png",
+    "save_btn":                     "save_btn.png",
+    "load_method_confirm_dialog":   "load_method_confirm_dialog.png",
+    "yes_btn":                      "yes_btn.png",
+    "load_method_open_dialog":      "load_method_open_dialog.png",
+    "open_btn":                     "open_btn.png",
+    "method_select_nodes_unchecked": "method_select_nodes_unchecked_dialog.png",
+    "method_select_nodes_checked":  "method_select_nodes_checked_dialog.png",
+    "method_select_nodes_accept":   "method_select_nodes_accept_btn.png",
+    "select_all_btn":               "select_all_btn.png",
+    "run_experiment_confirm_dialog": "run_experiment_confirm_dialog.png",
 }.items()}
 
 
 _WATCHDOG_POLL_INTERVAL = 0.2
+_CONTINUOUS_PAD_FILE_TIMEOUT = 90.0
+_CONTINUOUS_PAD_SEND_TIMEOUT = 90.0
+_CONTINUOUS_PAD_STABLE_TIMEOUT = 90.0
+_CONTINUOUS_PAD_STABLE_SECONDS = 2.0
+_continuous_pad_autosave_key = None
+_continuous_pad_method_path = None
+_continuous_pad_measurements_dir = ""
+_continuous_pad_active_file = ""
+_continuous_pad_last_snapshot = set()
 _dialog_watchdog_lock = threading.Lock()
 _dialog_watchdog_thread = None
 _dialog_watchdog_stop = None
@@ -409,6 +433,416 @@ def _dismiss_warning_if_present(window_title: str, wait: float = 3.0) -> bool:
             return True
         time.sleep(0.2)
     return False
+
+
+def _require_image(key: str) -> str:
+    path = _IMG[key]
+    if not os.path.isfile(path):
+        raise RuntimeError(
+            f"DropView automation image is missing: {os.path.basename(path)}"
+        )
+    return path
+
+
+def _log(log_fn, msg: str):
+    if log_fn:
+        log_fn(msg)
+    debug_log(msg)
+
+
+def _ensure_dropview_ready(action_name: str, log_fn=None):
+    ensure_dialog_watchdog(log_fn=log_fn)
+    dv_hwnd = find_window(DROPVIEW_WINDOW_NAME, timeout=10)
+    _focus_window(dv_hwnd, click_title=True)
+    if not win32gui.IsWindowEnabled(dv_hwnd):
+        raise RuntimeError(
+            f"{action_name}: DropView window is disabled "
+            "(a modal dialog may be blocking it)."
+        )
+    owned = find_owned_dialogs(dv_hwnd)
+    if owned:
+        titles = [win32gui.GetWindowText(h) for h in owned]
+        raise RuntimeError(f"{action_name}: DropView has an open dialog: {titles}")
+    return dv_hwnd
+
+
+def _paste_path_into_file_dialog(hwnd, file_path: str, log_fn=None):
+    _focus_window(hwnd, restore_if_iconic=False, sleep_after=SLEEP_AFTER_FOCUS)
+    win32clipboard.OpenClipboard()
+    try:
+        win32clipboard.EmptyClipboard()
+        win32clipboard.SetClipboardText(file_path)
+    finally:
+        win32clipboard.CloseClipboard()
+    time.sleep(0.2)
+
+    rect = win32gui.GetWindowRect(hwnd)
+    dlg_x = rect[0]
+    dlg_y = rect[1]
+    dlg_w = rect[2] - rect[0]
+    dlg_h = rect[3] - rect[1]
+    fn_x = dlg_x + int(dlg_w * 0.45)
+    fn_y = dlg_y + int(dlg_h * 0.70)
+    safe_click(hwnd, fn_x, fn_y, log_fn=log_fn, post_delay=0.4)
+    safe_sequence(
+        hwnd,
+        [
+            {"type": "hotkey", "keys": ("ctrl", "a"), "post_delay": 0.1},
+            {"type": "hotkey", "keys": ("ctrl", "v"), "post_delay": SLEEP_AFTER_CLICK},
+        ],
+        log_fn=log_fn,
+    )
+
+
+def _dialog_belongs_to_owner(hwnd, owner_hwnd) -> bool:
+    if not owner_hwnd:
+        return True
+    try:
+        if win32gui.GetWindow(hwnd, win32con.GW_OWNER) == owner_hwnd:
+            return True
+    except Exception:
+        pass
+    owner_pid = get_window_pid(owner_hwnd)
+    return bool(owner_pid and get_window_pid(hwnd) == owner_pid and win32gui.GetClassName(hwnd) == "#32770")
+
+
+def _find_dialog_by_title(
+    title_keyword: str,
+    timeout=10,
+    owner_hwnd=None,
+    image_key: str | None = None,
+    exact: bool = False,
+):
+    wanted = title_keyword.strip().lower()
+    start = time.time()
+    last_titles = []
+    while time.time() - start < timeout:
+        found = []
+        visible_titles = []
+
+        def _cb(hwnd, _):
+            if not win32gui.IsWindowVisible(hwnd):
+                return
+            if not _dialog_belongs_to_owner(hwnd, owner_hwnd):
+                return
+            title = (win32gui.GetWindowText(hwnd) or "").strip()
+            if title:
+                visible_titles.append(title)
+            title_key = title.lower()
+            if (title_key == wanted) if exact else (wanted in title_key):
+                found.append(hwnd)
+
+        win32gui.EnumWindows(_cb, None)
+        if found:
+            return found[0]
+        if image_key and owner_hwnd:
+            for dlg_hwnd in find_owned_dialogs(owner_hwnd):
+                if _is_image_present(dlg_hwnd, image_key, threshold=THRESHOLD_LOW):
+                    return dlg_hwnd
+        last_titles = visible_titles
+        time.sleep(0.2)
+    raise TimeoutError(
+        f"'{title_keyword}' dialog was not found within {timeout}s."
+        f" Visible dialogs: {last_titles}"
+    )
+
+
+def _wait_for_hwnd_close(hwnd, title: str = "dialog", timeout=5.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not hwnd or not win32gui.IsWindow(hwnd) or not win32gui.IsWindowVisible(hwnd):
+            return
+        time.sleep(0.1)
+    raise TimeoutError(f"'{title}' did not close within {timeout:.1f}s.")
+
+
+def _wait_for_optional_dialog_close(
+    title_keyword: str,
+    owner_hwnd=None,
+    appear_wait=2.0,
+    close_timeout=30.0,
+    log_fn=None,
+    exact: bool = True,
+) -> bool:
+    try:
+        hwnd = _find_dialog_by_title(
+            title_keyword,
+            timeout=appear_wait,
+            owner_hwnd=owner_hwnd,
+            exact=exact,
+        )
+    except TimeoutError:
+        return False
+    _log(log_fn, f"Waiting for DropView dialog to close: {win32gui.GetWindowText(hwnd) or title_keyword}")
+    _wait_for_hwnd_close(hwnd, title_keyword, timeout=close_timeout)
+    return True
+
+
+def _click_image(hwnd, image_key: str, log_fn=None, threshold=THRESHOLD_MID, post_delay=SLEEP_AFTER_CLICK):
+    x, y = safe_find_on_screen(
+        hwnd,
+        _require_image(image_key),
+        threshold=threshold,
+        log_fn=log_fn,
+    )
+    safe_click(hwnd, x, y, log_fn=log_fn, post_delay=post_delay)
+
+
+def _click_popup_image(image_key: str, log_fn=None, threshold=THRESHOLD_LOW, post_delay=SLEEP_AFTER_CLICK):
+    """Click an image in an open popup/menu without refocusing the parent window."""
+    image_path = _require_image(image_key)
+    try:
+        x, y = find_on_screen(
+            image_path,
+            threshold=threshold,
+            hwnd=None,
+            use_foreground_fallback=True,
+        )
+    except Exception as exc:
+        score = match_score_on_screen(
+            image_path,
+            hwnd=None,
+            use_foreground_fallback=True,
+        )
+        raise RuntimeError(
+            f"Popup image not found (match: {score:.2f} < {threshold:.2f}). "
+            f"File: {os.path.basename(image_path)}"
+        ) from exc
+    pyautogui.click(x, y)
+    if post_delay > 0:
+        time.sleep(post_delay)
+    _log(log_fn, f"Popup image clicked: {os.path.basename(image_path)}")
+
+
+def _find_child_by_text(hwnd, text: str, exact: bool = False) -> int | None:
+    wanted = text.strip().lower()
+    found = []
+
+    def _cb(child_hwnd, _):
+        try:
+            child_text = (win32gui.GetWindowText(child_hwnd) or "").strip()
+        except Exception:
+            return
+        compare = child_text.lower()
+        if (compare == wanted) if exact else (wanted in compare):
+            found.append(child_hwnd)
+
+    try:
+        win32gui.EnumChildWindows(hwnd, _cb, None)
+    except Exception:
+        return None
+    return found[0] if found else None
+
+
+def _click_child_text(hwnd, text: str, log_fn=None, exact: bool = False, post_delay=SLEEP_AFTER_CLICK) -> bool:
+    child = _find_child_by_text(hwnd, text, exact=exact)
+    if not child:
+        return False
+    left, top, right, bottom = win32gui.GetWindowRect(child)
+    safe_click(
+        hwnd,
+        (left + right) // 2,
+        (top + bottom) // 2,
+        log_fn=log_fn,
+        post_delay=post_delay,
+    )
+    return True
+
+
+def _is_checkbox_checked(hwnd, text: str) -> bool | None:
+    child = _find_child_by_text(hwnd, text)
+    if not child:
+        return None
+    try:
+        return bool(win32gui.SendMessage(child, win32con.BM_GETCHECK, 0, 0))
+    except Exception:
+        return None
+
+
+def _image_score(hwnd, image_key: str) -> float:
+    return match_score_on_screen(
+        _require_image(image_key),
+        hwnd=hwnd,
+        use_foreground_fallback=False,
+    )
+
+
+def _node_checked_by_image(hwnd) -> bool | None:
+    checked_score = _image_score(hwnd, "select_nodes_checked")
+    unchecked_score = _image_score(hwnd, "select_nodes_unchecked")
+    if checked_score >= THRESHOLD_MID and checked_score > unchecked_score + 0.03:
+        return True
+    if unchecked_score >= THRESHOLD_MID and unchecked_score > checked_score + 0.03:
+        return False
+    return None
+
+
+def _click_node_checkbox_area(hwnd, log_fn=None):
+    child = _find_child_by_text(hwnd, "Node 1")
+    if child:
+        left, top, _right, bottom = win32gui.GetWindowRect(child)
+        safe_click(
+            hwnd,
+            left + 8,
+            (top + bottom) // 2,
+            log_fn=log_fn,
+            post_delay=SLEEP_AFTER_CLICK,
+        )
+        return
+    left, top, _right, _bottom = win32gui.GetWindowRect(hwnd)
+    safe_click(
+        hwnd,
+        left + 10,
+        top + 40,
+        log_fn=log_fn,
+        post_delay=SLEEP_AFTER_CLICK,
+    )
+
+
+def _ensure_node_checked(hwnd, log_fn=None):
+    checked = _is_checkbox_checked(hwnd, "Node 1")
+    if checked is True:
+        return
+    if checked is None:
+        checked = _node_checked_by_image(hwnd)
+    if checked is True:
+        return
+    _click_node_checkbox_area(hwnd, log_fn=log_fn)
+    checked = _is_checkbox_checked(hwnd, "Node 1")
+    if checked is True:
+        return
+    checked = _node_checked_by_image(hwnd)
+    if checked is False:
+        raise RuntimeError("Continuous PAD: Node 1 checkbox could not be selected.")
+
+
+def _click_button(hwnd, text: str, image_key: str, log_fn=None, post_delay=SLEEP_AFTER_CLICK):
+    if _click_child_text(hwnd, text, log_fn=log_fn, exact=False, post_delay=post_delay):
+        return
+    _click_image(hwnd, image_key, log_fn=log_fn, post_delay=post_delay)
+
+
+def _is_image_present(hwnd, image_key: str, threshold=THRESHOLD_MID) -> bool:
+    try:
+        match_score_on_screen(
+            _require_image(image_key),
+            hwnd=hwnd,
+            use_foreground_fallback=False,
+        )
+        safe_find_on_screen(
+            hwnd,
+            _require_image(image_key),
+            threshold=threshold,
+            retries=1,
+        )
+        return True
+    except Exception:
+        return False
+
+
+def _accept_if_dialog_present(
+    title_keyword: str,
+    wait=1.5,
+    log_fn=None,
+    owner_hwnd=None,
+    image_key: str | None = None,
+    exact: bool = False,
+) -> bool:
+    deadline = time.time() + wait
+    while time.time() < deadline:
+        try:
+            hwnd = _find_dialog_by_title(
+                title_keyword,
+                timeout=0.3,
+                owner_hwnd=owner_hwnd,
+                image_key=image_key,
+                exact=exact,
+            )
+        except TimeoutError:
+            time.sleep(0.1)
+            continue
+        _focus_window(hwnd, restore_if_iconic=False, sleep_after=SLEEP_AFTER_FOCUS)
+        try:
+            _click_button(hwnd, "Yes", "yes_btn", log_fn=log_fn, post_delay=SLEEP_AFTER_COMMAND)
+        except Exception:
+            safe_sequence(
+                hwnd,
+                [{"type": "hotkey", "keys": ("alt", "y"), "post_delay": SLEEP_AFTER_COMMAND}],
+                log_fn=log_fn,
+            )
+        _wait_for_hwnd_close(hwnd, title_keyword, timeout=5.0)
+        return True
+    return False
+
+
+def _snapshot_mtp_files(measurements_dir: str) -> set[str]:
+    try:
+        return {
+            os.path.join(measurements_dir, name)
+            for name in os.listdir(measurements_dir)
+            if name.lower().endswith(".mtp")
+            and os.path.isfile(os.path.join(measurements_dir, name))
+        }
+    except OSError:
+        return set()
+
+
+def _latest_mtp_file(measurements_dir: str) -> str:
+    files = list(_snapshot_mtp_files(measurements_dir))
+    if not files:
+        return ""
+    return max(files, key=lambda path: os.path.getmtime(path))
+
+
+def _wait_for_new_mtp(measurements_dir: str, before: set[str], timeout: float) -> str:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        current = _snapshot_mtp_files(measurements_dir)
+        new_files = sorted(current - before, key=lambda path: os.path.getmtime(path))
+        if new_files:
+            return new_files[-1]
+        time.sleep(0.5)
+    raise RuntimeError(
+        f"Continuous PAD did not create a new .mtp file within {timeout:.0f}s: "
+        f"{measurements_dir}"
+    )
+
+
+def _mtp_has_xml_close(path: str) -> bool:
+    try:
+        with open(path, "rb") as f:
+            if os.path.getsize(path) > 4096:
+                f.seek(-4096, os.SEEK_END)
+            tail = f.read().decode("utf-8", errors="ignore")
+        return "</root>" in tail
+    except OSError:
+        return False
+
+
+def _wait_for_stable_mtp(path: str, timeout: float = _CONTINUOUS_PAD_STABLE_TIMEOUT) -> str:
+    deadline = time.time() + timeout
+    last_size = -1
+    stable_since = None
+    while time.time() < deadline:
+        if not path or not os.path.isfile(path):
+            time.sleep(0.5)
+            continue
+        size = os.path.getsize(path)
+        if size > 0 and size == last_size:
+            if stable_since is None:
+                stable_since = time.time()
+            if (
+                time.time() - stable_since >= _CONTINUOUS_PAD_STABLE_SECONDS
+                and _mtp_has_xml_close(path)
+            ):
+                return path
+        else:
+            stable_since = None
+            last_size = size
+        time.sleep(0.5)
+    raise RuntimeError(
+        f"Continuous PAD .mtp file did not become stable or complete: {path}"
+    )
 
 
 def _read_error_window_text(hwnd) -> str:
@@ -880,33 +1314,229 @@ def step_stop_measure(log_fn=None):
 
 
 def step_start_continuous_pad(config: dict, log_fn=None):
-    """
-    Placeholder for direct DropView PAD start.
+    """Configure AutoSave/method if needed, then start a Continuous PAD segment."""
+    global _continuous_pad_active_file, _continuous_pad_last_snapshot, _continuous_pad_measurements_dir
 
-    Continuous PAD intentionally avoids the Multiscript Editor. The exact
-    DropView menu/toolbar state checks must be wired against the real
-    AutoSave As workflow before this action is allowed to drive hardware.
-    """
-    method_path = (config or {}).get("method_path", "")
-    if not method_path or not os.path.isfile(method_path):
-        raise RuntimeError(f"Continuous PAD method file not found: {method_path}")
-    raise RuntimeError(
-        "Continuous PAD DropView automation is not configured yet. "
-        "Define the verified Load Method, Run, Stop and AutoSave state checks first."
+    config = config or {}
+    measurements_dir = config.get("measurements_dir", "")
+    if not measurements_dir or not os.path.isdir(measurements_dir):
+        raise RuntimeError(f"Continuous PAD measurements directory not found: {measurements_dir}")
+
+    step_configure_continuous_pad_autosave(config, log_fn=log_fn)
+    step_load_continuous_pad_method(config, log_fn=log_fn)
+
+    dv_hwnd = _ensure_dropview_ready("Continuous PAD start", log_fn=log_fn)
+    before = _snapshot_mtp_files(measurements_dir)
+    _continuous_pad_last_snapshot = before
+    _continuous_pad_measurements_dir = measurements_dir
+    _continuous_pad_active_file = ""
+    _log(log_fn, "Continuous PAD: starting segment with Ctrl+R...")
+    try:
+        safe_sequence(
+            dv_hwnd,
+            [{"type": "hotkey", "keys": ("ctrl", "r"), "post_delay": SLEEP_AFTER_COMMAND}],
+            log_fn=log_fn,
+        )
+    except Exception as exc:
+        _log(log_fn, f"Continuous PAD: Ctrl+R failed ({exc}); trying Alt+D -> R.")
+        safe_sequence(
+            dv_hwnd,
+            [
+                {"type": "hotkey", "keys": ("alt", "d"), "post_delay": SLEEP_AFTER_FOCUS},
+                {"type": "press", "key": "r", "post_delay": SLEEP_AFTER_COMMAND},
+            ],
+            log_fn=log_fn,
+        )
+
+    _accept_if_dialog_present(
+        "Run experiment",
+        wait=2.5,
+        log_fn=log_fn,
+        owner_hwnd=dv_hwnd,
+        image_key="run_experiment_confirm_dialog",
+        exact=True,
+    )
+    _wait_for_optional_dialog_close(
+        "Send",
+        owner_hwnd=dv_hwnd,
+        appear_wait=2.0,
+        close_timeout=float(config.get("send_timeout", _CONTINUOUS_PAD_SEND_TIMEOUT)),
+        log_fn=log_fn,
+        exact=True,
+    )
+    _accept_if_dialog_present(
+        "Run experiment",
+        wait=3.0,
+        log_fn=log_fn,
+        owner_hwnd=dv_hwnd,
+        image_key="run_experiment_confirm_dialog",
+        exact=True,
+    )
+
+    blocking = find_owned_dialogs(dv_hwnd)
+    if blocking:
+        titles = [win32gui.GetWindowText(h) for h in blocking]
+        raise RuntimeError(f"Continuous PAD start left an unexpected dialog open: {titles}")
+
+    _log(
+        log_fn,
+        "Continuous PAD segment started; .mtp file will be verified after Stop/AutoSave closes it.",
     )
 
 
 def step_stop_continuous_pad(log_fn=None):
-    """
-    Placeholder for direct DropView PAD stop.
+    """Stop the active Continuous PAD segment and wait until AutoSave closes the .mtp."""
+    global _continuous_pad_active_file
 
-    The implementation must stop the active PAD segment and verify that the
-    AutoSave .mtp file is closed/stable before the recipe state advances.
-    """
-    raise RuntimeError(
-        "Continuous PAD DropView stop automation is not configured yet. "
-        "Define file-stability verification for AutoSave .mtp segments first."
+    dv_hwnd = _ensure_dropview_ready("Continuous PAD stop", log_fn=log_fn)
+    _log(log_fn, "Continuous PAD: stopping segment with Ctrl+S...")
+    try:
+        safe_sequence(
+            dv_hwnd,
+            [{"type": "hotkey", "keys": ("ctrl", "s"), "post_delay": SLEEP_AFTER_COMMAND}],
+            log_fn=log_fn,
+        )
+    except Exception as exc:
+        _log(log_fn, f"Continuous PAD: Ctrl+S failed ({exc}); trying Alt+D -> S.")
+        safe_sequence(
+            dv_hwnd,
+            [
+                {"type": "hotkey", "keys": ("alt", "d"), "post_delay": SLEEP_AFTER_FOCUS},
+                {"type": "press", "key": "s", "post_delay": SLEEP_AFTER_COMMAND},
+            ],
+            log_fn=log_fn,
+        )
+
+    # Stop should not show a dialog. If one appears, fail clearly instead of
+    # advancing recipe state with an unknown DropView condition.
+    owned = find_owned_dialogs(dv_hwnd)
+    if owned:
+        titles = [win32gui.GetWindowText(h) for h in owned]
+        raise RuntimeError(f"Continuous PAD stop left an unexpected dialog open: {titles}")
+
+    stable_target = _continuous_pad_active_file
+    if not stable_target and _continuous_pad_measurements_dir:
+        stable_target = _wait_for_new_mtp(
+            _continuous_pad_measurements_dir,
+            _continuous_pad_last_snapshot,
+            timeout=_CONTINUOUS_PAD_FILE_TIMEOUT,
+        )
+    if not stable_target:
+        raise RuntimeError(
+            "Continuous PAD stop could not find an active .mtp file to verify."
+        )
+    stable_path = _wait_for_stable_mtp(stable_target)
+    _continuous_pad_active_file = ""
+    _log(log_fn, f"Continuous PAD segment file closed: {stable_path}")
+
+
+def step_configure_continuous_pad_autosave(config: dict, log_fn=None):
+    """Set DropView AutoSave As to the current session measurements directory."""
+    global _continuous_pad_autosave_key
+
+    config = config or {}
+    measurements_dir = config.get("measurements_dir", "")
+    part_number = config.get("part_number", "")
+    if not measurements_dir or not os.path.isdir(measurements_dir):
+        raise RuntimeError(f"Continuous PAD AutoSave directory not found: {measurements_dir}")
+    if not part_number:
+        raise RuntimeError("Continuous PAD AutoSave part number is empty.")
+
+    save_base = os.path.join(measurements_dir, part_number)
+    dv_hwnd = _ensure_dropview_ready("Continuous PAD AutoSave", log_fn=log_fn)
+    autosave_key = (
+        get_window_pid(dv_hwnd),
+        os.path.normcase(os.path.abspath(measurements_dir)),
+        part_number,
     )
+    if _continuous_pad_autosave_key == autosave_key:
+        return
+    _log(log_fn, f"Continuous PAD: configuring AutoSave As -> {save_base}")
+    safe_sequence(
+        dv_hwnd,
+        [{"type": "hotkey", "keys": ("alt", "f"), "post_delay": SLEEP_AFTER_FOCUS}],
+        log_fn=log_fn,
+    )
+    _click_popup_image("autosave_as_menu_item", log_fn=log_fn, threshold=THRESHOLD_LOW)
+
+    nodes_hwnd = _find_dialog_by_title(
+        "Select nodes to apply",
+        timeout=10,
+        owner_hwnd=dv_hwnd,
+        image_key="select_nodes_unchecked",
+    )
+    _ensure_node_checked(nodes_hwnd, log_fn=log_fn)
+    _click_button(nodes_hwnd, "Accept", "accept_btn", log_fn=log_fn, post_delay=SLEEP_AFTER_COMMAND)
+
+    save_hwnd = _find_dialog_by_title(
+        "Save as",
+        timeout=12,
+        owner_hwnd=dv_hwnd,
+        image_key="save_as_node_dialog",
+    )
+    _paste_path_into_file_dialog(save_hwnd, save_base, log_fn=log_fn)
+    _click_button(save_hwnd, "Save", "save_btn", log_fn=log_fn, post_delay=SLEEP_AFTER_COMMAND)
+    _continuous_pad_autosave_key = autosave_key
+
+
+def step_load_continuous_pad_method(config: dict, log_fn=None):
+    """Load the Continuous PAD .tp method and apply it to Node 1."""
+    global _continuous_pad_method_path
+
+    config = config or {}
+    method_path = config.get("method_path", "")
+    if not method_path or not os.path.isfile(method_path):
+        raise RuntimeError(f"Continuous PAD method file not found: {method_path}")
+
+    dv_hwnd = _ensure_dropview_ready("Continuous PAD method load", log_fn=log_fn)
+    method_key = (get_window_pid(dv_hwnd), os.path.normcase(os.path.abspath(method_path)))
+    if _continuous_pad_method_path == method_key:
+        return
+
+    _log(log_fn, f"Continuous PAD: loading method -> {method_path}")
+    safe_sequence(
+        dv_hwnd,
+        [
+            {"type": "hotkey", "keys": ("alt", "f"), "post_delay": SLEEP_AFTER_FOCUS},
+            {"type": "press", "key": "m", "post_delay": SLEEP_AFTER_COMMAND},
+        ],
+        log_fn=log_fn,
+    )
+    _accept_if_dialog_present(
+        "Load method",
+        wait=5.0,
+        log_fn=log_fn,
+        owner_hwnd=dv_hwnd,
+        image_key="load_method_confirm_dialog",
+        exact=True,
+    )
+
+    open_hwnd = _find_dialog_by_title(
+        "Load method...",
+        timeout=10,
+        owner_hwnd=dv_hwnd,
+        image_key="load_method_open_dialog",
+        exact=True,
+    )
+    _paste_path_into_file_dialog(open_hwnd, method_path, log_fn=log_fn)
+    _click_button(open_hwnd, "Open", "open_btn", log_fn=log_fn, post_delay=SLEEP_AFTER_COMMAND)
+
+    nodes_hwnd = _find_dialog_by_title(
+        "Select nodes to apply",
+        timeout=10,
+        owner_hwnd=dv_hwnd,
+        image_key="method_select_nodes_unchecked",
+    )
+    if not _click_child_text(nodes_hwnd, "Select all", log_fn=log_fn, exact=False):
+        _click_image(nodes_hwnd, "select_all_btn", log_fn=log_fn)
+    _click_button(
+        nodes_hwnd,
+        "Accept",
+        "method_select_nodes_accept",
+        log_fn=log_fn,
+        post_delay=SLEEP_AFTER_COMMAND,
+    )
+    _continuous_pad_method_path = method_key
 
 
 def _force_close_multiscript(log_fn=None) -> bool:

@@ -32,6 +32,8 @@ class RecipeRunner(threading.Thread):
                  dropview_ctrl: Optional[DropViewController] = None,
                  session_scr_path: str = "",
                  session_tp_path: str = "",
+                 session_measurements_dir: str = "",
+                 part_number: str = "",
                  measurement_mode: str = MEASUREMENT_MODE_SCRIPT_PAD,
                  simulation_mode: bool = False):
         super().__init__(daemon=True)
@@ -43,6 +45,8 @@ class RecipeRunner(threading.Thread):
         self.dropview_ctrl    = dropview_ctrl
         self.session_scr_path = session_scr_path
         self.session_tp_path  = session_tp_path
+        self.session_measurements_dir = session_measurements_dir
+        self.part_number = part_number
         self.measurement_mode = measurement_mode or MEASUREMENT_MODE_SCRIPT_PAD
         self.simulation_mode  = simulation_mode
         self.pause_event      = threading.Event()
@@ -176,7 +180,12 @@ class RecipeRunner(threading.Thread):
                 tp_path = self.session_tp_path
                 if tp_path:
                     self._log(f"Continuous PAD method: {tp_path}")
-                ok = dv.do_start_continuous_pad(tp_path, log_fn=self._log)
+                ok = dv.do_start_continuous_pad(
+                    tp_path,
+                    measurements_dir=self.session_measurements_dir,
+                    part_number=self.part_number,
+                    log_fn=self._log,
+                )
                 if not ok:
                     self.status_queue.put(("error", f"Step {step_num}: Continuous PAD Start failed."))
                     self._cleanup_dropview(step_num)
