@@ -13,6 +13,7 @@ from bench_test.measurement.session import (
     MEASUREMENT_MODE_CONTINUOUS_PAD,
     MEASUREMENT_MODE_SCRIPT_PAD,
 )
+from bench_test.utils.debug_log import debug_log
 
 # DropView aksiyon sabitleri
 DROPVIEW_ACTIONS = ["none", "start_dropview", "start_measure", "stop_measure", "exit_dropview"]
@@ -55,11 +56,21 @@ class RecipeRunner(threading.Thread):
         self.current_loop_index = 0
         self.current_loop_count = 0
         self.measurement_running = False
+        self._continuous_pause_requested = False
+        self._continuous_resume_requested = False
+        self._continuous_stopped_for_pause = False
 
     def pause(self):
+        if self.measurement_mode == MEASUREMENT_MODE_CONTINUOUS_PAD:
+            self._continuous_pause_requested = True
         self.pause_event.clear()
 
     def resume(self):
+        if (
+            self.measurement_mode == MEASUREMENT_MODE_CONTINUOUS_PAD
+            and self._continuous_stopped_for_pause
+        ):
+            self._continuous_resume_requested = True
         self.pause_event.set()
 
     def _cleanup_dropview(self, step_num: int):
@@ -80,6 +91,74 @@ class RecipeRunner(threading.Thread):
 
     def _log(self, msg):
         self.status_queue.put(("log", msg))
+
+    def _debug_log(self, msg):
+        debug_log(msg)
+
+    def _start_continuous_pad_segment(self, log_prefix: str = "", log_fn=None) -> bool:
+        if self.dropview_ctrl is None:
+            return True
+
+        log = log_fn or self._log
+        tp_path = self.session_tp_path
+        if tp_path:
+            log(f"Continuous PAD method: {tp_path}")
+        ok = self.dropview_ctrl.do_start_continuous_pad(
+            tp_path,
+            measurements_dir=self.session_measurements_dir,
+            part_number=self.part_number,
+            log_fn=log,
+        )
+        if ok:
+            self.measurement_running = True
+            if log_prefix:
+                log(log_prefix)
+            return True
+        return False
+
+    def _handle_continuous_pause_request(self) -> bool:
+        if self.measurement_mode != MEASUREMENT_MODE_CONTINUOUS_PAD:
+            return True
+        if not self._continuous_pause_requested:
+            return True
+
+        self._continuous_pause_requested = False
+        if not self.measurement_running or self.dropview_ctrl is None:
+            return True
+
+        self._debug_log("Continuous PAD pause requested; stopping active segment...")
+        ok = self.dropview_ctrl.do_stop_continuous_pad(log_fn=self._debug_log)
+        if not ok:
+            self.status_queue.put(("error", "Continuous PAD pause failed: segment could not be stopped."))
+            self.pause_event.set()
+            return False
+
+        self.measurement_running = False
+        self._continuous_stopped_for_pause = True
+        self._log("Recipe paused")
+        return True
+
+    def _handle_continuous_resume_request(self) -> bool:
+        if self.measurement_mode != MEASUREMENT_MODE_CONTINUOUS_PAD:
+            return True
+        if not self._continuous_resume_requested:
+            return True
+
+        self._continuous_resume_requested = False
+        if not self._continuous_stopped_for_pause:
+            return True
+
+        self._debug_log("Continuous PAD resume requested; starting a new segment...")
+        ok = self._start_continuous_pad_segment(
+            log_fn=self._debug_log,
+        )
+        if not ok:
+            self.status_queue.put(("error", "Continuous PAD resume failed: new segment could not be started."))
+            return False
+
+        self._continuous_stopped_for_pause = False
+        self._log("Recipe resumed")
+        return True
 
     def _check_dropview_connected(self) -> bool:
         if self.dropview_ctrl is None:
@@ -180,23 +259,14 @@ class RecipeRunner(threading.Thread):
                 if self.measurement_running:
                     self._log(
                         "Continuous PAD start skipped: measurement is already running. "
-                        "Use Stop Measure before starting a new segment."
+                        "Continuing current segment for this step."
                     )
-                    return True
-                tp_path = self.session_tp_path
-                if tp_path:
-                    self._log(f"Continuous PAD method: {tp_path}")
-                ok = dv.do_start_continuous_pad(
-                    tp_path,
-                    measurements_dir=self.session_measurements_dir,
-                    part_number=self.part_number,
-                    log_fn=self._log,
-                )
-                if not ok:
-                    self.status_queue.put(("error", f"Step {step_num}: Continuous PAD Start failed."))
-                    self._cleanup_dropview(step_num)
-                    return False
-                self.measurement_running = True
+                else:
+                    ok = self._start_continuous_pad_segment()
+                    if not ok:
+                        self.status_queue.put(("error", f"Step {step_num}: Continuous PAD Start failed."))
+                        self._cleanup_dropview(step_num)
+                        return False
             else:
                 scr_path = self.session_scr_path or step.dropview_scr
                 if scr_path:
@@ -232,7 +302,19 @@ class RecipeRunner(threading.Thread):
             while time.time() - start_t < duration_sec:
                 if self.stop_event.is_set():
                     return False
-                self.pause_event.wait()
+                pause_t = time.time()
+                if not self._handle_continuous_pause_request():
+                    return False
+                if not self.pause_event.is_set():
+                    self.pause_event.wait()
+                    if self.stop_event.is_set():
+                        return False
+                    if not self._handle_continuous_resume_request():
+                        return False
+                    paused_sec = time.time() - pause_t
+                    start_t += paused_sec
+                    if self.recipe_start_t:
+                        self.recipe_start_t += paused_sec
                 elapsed   = time.time() - start_t
                 remaining = (duration_sec - elapsed) / 60
                 self.status_queue.put(("progress", {

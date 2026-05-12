@@ -135,6 +135,7 @@ class RecipeTab(QWidget):
         self._running_loop_text = "-"
         self._elapsed_time_text = "-"
         self._display_experiment_params = {}
+        self._active_measurement_mode = ""
 
         self._build()
         self._restore_last_recipe()
@@ -696,12 +697,13 @@ class RecipeTab(QWidget):
             return
 
         continuous_pad = measurement_mode == MEASUREMENT_MODE_CONTINUOUS_PAD
+        self._active_measurement_mode = measurement_mode
         self.start_btn.setEnabled(False)
-        self.pause_btn.setEnabled(not continuous_pad)
+        self.pause_btn.setEnabled(True)
         self.stop_btn.setEnabled(True)
         if continuous_pad:
             self.pause_btn.setToolTip(
-                "Continuous PAD pause will be enabled after segment stop/start automation is wired."
+                "Continuous PAD pause stops and saves the active segment; resume starts a new segment."
             )
         else:
             self.pause_btn.setToolTip("")
@@ -709,12 +711,16 @@ class RecipeTab(QWidget):
 
     def _pause_recipe(self):
         if self.recipe_runner:
+            continuous_pad = self._active_measurement_mode == MEASUREMENT_MODE_CONTINUOUS_PAD
             if self.pause_btn.text() == "Pause":
                 self.recipe_runner.pause(); self.pause_btn.setText("Resume")
-                self.status_lbl.setText("PAUSED"); self.log_signal.emit("Recipe paused")
+                self.status_lbl.setText("PAUSED")
+                if not continuous_pad:
+                    self.log_signal.emit("Recipe paused")
             else:
                 self.recipe_runner.resume(); self.pause_btn.setText("Pause")
-                self.log_signal.emit("Recipe resumed")
+                if not continuous_pad:
+                    self.log_signal.emit("Recipe resumed")
 
     def _stop_recipe(self):
         if not (self.recipe_runner and self.recipe_runner.is_alive()):
