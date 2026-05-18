@@ -146,7 +146,7 @@ class MeasurementSetupTab(QWidget):
 
     # ── RecipeTab arayüzü ─────────────────────────────────────────
 
-    def build_package(self, recipe_path: str = "") -> bool:
+    def build_package(self, recipe_path: str = "", recipe_steps: list = None) -> bool:
         """
         RecipeTab._start_recipe() tarafından çağrılır.
         Üç panelden veri toplayıp PackagePanel.build_package()'a iletir.
@@ -158,6 +158,7 @@ class MeasurementSetupTab(QWidget):
             ) or ""
 
         tp_path    = self.method_panel.get_current_path()
+        method_paths = self.method_panel.get_method_paths_by_mode()
         scr_params = self.script_panel.get_scr_params()
         experiment_params = self.get_experiment_params()
 
@@ -172,6 +173,8 @@ class MeasurementSetupTab(QWidget):
             recipe_path= recipe_path,
             experiment_params=experiment_params,
             measurement_mode=scr_params.get("measurement_mode"),
+            method_paths=method_paths,
+            recipe_steps=recipe_steps,
         )
 
     def write_to_log(self, msg: str):

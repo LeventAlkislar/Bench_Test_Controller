@@ -420,6 +420,24 @@ class MethodEditorPanel(QWidget):
     def get_current_path(self) -> str:
         return self._current_path
 
+    def get_method_paths_by_mode(self) -> dict:
+        paths = {}
+        current_mode = self._measurement_mode or MEASUREMENT_MODE_SCRIPT_PAD
+        if self._current_path:
+            paths[current_mode] = self._current_path
+        for mode in (
+            MEASUREMENT_MODE_SCRIPT_PAD,
+            MEASUREMENT_MODE_CONTINUOUS_PAD,
+            MEASUREMENT_MODE_CV,
+        ):
+            if mode not in paths:
+                paths[mode] = get_value(self._last_method_key_for_mode(mode), "")
+        if not paths.get(MEASUREMENT_MODE_CONTINUOUS_PAD):
+            paths[MEASUREMENT_MODE_CONTINUOUS_PAD] = paths.get(MEASUREMENT_MODE_SCRIPT_PAD, "")
+        if not paths.get(MEASUREMENT_MODE_SCRIPT_PAD):
+            paths[MEASUREMENT_MODE_SCRIPT_PAD] = paths.get(MEASUREMENT_MODE_CONTINUOUS_PAD, "")
+        return paths
+
     def set_measurement_mode(self, mode: str):
         mode = mode or MEASUREMENT_MODE_SCRIPT_PAD
         if mode == self._measurement_mode:

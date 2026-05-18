@@ -75,7 +75,13 @@ class Packager:
 
     # ── .tp dosyası ──────────────────────────────────────────────
 
-    def pack_tp(self, tp_path: str, duration_s: float = None) -> str:
+    def pack_tp(
+        self,
+        tp_path: str,
+        duration_s: float = None,
+        file_key: str = "tp",
+        dest_stem: str = None,
+    ) -> str:
         """
         .tp dosyasını measurement_parameters/ altına kopyalar.
 
@@ -87,11 +93,12 @@ class Packager:
         source_ext = os.path.splitext(tp_path)[1].lower()
         if source_ext not in (".tp", ".tc"):
             source_ext = ".tp"
-        dest_name = f"{self.session.part_number}{source_ext}"
+        stem = dest_stem or self.session.part_number
+        dest_name = f"{stem}{source_ext}"
         dest = self._copy_to_params(tp_path, dest_name)
         if duration_s is not None:
             self._patch_tp_duration(dest, duration_s)
-        self.session.register_file("tp", dest)
+        self.session.register_file(file_key, dest)
         self.session.save()
         return dest
 

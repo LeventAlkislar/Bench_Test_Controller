@@ -253,6 +253,8 @@ class PackagePanel(QWidget):
         recipe_path: str,
         experiment_params: dict = None,
         measurement_mode: str = MEASUREMENT_MODE_SCRIPT_PAD,
+        method_paths: dict = None,
+        recipe_steps: list = None,
     ) -> bool:
         """
         Recipe başlamadan önce paketi oluşturur.
@@ -297,18 +299,64 @@ class PackagePanel(QWidget):
                 "No valid Package Root directory selected.")
             return False
 
-        if not tp_path or not os.path.isfile(tp_path):
-            QMessageBox.warning(self, "Warning",
-                "Method file (.tp/.tc) not loaded.\n"
-                "Load a method file from the Measurement Setup tab.")
+        measurement_mode = measurement_mode or MEASUREMENT_MODE_SCRIPT_PAD
+        actions = {
+            getattr(step, "dropview_action", "")
+            for step in (recipe_steps or [])
+        }
+        if not actions:
+            actions = {"start_measure"}
+        legacy_start = "start_measure" in actions
+        needs_discrete = "start_discrete_pad" in actions or (
+            legacy_start and measurement_mode == MEASUREMENT_MODE_SCRIPT_PAD
+        )
+        needs_continuous = "start_continuous_pad" in actions or (
+            legacy_start and measurement_mode == MEASUREMENT_MODE_CONTINUOUS_PAD
+        )
+        needs_cv = "run_cv" in actions or (
+            legacy_start and measurement_mode == MEASUREMENT_MODE_CV
+        )
+        method_paths = dict(method_paths or {})
+        if tp_path:
+            method_paths.setdefault(measurement_mode, tp_path)
+        if not method_paths.get(MEASUREMENT_MODE_CONTINUOUS_PAD):
+            method_paths[MEASUREMENT_MODE_CONTINUOUS_PAD] = method_paths.get(
+                MEASUREMENT_MODE_SCRIPT_PAD,
+                "",
+            )
+        if not method_paths.get(MEASUREMENT_MODE_SCRIPT_PAD):
+            method_paths[MEASUREMENT_MODE_SCRIPT_PAD] = method_paths.get(
+                MEASUREMENT_MODE_CONTINUOUS_PAD,
+                "",
+            )
+
+        required_methods = []
+        if needs_discrete:
+            required_methods.append(("Discrete PAD", method_paths.get(MEASUREMENT_MODE_SCRIPT_PAD, "")))
+        if needs_continuous:
+            required_methods.append(("Continuous PAD", method_paths.get(MEASUREMENT_MODE_CONTINUOUS_PAD, "")))
+        if needs_cv:
+            required_methods.append(("CV", method_paths.get(MEASUREMENT_MODE_CV, "")))
+        if not required_methods:
+            required_methods.append(("Method", tp_path))
+        missing_methods = [
+            name for name, path in required_methods
+            if not path or not os.path.isfile(path)
+        ]
+        if missing_methods:
+            QMessageBox.warning(
+                self,
+                "Warning",
+                "Missing method file(s): "
+                + ", ".join(missing_methods)
+                + "\nLoad the method from the Measurement Setup tab first.",
+            )
             return False
 
-        measurement_mode = measurement_mode or MEASUREMENT_MODE_SCRIPT_PAD
-        continuous_pad = measurement_mode == MEASUREMENT_MODE_CONTINUOUS_PAD
-        cv_mode = measurement_mode == MEASUREMENT_MODE_CV
-        direct_method_mode = continuous_pad or cv_mode
-
-        if not scr_params.get("method_file"):
+        if needs_discrete and (
+            not method_paths.get(MEASUREMENT_MODE_SCRIPT_PAD)
+            or not scr_params.get("output_csv")
+        ):
             QMessageBox.warning(self, "Warning",
                 "Script parameters are incomplete.")
             return False
@@ -320,23 +368,47 @@ class PackagePanel(QWidget):
             self._session.save()
             packager = Packager(self._session)
 
-            # .tp kopyala
-            tp_duration_s = 85000.0 if continuous_pad else None
-            packager.pack_tp(tp_path, duration_s=tp_duration_s)
-            self._log(f"✓ .tp copied: {os.path.basename(tp_path)}")
+            default_method_ref = ""
+            if needs_discrete:
+                discrete_path = method_paths.get(MEASUREMENT_MODE_SCRIPT_PAD, "")
+                default_method_ref = packager.pack_tp(
+                    discrete_path,
+                    file_key="method_discrete_pad",
+                    dest_stem=f"{part_number}_discrete_pad",
+                )
+                self._log(f"Discrete PAD method copied: {os.path.basename(discrete_path)}")
+            if needs_continuous:
+                continuous_path = method_paths.get(MEASUREMENT_MODE_CONTINUOUS_PAD, "")
+                continuous_ref = packager.pack_tp(
+                    continuous_path,
+                    duration_s=85000.0,
+                    file_key="method_continuous_pad",
+                    dest_stem=f"{part_number}_continuous_pad",
+                )
+                default_method_ref = default_method_ref or continuous_ref
+                self._log(f"Continuous PAD method copied: {os.path.basename(continuous_path)}")
+            if needs_cv:
+                cv_path = method_paths.get(MEASUREMENT_MODE_CV, "")
+                cv_ref = packager.pack_tp(
+                    cv_path,
+                    file_key="method_cv",
+                    dest_stem=f"{part_number}_cv",
+                )
+                default_method_ref = default_method_ref or cv_ref
+                self._log(f"CV method copied: {os.path.basename(cv_path)}")
+            if default_method_ref:
+                self._session.register_file("tp", default_method_ref)
+                self._session.save()
 
             # .scr üret ve kopyala
-            if direct_method_mode:
-                mode_name = "CV" if cv_mode else "Continuous PAD"
-                self._log(f"{mode_name} mode: .scr generation skipped.")
-            else:
+            if needs_discrete:
                 from bench_test.dropview.script_generator import generate_dropview_script
                 import tempfile
                 with tempfile.NamedTemporaryFile(suffix=".scr", delete=False) as tmp:
                     tmp_path = tmp.name
                 try:
                     generate_dropview_script(
-                        method_file=scr_params["method_file"],
+                        method_file=method_paths[MEASUREMENT_MODE_SCRIPT_PAD],
                         output_csv=scr_params["output_csv"],
                         repeat_times=scr_params["repeat_times"],
                         wait_ms=scr_params["wait_ms"],
@@ -347,6 +419,8 @@ class PackagePanel(QWidget):
                     if os.path.isfile(tmp_path):
                         os.unlink(tmp_path)
                 self._log("✓ .scr generated and copied.")
+            else:
+                self._log("Discrete PAD not used: .scr generation skipped.")
 
             # recipe.json
             if recipe_path and os.path.isfile(recipe_path):
@@ -366,15 +440,15 @@ class PackagePanel(QWidget):
             packager.finalize()
 
             # Referansları güncelle
-            self.set_scr_ref("" if direct_method_mode else packager.get_packed_scr_path())
-            self.set_tp_ref(self._session.tp_path if hasattr(self._session, "tp_path") else tp_path)
+            self.set_scr_ref(packager.get_packed_scr_path() if needs_discrete else "")
+            self.set_tp_ref(default_method_ref or tp_path)
             self.set_recipe_ref(effective_recipe_path)
 
             session_name = os.path.basename(self._session.session_dir)
             self._set_status(f"Aktif: {part_number} / {session_name}", _COLOR_RUNNING)
             self.session_dir_lbl.setText(self._session.session_dir)
             self.session_id_edit.setText(session_name)
-            self.aggregate_btn.setEnabled(not direct_method_mode)
+            self.aggregate_btn.setEnabled(needs_discrete)
 
             self._log_writer = LogWriter(self._session)
             self._log_writer.open()

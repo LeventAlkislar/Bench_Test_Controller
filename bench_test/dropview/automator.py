@@ -4,6 +4,7 @@ import sys
 import time
 import threading
 import subprocess
+import xml.etree.ElementTree as ET
 
 import psutil
 import pyautogui
@@ -921,6 +922,68 @@ def _wait_for_stable_mtc(path: str, timeout: float = _CONTINUOUS_PAD_STABLE_TIME
     return _wait_for_stable_xml(path, timeout, "CV .mtc")
 
 
+def _cv_parameter_float(technic, section: str, param_id: str, fallback: float = 0.0) -> float:
+    param = technic.find(f"{section}/parameter[@id='{param_id}']")
+    if param is None or param.text is None:
+        return fallback
+    try:
+        return float(param.text)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _estimate_cv_duration_seconds(method_path: str) -> float:
+    """Estimate finite CV runtime from the .tc method so Run CV can wait long enough."""
+    try:
+        tree = ET.parse(method_path)
+        technic = tree.getroot().find("technic")
+        if technic is None or technic.get("id", "") != "CV":
+            return 0.0
+
+        srate = _cv_parameter_float(technic, "commonUserParameters", "Srate")
+        nscans = _cv_parameter_float(technic, "commonUserParameters", "nscans", 1.0)
+        if srate <= 0.0 or nscans <= 0.0:
+            return 0.0
+
+        channel = technic.find("channelUserParameters/channel[@id='0']")
+        if channel is None:
+            return 0.0
+
+        def channel_float(param_id: str, fallback: float = 0.0) -> float:
+            param = channel.find(f"parameter[@id='{param_id}']")
+            if param is None or param.text is None:
+                return fallback
+            try:
+                return float(param.text)
+            except (TypeError, ValueError):
+                return fallback
+
+        ebeg = channel_float("Ebegin")
+        ev1 = channel_float("Evtx1", ebeg)
+        ev2 = channel_float("Evtx2", ev1)
+        scan_span = abs(ev1 - ebeg) + abs(ev2 - ev1)
+        scan_seconds = (scan_span / srate) * nscans
+        pretreatment_seconds = sum(
+            _cv_parameter_float(technic, "pretreatmentUserParameters", param_id)
+            for param_id in ("tcond", "tdep", "tequil")
+        )
+        return max(0.0, scan_seconds + pretreatment_seconds)
+    except Exception as exc:
+        debug_log(f"CV duration estimate skipped: {exc}", level="warning")
+        return 0.0
+
+
+def _cv_file_timeout(method_path: str, configured_timeout: float | None = None) -> float:
+    if configured_timeout is not None:
+        return float(configured_timeout)
+    estimate = _estimate_cv_duration_seconds(method_path)
+    if estimate <= 0.0:
+        return _CONTINUOUS_PAD_FILE_TIMEOUT
+    timeout = max(_CONTINUOUS_PAD_FILE_TIMEOUT, estimate + 60.0, estimate * 1.35)
+    debug_log(f"CV estimated duration: {estimate:.1f}s; file timeout: {timeout:.1f}s")
+    return timeout
+
+
 def _read_error_window_text(hwnd) -> str:
     """
     Error penceresinin içindeki static text child'ını okur.
@@ -1625,14 +1688,17 @@ def step_load_continuous_pad_method(config: dict, log_fn=None):
 
 
 def step_run_cv(config: dict, log_fn=None) -> str:
-    """Load/configure CV, run it, and wait until AutoSave writes a stable .mtc."""
+    """Load CV, configure AutoSave, run, and wait until a stable .mtc is written."""
     config = config or {}
+    method_path = config.get("method_path", "")
+    if not method_path or not os.path.isfile(method_path):
+        raise RuntimeError(f"CV method file not found: {method_path}")
     measurements_dir = config.get("measurements_dir", "")
     if not measurements_dir or not os.path.isdir(measurements_dir):
         raise RuntimeError(f"CV measurements directory not found: {measurements_dir}")
 
-    step_configure_cv_autosave(config, log_fn=log_fn)
     step_load_cv_method(config, log_fn=log_fn)
+    step_configure_cv_autosave(config, log_fn=log_fn)
 
     dv_hwnd = _ensure_dropview_ready("CV run", log_fn=log_fn)
     before = _snapshot_mtc_files(measurements_dir)
@@ -1682,7 +1748,7 @@ def step_run_cv(config: dict, log_fn=None) -> str:
     mtc_path = _wait_for_new_mtc(
         measurements_dir,
         before,
-        timeout=float(config.get("file_timeout", _CONTINUOUS_PAD_FILE_TIMEOUT)),
+        timeout=_cv_file_timeout(method_path, config.get("file_timeout")),
     )
     stable_path = _wait_for_stable_mtc(
         mtc_path,
@@ -1801,7 +1867,8 @@ def step_load_cv_method(config: dict, log_fn=None):
         owner_hwnd=dv_hwnd,
         image_key="method_select_nodes_unchecked",
     )
-    _ensure_node_checked(nodes_hwnd, log_fn=log_fn)
+    if not _click_child_text(nodes_hwnd, "Select all", log_fn=log_fn, exact=False):
+        _click_image(nodes_hwnd, "select_all_btn", log_fn=log_fn)
     _click_button(
         nodes_hwnd,
         "Accept",
@@ -1942,6 +2009,8 @@ def step_exit_dropview(config: dict, log_fn=None):
                 _log(f"│  WARNING: Ctrl+D before kill failed: {e}")
 
             pid = get_window_pid(dv_hwnd) or _get_dropview_pid()
+            if pid is not None and pid <= 0:
+                pid = _get_dropview_pid()
             if pid:
                 _log(f"│  Force-closing DropView (PID={pid})...")
                 try:

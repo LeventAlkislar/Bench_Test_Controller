@@ -339,10 +339,20 @@ class RecipeTab(QWidget):
                     return os.path.basename(path)
         return "--"
 
+    @staticmethod
+    def _normalize_step_for_action(step: RecipeStep):
+        if step.dropview_action == "run_cv":
+            step.duration_minutes = 0.0
+
+    def _normalize_recipe_steps(self):
+        for step in self.recipe_steps:
+            self._normalize_step_for_action(step)
+
     def _refresh_table(self):
         self._ignoring_changes = True
         self.table.setRowCount(len(self.recipe_steps))
         for i, step in enumerate(self.recipe_steps):
+            self._normalize_step_for_action(step)
             loop_info = self._get_loop_info(i + 1)
             glucose_map = self._current_glucose_map()
             if step.port > 0:
@@ -368,8 +378,12 @@ class RecipeTab(QWidget):
             ]
             for j, v in enumerate(vals):
                 item = QTableWidgetItem(v)
-                if j in (0, 7):
+                if j in (0, 7) or (
+                    j == COL_DUR and step.dropview_action == "run_cv"
+                ):
                     item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                if j == COL_DUR and step.dropview_action == "run_cv":
+                    item.setToolTip("Run CV duration is controlled by the .tc method.")
                 self.table.setItem(i, j, item)
         self._ignoring_changes = False
 
@@ -393,14 +407,17 @@ class RecipeTab(QWidget):
                     rev = {v: k for k, v in VALVE_B_LABELS.items()}
                     step.valve_b_state = rev.get(val, 0)
             elif col == COL_DUR:
-                d = float(val)
-                if d >= 0:
-                    if d <= 0 and step.dropview_action == "none":
-                        pass
-                    else:
-                        step.duration_minutes = d
+                if step.dropview_action == "run_cv":
+                    step.duration_minutes = 0.0
                 else:
-                    raise ValueError()
+                    d = float(val)
+                    if d >= 0:
+                        if d <= 0 and step.dropview_action == "none":
+                            pass
+                        else:
+                            step.duration_minutes = d
+                    else:
+                        raise ValueError()
             elif col == COL_DESC:
                 step.description = val
             elif col == COL_DV:
@@ -417,6 +434,7 @@ class RecipeTab(QWidget):
                     "exit dropview": "exit_dropview",   "exit_dropview": "exit_dropview",   "4": "exit_dropview",
                 }
                 step.dropview_action = _dv_map.get(val.lower(), "none")
+                self._normalize_step_for_action(step)
             elif col == COL_SCR:
                 pass
         except (ValueError, TypeError):
@@ -515,6 +533,7 @@ class RecipeTab(QWidget):
         self.loops_lbl.setText(f"{'  |  '.join(parts)} | Running Loop: {self._running_loop_text}")
 
     def _update_total_time(self):
+        self._normalize_recipe_steps()
         if not self.recipe_steps:
             self.total_time_lbl.setText(f"Total Time: 0 min (0d 0h 0m) | Elapsed: {self._elapsed_time_text}"); return
         times = [s.duration_minutes for s in self.recipe_steps]
@@ -534,6 +553,7 @@ class RecipeTab(QWidget):
     def _save_recipe(self):
         if not self.recipe_steps:
             QMessageBox.warning(self, "Warning", "No steps to save"); return
+        self._normalize_recipe_steps()
         path = save_file(self, "Save Recipe", "recipe_dir",
                           "JSON (*.json);;All files (*.*)", ".json",
                           self.name_edit.text().replace(" ", "_") + ".json")
@@ -564,6 +584,7 @@ class RecipeTab(QWidget):
             self.recipe_steps = [
                 RecipeStep(**{k: v for k, v in s.items() if k != "dropview_scr"})
                 for s in data.get("steps", [])]
+            self._normalize_recipe_steps()
             self.step_loops = [StepLoop(**l) for l in data.get("step_loops", [])]
             self._refresh_table();
             self._update_loops_display();
@@ -667,7 +688,8 @@ class RecipeTab(QWidget):
                 self._simulation_mode = False
         # ── Paketi oluştur ────────────────────────────────────
         if self.package_tab and not self.package_tab.build_package(
-                recipe_path=self._current_recipe_path or ""):
+                recipe_path=self._current_recipe_path or "",
+                recipe_steps=self.recipe_steps):
             return
         # Session .scr yolu artık hazır — COL_SCR sütununu güncelle
         if self.package_tab and self.package_tab.get_session():
@@ -679,6 +701,7 @@ class RecipeTab(QWidget):
         # Packager'ın ürettiği patch'li .scr yolunu al
         session_scr = ""
         session_tp = ""
+        session_method_paths = {}
         session_measurements_dir = ""
         part_number = ""
         measurement_mode = ""
@@ -687,6 +710,11 @@ class RecipeTab(QWidget):
             if session:
                 session_scr = session.get_file_path("script") or ""
                 session_tp = session.get_file_path("tp") or ""
+                session_method_paths = {
+                    "discrete_pad": session.get_file_path("method_discrete_pad") or "",
+                    "continuous_pad": session.get_file_path("method_continuous_pad") or "",
+                    "cv": session.get_file_path("method_cv") or "",
+                }
                 session_measurements_dir = session.measurements_dir
                 part_number = session.part_number
                 measurement_mode = getattr(session, "measurement_mode", "")
@@ -696,6 +724,7 @@ class RecipeTab(QWidget):
                 self.ctrl_a, self.ctrl_b, recipe, self.status_queue, self.stop_event,
                 self.dv_ctrl, session_scr_path=session_scr,
                 session_tp_path=session_tp,
+                session_method_paths=session_method_paths,
                 session_measurements_dir=session_measurements_dir,
                 part_number=part_number,
                 measurement_mode=measurement_mode,
