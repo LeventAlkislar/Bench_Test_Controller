@@ -1,240 +1,154 @@
-2026-04-30 14:50:05,410 DEBUG bench_test.debug │  Dialog watchdog started.
-2026-04-30 14:50:11,187 DEBUG bench_test.debug │  UI action: bring_to_front | target='DropView 8400M' (hwnd=11734520, pid=54580, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=11734520) | retry=1 | result=ok
-2026-04-30 14:50:11,241 DEBUG bench_test.debug │  UI action: sequence_hotkey | target='DropView 8400M' (hwnd=11734520, pid=54580, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=11734520) | retry=1 | result=ok | alt+d
-2026-04-30 14:50:11,794 DEBUG bench_test.debug │  UI action: sequence_press | target='DropView 8400M' (hwnd=11734520, pid=54580, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=11734520) | retry=1 | result=ok | m
-2026-04-30 14:50:12,105 DEBUG bench_test.debug │  Dialog detected: 'Manual Connection' [warning] (hwnd=3019102, pid=54580, owner='DropView 8400M', owner_hwnd=11734520)
-2026-04-30 14:50:14,367 DEBUG bench_test.debug │  Dialog closed: 'Manual Connection' (hwnd=3019102, pid=54580, owner='DropView 8400M', owner_hwnd=11734520)
-2026-04-30 14:50:14,368 DEBUG bench_test.debug │  Dialog detected: 'Connecting' [warning] (hwnd=3084638, pid=54580, owner='DropView 8400M', owner_hwnd=11734520)
-2026-04-30 14:50:26,949 DEBUG bench_test.debug │  Dialog closed: 'Connecting' (hwnd=3084638, pid=54580, owner='DropView 8400M', owner_hwnd=11734520)
-2026-04-30 14:50:33,527 DEBUG bench_test.debug │  UI action: bring_to_front | target='DropView 8400M' (hwnd=11734520, pid=54580, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=11734520) | retry=1 | result=ok
-2026-04-30 14:50:33,588 DEBUG bench_test.debug │  UI action: sequence_hotkey | target='DropView 8400M' (hwnd=11734520, pid=54580, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=11734520) | retry=1 | result=ok | ctrl+d
-2026-04-30 14:50:37,581 DEBUG bench_test.debug │  UI action: bring_to_front | target='DropView 8400M' (hwnd=11734520, pid=54580, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=11734520) | retry=1 | result=ok
-2026-04-30 14:50:37,644 DEBUG bench_test.debug │  UI action: sequence_hotkey | target='DropView 8400M' (hwnd=11734520, pid=54580, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=11734520) | retry=1 | result=ok | alt+f4
-2026-04-30 14:50:40,728 DEBUG bench_test.debug │  Dialog watchdog durduruldu.
-2026-04-30 14:52:24,935 DEBUG bench_test.debug │  Dialog watchdog started.
-2026-04-30 14:52:30,704 DEBUG bench_test.debug │  UI action: bring_to_front | target='DropView 8400M' (hwnd=10094630, pid=63868, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=10094630) | retry=1 | result=ok
-2026-04-30 14:52:30,760 DEBUG bench_test.debug │  UI action: sequence_hotkey | target='DropView 8400M' (hwnd=10094630, pid=63868, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=10094630) | retry=1 | result=ok | alt+d
-2026-04-30 14:52:31,314 DEBUG bench_test.debug │  UI action: sequence_press | target='DropView 8400M' (hwnd=10094630, pid=63868, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=10094630) | retry=1 | result=ok | m
-2026-04-30 14:52:31,538 DEBUG bench_test.debug │  Dialog detected: 'Manual Connection' [warning] (hwnd=1905884, pid=63868, owner='DropView 8400M', owner_hwnd=10094630)
-2026-04-30 14:52:34,017 DEBUG bench_test.debug │  Dialog closed: 'Manual Connection' (hwnd=1905884, pid=63868, owner='DropView 8400M', owner_hwnd=10094630)
-2026-04-30 14:52:34,018 DEBUG bench_test.debug │  Dialog detected: 'Connecting' [warning] (hwnd=1971420, pid=63868, owner='DropView 8400M', owner_hwnd=10094630)
-2026-04-30 14:52:45,776 DEBUG bench_test.debug │  Dialog closed: 'Connecting' (hwnd=1971420, pid=63868, owner='DropView 8400M', owner_hwnd=10094630)
-2026-04-30 14:52:52,276 DEBUG bench_test.debug │  UI action: bring_to_front | target='DropView 8400M' (hwnd=10094630, pid=63868, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=10094630) | retry=1 | result=ok
-2026-04-30 14:52:52,600 DEBUG bench_test.debug │  UI action: wait_image | target='DropView 8400M' (hwnd=10094630, pid=63868, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=10094630) | retry=0 | result=ok | scripts_menu.png
-2026-04-30 14:52:53,454 DEBUG bench_test.debug │  UI action: bring_to_front | target='DropView 8400M' (hwnd=10094630, pid=63868, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=10094630) | retry=1 | result=ok
-2026-04-30 14:52:53,512 DEBUG bench_test.debug │  UI action: sequence_hotkey | target='DropView 8400M' (hwnd=10094630, pid=63868, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=10094630) | retry=1 | result=ok | alt+s
-2026-04-30 14:52:54,069 DEBUG bench_test.debug │  UI action: sequence_press | target='DropView 8400M' (hwnd=10094630, pid=63868, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=10094630) | retry=1 | result=ok | s
-2026-04-30 14:52:55,273 DEBUG bench_test.debug Multiscript Editor opened (hwnd=10359888).
-2026-04-30 14:52:56,152 DEBUG bench_test.debug │  UI action: bring_to_front | target='Multiscript Editor' (hwnd=10359888, pid=63868, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=10359888) | retry=1 | result=ok
-2026-04-30 14:52:57,553 DEBUG bench_test.debug │  UI action: bring_to_front | target='Multiscript Editor' (hwnd=10359888, pid=63868, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=10359888) | retry=1 | result=ok
-2026-04-30 14:52:57,994 DEBUG bench_test.debug │  Dialog detected: 'Open' [warning] (hwnd=11208916, pid=63868, owner='DropView 8400M', owner_hwnd=10094630)
-2026-04-30 14:52:58,106 DEBUG bench_test.debug │  UI action: click | target='Multiscript Editor' (hwnd=10359888, pid=63868, owner='unknown', owner_hwnd=0) | foreground='Open' (hwnd=11208916) | retry=1 | result=ok | x=424, y=637
-2026-04-30 14:52:59,684 DEBUG bench_test.debug │  UI action: bring_to_front | target='Open' (hwnd=11208916, pid=63868, owner='DropView 8400M', owner_hwnd=10094630) | foreground='Open' (hwnd=11208916) | retry=1 | result=ok
-2026-04-30 14:53:00,137 DEBUG bench_test.debug │  UI action: click | target='Open' (hwnd=11208916, pid=63868, owner='DropView 8400M', owner_hwnd=10094630) | foreground='Open' (hwnd=11208916) | retry=1 | result=ok | x=895, y=609
-2026-04-30 14:53:00,501 DEBUG bench_test.debug │  UI action: bring_to_front | target='Open' (hwnd=11208916, pid=63868, owner='DropView 8400M', owner_hwnd=10094630) | foreground='Open' (hwnd=11208916) | retry=1 | result=ok
-2026-04-30 14:53:00,555 DEBUG bench_test.debug │  UI action: sequence_hotkey | target='Open' (hwnd=11208916, pid=63868, owner='DropView 8400M', owner_hwnd=10094630) | foreground='Open' (hwnd=11208916) | retry=1 | result=ok | ctrl+a
-2026-04-30 14:53:00,709 DEBUG bench_test.debug │  UI action: sequence_hotkey | target='Open' (hwnd=11208916, pid=63868, owner='DropView 8400M', owner_hwnd=10094630) | foreground='Open' (hwnd=11208916) | retry=1 | result=ok | ctrl+v
-2026-04-30 14:53:01,063 DEBUG bench_test.debug │  UI action: sequence_press | target='Open' (hwnd=11208916, pid=63868, owner='DropView 8400M', owner_hwnd=10094630) | foreground='Open' (hwnd=11208916) | retry=1 | result=ok | enter
-2026-04-30 14:53:01,146 DEBUG bench_test.debug │  Dialog closed: 'Open' (hwnd=11208916, pid=63868, owner='DropView 8400M', owner_hwnd=10094630)
-2026-04-30 14:53:05,438 DEBUG bench_test.debug │  UI action: bring_to_front | target='Multiscript Editor' (hwnd=10359888, pid=63868, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=10359888) | retry=1 | result=ok
-2026-04-30 14:53:05,708 DEBUG bench_test.debug │  UI action: find | target='Multiscript Editor' (hwnd=10359888, pid=63868, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=10359888) | retry=1 | result=ok | run_btn.png
-2026-04-30 14:53:06,065 DEBUG bench_test.debug │  UI action: bring_to_front | target='Multiscript Editor' (hwnd=10359888, pid=63868, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=10359888) | retry=1 | result=ok
-2026-04-30 14:53:07,120 DEBUG bench_test.debug │  UI action: click | target='Multiscript Editor' (hwnd=10359888, pid=63868, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=10359888) | retry=1 | result=ok | x=574, y=807
-2026-04-30 14:53:10,522 DEBUG bench_test.debug │  UI action: bring_to_front | target='Multiscript Editor' (hwnd=10359888, pid=63868, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=10359888) | retry=1 | result=ok
-2026-04-30 14:53:10,887 DEBUG bench_test.debug │  UI action: wait_image | target='Multiscript Editor' (hwnd=10359888, pid=63868, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=10359888) | retry=0 | result=ok | yellow_dot_selected.png
-2026-04-30 14:53:10,993 DEBUG bench_test.debug │  Dialog watchdog durduruldu.
-2026-04-30 14:54:11,030 DEBUG bench_test.debug │  Dialog watchdog started.
-2026-04-30 14:54:11,904 DEBUG bench_test.debug │  UI action: bring_to_front | target='Multiscript Editor' (hwnd=10359888, pid=63868, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=10359888) | retry=1 | result=ok
-2026-04-30 14:54:12,225 DEBUG bench_test.debug │  UI action: find | target='Multiscript Editor' (hwnd=10359888, pid=63868, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=10359888) | retry=1 | result=ok | stop_btn.png
-2026-04-30 14:54:12,589 DEBUG bench_test.debug │  UI action: bring_to_front | target='Multiscript Editor' (hwnd=10359888, pid=63868, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=10359888) | retry=1 | result=ok
-2026-04-30 14:54:13,643 DEBUG bench_test.debug │  UI action: click | target='Multiscript Editor' (hwnd=10359888, pid=63868, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=10359888) | retry=1 | result=ok | x=572, y=775
-2026-04-30 14:54:13,998 DEBUG bench_test.debug │  UI action: bring_to_front | target='Multiscript Editor' (hwnd=10359888, pid=63868, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=10359888) | retry=1 | result=ok
-2026-04-30 14:54:14,334 DEBUG bench_test.debug │  UI action: wait_image_gone | target='Multiscript Editor' (hwnd=10359888, pid=63868, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=10359888) | retry=0 | result=ok | yellow_dot_selected.png
-2026-04-30 14:54:14,688 DEBUG bench_test.debug │  UI action: bring_to_front | target='Multiscript Editor' (hwnd=10359888, pid=63868, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=10359888) | retry=1 | result=ok
-2026-04-30 14:54:15,015 DEBUG bench_test.debug │  UI action: wait_image | target='Multiscript Editor' (hwnd=10359888, pid=63868, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=10359888) | retry=0 | result=ok | green_dot_selected.png
-2026-04-30 14:54:15,371 DEBUG bench_test.debug │  UI action: bring_to_front | target='Multiscript Editor' (hwnd=10359888, pid=63868, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=10359888) | retry=1 | result=ok
-2026-04-30 14:54:15,662 DEBUG bench_test.debug │  UI action: find | target='Multiscript Editor' (hwnd=10359888, pid=63868, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=10359888) | retry=1 | result=ok | exit_btn.png
-2026-04-30 14:54:16,019 DEBUG bench_test.debug │  UI action: bring_to_front | target='Multiscript Editor' (hwnd=10359888, pid=63868, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=10359888) | retry=1 | result=ok
-2026-04-30 14:54:16,573 DEBUG bench_test.debug │  UI action: click | target='(invalid)' (hwnd=10359888, pid=-1281059776, owner='unknown', owner_hwnd=None) | foreground='DropView 8400M' (hwnd=10094630) | retry=1 | result=ok | x=1465, y=884
-2026-04-30 14:54:17,657 DEBUG bench_test.debug │  UI action: bring_to_front | target='DropView 8400M' (hwnd=10094630, pid=63868, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=10094630) | retry=1 | result=ok
-2026-04-30 14:54:17,716 DEBUG bench_test.debug │  UI action: sequence_hotkey | target='DropView 8400M' (hwnd=10094630, pid=63868, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=10094630) | retry=1 | result=ok | ctrl+d
-2026-04-30 14:54:17,993 DEBUG bench_test.debug │  Dialog detected: 'Some curves have not been saved' [warning] (hwnd=4200872, pid=63868, owner='DropView 8400M', owner_hwnd=10094630)
-2026-04-30 14:54:18,348 DEBUG bench_test.debug │  Auto-dismissing dialog: 'Some curves have not been saved' (hwnd=4200872, pid=63868, owner='DropView 8400M', owner_hwnd=10094630)
-2026-04-30 14:54:18,552 DEBUG bench_test.debug │  Dialog closed: 'Some curves have not been saved' (hwnd=4200872, pid=63868, owner='DropView 8400M', owner_hwnd=10094630)
-2026-04-30 14:54:21,322 DEBUG bench_test.debug │  UI action: bring_to_front | target='DropView 8400M' (hwnd=10094630, pid=63868, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=10094630) | retry=1 | result=ok
-2026-04-30 14:54:21,377 DEBUG bench_test.debug │  UI action: sequence_hotkey | target='DropView 8400M' (hwnd=10094630, pid=63868, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=10094630) | retry=1 | result=ok | alt+f4
-2026-04-30 14:54:24,522 DEBUG bench_test.debug │  Dialog watchdog durduruldu.
-2026-04-30 15:01:58,616 DEBUG bench_test.debug │  Dialog watchdog started.
-2026-04-30 15:02:03,027 DEBUG bench_test.debug │  Trying manual connection: COM10...
-2026-04-30 15:02:03,403 DEBUG bench_test.debug │  UI action: bring_to_front | target='DropView 8400M' (hwnd=8197218, pid=67556, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=8197218) | retry=1 | result=ok
-2026-04-30 15:02:03,458 DEBUG bench_test.debug │  UI action: sequence_hotkey | target='DropView 8400M' (hwnd=8197218, pid=67556, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=8197218) | retry=1 | result=ok | alt+d
-2026-04-30 15:02:04,013 DEBUG bench_test.debug │  UI action: sequence_press | target='DropView 8400M' (hwnd=8197218, pid=67556, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=8197218) | retry=1 | result=ok | m
-2026-04-30 15:02:04,258 DEBUG bench_test.debug │  Dialog detected: 'Manual Connection' [warning] (hwnd=10946916, pid=67556, owner='DropView 8400M', owner_hwnd=8197218)
-2026-04-30 15:02:06,767 DEBUG bench_test.debug │  Dialog closed: 'Manual Connection' (hwnd=10946916, pid=67556, owner='DropView 8400M', owner_hwnd=8197218)
-2026-04-30 15:02:06,767 DEBUG bench_test.debug │  Dialog detected: 'Connecting' [warning] (hwnd=11012452, pid=67556, owner='DropView 8400M', owner_hwnd=8197218)
-2026-04-30 15:02:17,074 DEBUG bench_test.debug │  Dialog closed: 'Connecting' (hwnd=11012452, pid=67556, owner='DropView 8400M', owner_hwnd=8197218)
-2026-04-30 15:02:17,283 DEBUG bench_test.debug │  Dialog detected: 'Error' [error] (hwnd=11077988, pid=67556, owner='DropView 8400M', owner_hwnd=8197218)
-2026-04-30 15:02:17,659 DEBUG bench_test.debug │  DropView Error dialog text: (text could not be read)
-2026-04-30 15:02:18,143 DEBUG bench_test.debug │  Dialog closed: 'Error' (hwnd=11077988, pid=67556, owner='DropView 8400M', owner_hwnd=8197218)
-2026-04-30 15:02:19,327 DEBUG bench_test.debug │  Error template scores: no_device=0.28, potentiostat_not_found=0.29
-2026-04-30 15:02:19,328 DEBUG bench_test.debug │  Error template threshold/delta: min_score=0.55, min_delta=0.08
-2026-04-30 15:02:19,328 DEBUG bench_test.debug │  WARNING: Unclassified DropView Error dialog text: (text could not be read)
-2026-04-30 15:02:19,328 DEBUG bench_test.debug │  Manual connection failed (COM10: unknown_error).
-2026-04-30 15:02:19,328 DEBUG bench_test.debug │  Trying manual connection: COM3...
-2026-04-30 15:02:19,700 DEBUG bench_test.debug │  UI action: bring_to_front | target='DropView 8400M' (hwnd=8197218, pid=67556, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=8197218) | retry=1 | result=ok
-2026-04-30 15:02:19,761 DEBUG bench_test.debug │  UI action: sequence_hotkey | target='DropView 8400M' (hwnd=8197218, pid=67556, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=8197218) | retry=1 | result=ok | alt+d
-2026-04-30 15:02:20,314 DEBUG bench_test.debug │  UI action: sequence_press | target='DropView 8400M' (hwnd=8197218, pid=67556, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=8197218) | retry=1 | result=ok | m
-2026-04-30 15:02:20,407 DEBUG bench_test.debug │  Dialog detected: 'Manual Connection' [warning] (hwnd=5050744, pid=67556, owner='DropView 8400M', owner_hwnd=8197218)
-2026-04-30 15:02:23,113 DEBUG bench_test.debug │  Dialog closed: 'Manual Connection' (hwnd=5050744, pid=67556, owner='DropView 8400M', owner_hwnd=8197218)
-2026-04-30 15:02:23,321 DEBUG bench_test.debug │  Dialog detected: 'Connecting' [warning] (hwnd=5116280, pid=67556, owner='DropView 8400M', owner_hwnd=8197218)
-2026-04-30 15:02:30,543 DEBUG bench_test.debug │  Dialog closed: 'Connecting' (hwnd=5116280, pid=67556, owner='DropView 8400M', owner_hwnd=8197218)
-2026-04-30 15:02:30,731 DEBUG bench_test.debug │  DropView Error dialog text: (text could not be read)
-2026-04-30 15:02:30,748 DEBUG bench_test.debug │  Dialog detected: 'Error' [error] (hwnd=5181816, pid=67556, owner='DropView 8400M', owner_hwnd=8197218)
-2026-04-30 15:02:31,160 DEBUG bench_test.debug │  Dialog closed: 'Error' (hwnd=5181816, pid=67556, owner='DropView 8400M', owner_hwnd=8197218)
-2026-04-30 15:02:32,198 DEBUG bench_test.debug │  Error template scores: no_device=0.38, potentiostat_not_found=0.40
-2026-04-30 15:02:32,198 DEBUG bench_test.debug │  Error template threshold/delta: min_score=0.55, min_delta=0.08
-2026-04-30 15:02:32,198 DEBUG bench_test.debug │  WARNING: Unclassified DropView Error dialog text: (text could not be read)
-2026-04-30 15:02:32,198 DEBUG bench_test.debug │  Manual connection failed (COM3: unknown_error).
-2026-04-30 15:02:32,198 DEBUG bench_test.debug │  Manual connections failed (COM10=unknown_error, COM3=unknown_error); retrying with Ctrl+C...
-2026-04-30 15:02:32,566 DEBUG bench_test.debug │  UI action: bring_to_front | target='DropView 8400M' (hwnd=8197218, pid=67556, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=8197218) | retry=1 | result=ok
-2026-04-30 15:02:32,620 DEBUG bench_test.debug │  UI action: sequence_hotkey | target='DropView 8400M' (hwnd=8197218, pid=67556, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=8197218) | retry=1 | result=ok | ctrl+c
-2026-04-30 15:02:44,559 DEBUG bench_test.debug │  Dialog detected: 'Connecting' [warning] (hwnd=22809694, pid=67556, owner='DropView 8400M', owner_hwnd=8197218)
-2026-04-30 15:02:57,575 DEBUG bench_test.debug │  Dialog closed: 'Connecting' (hwnd=22809694, pid=67556, owner='DropView 8400M', owner_hwnd=8197218)
-2026-04-30 15:02:58,772 DEBUG bench_test.debug │  DropSens connected (Ctrl+C fallback).
-2026-04-30 15:03:03,375 DEBUG bench_test.debug │  UI action: bring_to_front | target='DropView 8400M' (hwnd=8197218, pid=67556, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=8197218) | retry=1 | result=ok
-2026-04-30 15:03:03,609 DEBUG bench_test.debug │  UI action: wait_image | target='DropView 8400M' (hwnd=8197218, pid=67556, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=8197218) | retry=0 | result=ok | scripts_menu.png
-2026-04-30 15:03:04,465 DEBUG bench_test.debug │  UI action: bring_to_front | target='DropView 8400M' (hwnd=8197218, pid=67556, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=8197218) | retry=1 | result=ok
-2026-04-30 15:03:04,525 DEBUG bench_test.debug │  UI action: sequence_hotkey | target='DropView 8400M' (hwnd=8197218, pid=67556, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=8197218) | retry=1 | result=ok | alt+s
-2026-04-30 15:03:05,080 DEBUG bench_test.debug │  UI action: sequence_press | target='DropView 8400M' (hwnd=8197218, pid=67556, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=8197218) | retry=1 | result=ok | s
-2026-04-30 15:03:06,285 DEBUG bench_test.debug Multiscript Editor opened (hwnd=7804270).
-2026-04-30 15:03:07,151 DEBUG bench_test.debug │  UI action: bring_to_front | target='Multiscript Editor' (hwnd=7804270, pid=67556, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=7804270) | retry=1 | result=ok
-2026-04-30 15:03:07,382 DEBUG bench_test.debug │  UI action: find | target='Multiscript Editor' (hwnd=7804270, pid=67556, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=7804270) | retry=1 | result=ok | loaded_scripts_label.png
-2026-04-30 15:03:07,751 DEBUG bench_test.debug │  UI action: bring_to_front | target='Multiscript Editor' (hwnd=7804270, pid=67556, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=7804270) | retry=1 | result=ok
-2026-04-30 15:03:08,009 DEBUG bench_test.debug │  UI action: find | target='Multiscript Editor' (hwnd=7804270, pid=67556, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=7804270) | retry=1 | result=ok | load_btn.png
-2026-04-30 15:03:08,367 DEBUG bench_test.debug │  UI action: bring_to_front | target='Multiscript Editor' (hwnd=7804270, pid=67556, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=7804270) | retry=1 | result=ok
-2026-04-30 15:03:08,769 DEBUG bench_test.debug │  Dialog detected: 'Open' [warning] (hwnd=7737644, pid=67556, owner='DropView 8400M', owner_hwnd=8197218)
-2026-04-30 15:03:08,920 DEBUG bench_test.debug │  UI action: click | target='Multiscript Editor' (hwnd=7804270, pid=67556, owner='unknown', owner_hwnd=0) | foreground='Open' (hwnd=7737644) | retry=1 | result=ok | x=424, y=637
-2026-04-30 15:03:10,502 DEBUG bench_test.debug │  UI action: bring_to_front | target='Open' (hwnd=7737644, pid=67556, owner='DropView 8400M', owner_hwnd=8197218) | foreground='Open' (hwnd=7737644) | retry=1 | result=ok
-2026-04-30 15:03:10,955 DEBUG bench_test.debug │  UI action: click | target='Open' (hwnd=7737644, pid=67556, owner='DropView 8400M', owner_hwnd=8197218) | foreground='Open' (hwnd=7737644) | retry=1 | result=ok | x=893, y=609
-2026-04-30 15:03:11,317 DEBUG bench_test.debug │  UI action: bring_to_front | target='Open' (hwnd=7737644, pid=67556, owner='DropView 8400M', owner_hwnd=8197218) | foreground='Open' (hwnd=7737644) | retry=1 | result=ok
-2026-04-30 15:03:11,373 DEBUG bench_test.debug │  UI action: sequence_hotkey | target='Open' (hwnd=7737644, pid=67556, owner='DropView 8400M', owner_hwnd=8197218) | foreground='Open' (hwnd=7737644) | retry=1 | result=ok | ctrl+a
-2026-04-30 15:03:11,530 DEBUG bench_test.debug │  UI action: sequence_hotkey | target='Open' (hwnd=7737644, pid=67556, owner='DropView 8400M', owner_hwnd=8197218) | foreground='Open' (hwnd=7737644) | retry=1 | result=ok | ctrl+v
-2026-04-30 15:03:11,883 DEBUG bench_test.debug │  UI action: sequence_press | target='Open' (hwnd=7737644, pid=67556, owner='DropView 8400M', owner_hwnd=8197218) | foreground='Open' (hwnd=7737644) | retry=1 | result=ok | enter
-2026-04-30 15:03:12,126 DEBUG bench_test.debug │  Dialog closed: 'Open' (hwnd=7737644, pid=67556, owner='DropView 8400M', owner_hwnd=8197218)
-2026-04-30 15:03:16,193 DEBUG bench_test.debug │  UI action: bring_to_front | target='Multiscript Editor' (hwnd=7804270, pid=67556, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=7804270) | retry=1 | result=ok
-2026-04-30 15:03:16,472 DEBUG bench_test.debug │  UI action: find | target='Multiscript Editor' (hwnd=7804270, pid=67556, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=7804270) | retry=1 | result=ok | run_btn.png
-2026-04-30 15:03:16,826 DEBUG bench_test.debug │  UI action: bring_to_front | target='Multiscript Editor' (hwnd=7804270, pid=67556, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=7804270) | retry=1 | result=ok
-2026-04-30 15:03:17,882 DEBUG bench_test.debug │  UI action: click | target='Multiscript Editor' (hwnd=7804270, pid=67556, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=7804270) | retry=1 | result=ok | x=574, y=807
-2026-04-30 15:03:21,284 DEBUG bench_test.debug │  UI action: bring_to_front | target='Multiscript Editor' (hwnd=7804270, pid=67556, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=7804270) | retry=1 | result=ok
-2026-04-30 15:03:21,567 DEBUG bench_test.debug │  UI action: wait_image | target='Multiscript Editor' (hwnd=7804270, pid=67556, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=7804270) | retry=0 | result=ok | yellow_dot_selected.png
-2026-04-30 15:03:21,756 DEBUG bench_test.debug │  Dialog watchdog durduruldu.
-2026-04-30 15:04:21,806 DEBUG bench_test.debug │  Dialog watchdog started.
-2026-04-30 15:04:22,684 DEBUG bench_test.debug │  UI action: bring_to_front | target='Multiscript Editor' (hwnd=7804270, pid=67556, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=7804270) | retry=1 | result=ok
-2026-04-30 15:04:22,971 DEBUG bench_test.debug │  UI action: find | target='Multiscript Editor' (hwnd=7804270, pid=67556, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=7804270) | retry=1 | result=ok | stop_btn.png
-2026-04-30 15:04:23,326 DEBUG bench_test.debug │  UI action: bring_to_front | target='Multiscript Editor' (hwnd=7804270, pid=67556, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=7804270) | retry=1 | result=ok
-2026-04-30 15:04:24,382 DEBUG bench_test.debug │  UI action: click | target='Multiscript Editor' (hwnd=7804270, pid=67556, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=7804270) | retry=1 | result=ok | x=572, y=775
-2026-04-30 15:04:24,736 DEBUG bench_test.debug │  UI action: bring_to_front | target='Multiscript Editor' (hwnd=7804270, pid=67556, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=7804270) | retry=1 | result=ok
-2026-04-30 15:04:25,035 DEBUG bench_test.debug │  UI action: wait_image_gone | target='Multiscript Editor' (hwnd=7804270, pid=67556, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=7804270) | retry=0 | result=ok | yellow_dot_selected.png
-2026-04-30 15:04:25,388 DEBUG bench_test.debug │  UI action: bring_to_front | target='Multiscript Editor' (hwnd=7804270, pid=67556, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=7804270) | retry=1 | result=ok
-2026-04-30 15:04:25,631 DEBUG bench_test.debug │  UI action: wait_image | target='Multiscript Editor' (hwnd=7804270, pid=67556, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=7804270) | retry=0 | result=ok | green_dot_selected.png
-2026-04-30 15:04:25,983 DEBUG bench_test.debug │  UI action: bring_to_front | target='Multiscript Editor' (hwnd=7804270, pid=67556, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=7804270) | retry=1 | result=ok
-2026-04-30 15:04:26,240 DEBUG bench_test.debug │  UI action: find | target='Multiscript Editor' (hwnd=7804270, pid=67556, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=7804270) | retry=1 | result=ok | exit_btn.png
-2026-04-30 15:04:26,604 DEBUG bench_test.debug │  UI action: bring_to_front | target='Multiscript Editor' (hwnd=7804270, pid=67556, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=7804270) | retry=1 | result=ok
-2026-04-30 15:04:27,165 DEBUG bench_test.debug │  UI action: click | target='(invalid)' (hwnd=7804270, pid=1947310960, owner='unknown', owner_hwnd=None) | foreground='DropView 8400M' (hwnd=8197218) | retry=1 | result=ok | x=1465, y=884
-2026-04-30 15:04:27,167 DEBUG bench_test.debug Multiscript Editor closed.
-2026-04-30 15:04:28,098 DEBUG bench_test.debug │  UI action: bring_to_front | target='DropView 8400M' (hwnd=8197218, pid=67556, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=8197218) | retry=1 | result=ok
-2026-04-30 15:04:28,152 DEBUG bench_test.debug │  UI action: sequence_hotkey | target='DropView 8400M' (hwnd=8197218, pid=67556, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=8197218) | retry=1 | result=ok | ctrl+d
-2026-04-30 15:04:28,442 DEBUG bench_test.debug │  Dialog detected: 'Some curves have not been saved' [warning] (hwnd=7869806, pid=67556, owner='DropView 8400M', owner_hwnd=8197218)
-2026-04-30 15:04:28,797 DEBUG bench_test.debug │  Auto-dismissing dialog: 'Some curves have not been saved' (hwnd=7869806, pid=67556, owner='DropView 8400M', owner_hwnd=8197218)
-2026-04-30 15:04:29,003 DEBUG bench_test.debug │  Dialog closed: 'Some curves have not been saved' (hwnd=7869806, pid=67556, owner='DropView 8400M', owner_hwnd=8197218)
-2026-04-30 15:04:31,324 DEBUG bench_test.debug │  DropSens disconnected.
-2026-04-30 15:04:31,698 DEBUG bench_test.debug │  UI action: bring_to_front | target='DropView 8400M' (hwnd=8197218, pid=67556, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=8197218) | retry=1 | result=ok
-2026-04-30 15:04:31,756 DEBUG bench_test.debug │  UI action: sequence_hotkey | target='DropView 8400M' (hwnd=8197218, pid=67556, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=8197218) | retry=1 | result=ok | alt+f4
-2026-04-30 15:04:32,761 DEBUG bench_test.debug │  DropView window closed.
-2026-04-30 15:04:32,766 DEBUG bench_test.debug │  DropView process exited.
-2026-04-30 15:04:32,766 DEBUG bench_test.debug │  DropView closed.
-2026-04-30 15:04:32,766 DEBUG bench_test.debug │  Waiting for COM port release...
-2026-04-30 15:04:34,939 DEBUG bench_test.debug │  Dialog watchdog durduruldu.
-2026-05-04 10:49:21,613 DEBUG bench_test.debug │  Dialog watchdog started.
-2026-05-04 10:49:27,003 DEBUG bench_test.debug │  Trying manual connection: COM10...
-2026-05-04 10:49:27,403 DEBUG bench_test.debug │  UI action: bring_to_front | target='DropView 8400M' (hwnd=4525124, pid=70608, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=4525124) | retry=1 | result=ok
-2026-05-04 10:49:27,459 DEBUG bench_test.debug │  UI action: sequence_hotkey | target='DropView 8400M' (hwnd=4525124, pid=70608, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=4525124) | retry=1 | result=ok | alt+d
-2026-05-04 10:49:28,013 DEBUG bench_test.debug │  UI action: sequence_press | target='DropView 8400M' (hwnd=4525124, pid=70608, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=4525124) | retry=1 | result=ok | m
-2026-05-04 10:49:28,316 DEBUG bench_test.debug │  Dialog detected: 'Manual Connection' [warning] (hwnd=2229644, pid=70608, owner='DropView 8400M', owner_hwnd=4525124)
-2026-05-04 10:49:30,585 DEBUG bench_test.debug │  Dialog closed: 'Manual Connection' (hwnd=2229644, pid=70608, owner='DropView 8400M', owner_hwnd=4525124)
-2026-05-04 10:49:30,790 DEBUG bench_test.debug │  Dialog detected: 'Connecting' [warning] (hwnd=2295180, pid=70608, owner='DropView 8400M', owner_hwnd=4525124)
-2026-05-04 10:49:43,756 DEBUG bench_test.debug │  Dialog closed: 'Connecting' (hwnd=2295180, pid=70608, owner='DropView 8400M', owner_hwnd=4525124)
-2026-05-04 10:49:44,403 DEBUG bench_test.debug │  DropSens connected (manual: COM10).
-2026-05-04 10:49:48,642 DEBUG bench_test.debug │  UI action: bring_to_front | target='DropView 8400M' (hwnd=4525124, pid=70608, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=4525124) | retry=1 | result=ok
-2026-05-04 10:49:48,889 DEBUG bench_test.debug │  UI action: wait_image | target='DropView 8400M' (hwnd=4525124, pid=70608, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=4525124) | retry=0 | result=ok | scripts_menu.png
-2026-05-04 10:49:49,744 DEBUG bench_test.debug │  UI action: bring_to_front | target='DropView 8400M' (hwnd=4525124, pid=70608, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=4525124) | retry=1 | result=ok
-2026-05-04 10:49:49,801 DEBUG bench_test.debug │  UI action: sequence_hotkey | target='DropView 8400M' (hwnd=4525124, pid=70608, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=4525124) | retry=1 | result=ok | alt+s
-2026-05-04 10:49:50,358 DEBUG bench_test.debug │  UI action: sequence_press | target='DropView 8400M' (hwnd=4525124, pid=70608, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=4525124) | retry=1 | result=ok | s
-2026-05-04 10:49:51,560 DEBUG bench_test.debug Multiscript Editor opened (hwnd=2950732).
-2026-05-04 10:49:52,420 DEBUG bench_test.debug │  UI action: bring_to_front | target='Multiscript Editor' (hwnd=2950732, pid=70608, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=2950732) | retry=1 | result=ok
-2026-05-04 10:49:52,768 DEBUG bench_test.debug │  UI action: find | target='Multiscript Editor' (hwnd=2950732, pid=70608, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=2950732) | retry=1 | result=ok | loaded_scripts_label.png
-2026-05-04 10:49:53,136 DEBUG bench_test.debug │  UI action: bring_to_front | target='Multiscript Editor' (hwnd=2950732, pid=70608, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=2950732) | retry=1 | result=ok
-2026-05-04 10:49:53,359 DEBUG bench_test.debug │  UI action: find | target='Multiscript Editor' (hwnd=2950732, pid=70608, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=2950732) | retry=1 | result=ok | load_btn.png
-2026-05-04 10:49:53,716 DEBUG bench_test.debug │  UI action: bring_to_front | target='Multiscript Editor' (hwnd=2950732, pid=70608, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=2950732) | retry=1 | result=ok
-2026-05-04 10:49:54,163 DEBUG bench_test.debug │  Dialog detected: 'Open' [warning] (hwnd=16520810, pid=70608, owner='DropView 8400M', owner_hwnd=4525124)
-2026-05-04 10:49:54,271 DEBUG bench_test.debug │  UI action: click | target='Multiscript Editor' (hwnd=2950732, pid=70608, owner='unknown', owner_hwnd=0) | foreground='Open' (hwnd=16520810) | retry=1 | result=ok | x=424, y=637
-2026-05-04 10:49:55,871 DEBUG bench_test.debug │  UI action: bring_to_front | target='Open' (hwnd=16520810, pid=70608, owner='DropView 8400M', owner_hwnd=4525124) | foreground='Open' (hwnd=16520810) | retry=1 | result=ok
-2026-05-04 10:49:56,324 DEBUG bench_test.debug │  UI action: click | target='Open' (hwnd=16520810, pid=70608, owner='DropView 8400M', owner_hwnd=4525124) | foreground='Open' (hwnd=16520810) | retry=1 | result=ok | x=893, y=609
-2026-05-04 10:49:56,687 DEBUG bench_test.debug │  UI action: bring_to_front | target='Open' (hwnd=16520810, pid=70608, owner='DropView 8400M', owner_hwnd=4525124) | foreground='Open' (hwnd=16520810) | retry=1 | result=ok
-2026-05-04 10:49:56,740 DEBUG bench_test.debug │  UI action: sequence_hotkey | target='Open' (hwnd=16520810, pid=70608, owner='DropView 8400M', owner_hwnd=4525124) | foreground='Open' (hwnd=16520810) | retry=1 | result=ok | ctrl+a
-2026-05-04 10:49:56,894 DEBUG bench_test.debug │  UI action: sequence_hotkey | target='Open' (hwnd=16520810, pid=70608, owner='DropView 8400M', owner_hwnd=4525124) | foreground='Open' (hwnd=16520810) | retry=1 | result=ok | ctrl+v
-2026-05-04 10:49:57,246 DEBUG bench_test.debug │  UI action: sequence_press | target='Open' (hwnd=16520810, pid=70608, owner='DropView 8400M', owner_hwnd=4525124) | foreground='Open' (hwnd=16520810) | retry=1 | result=ok | enter
-2026-05-04 10:49:57,524 DEBUG bench_test.debug │  Dialog closed: 'Open' (hwnd=16520810, pid=70608, owner='DropView 8400M', owner_hwnd=4525124)
-2026-05-04 10:50:01,600 DEBUG bench_test.debug │  UI action: bring_to_front | target='Multiscript Editor' (hwnd=2950732, pid=70608, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=2950732) | retry=1 | result=ok
-2026-05-04 10:50:01,915 DEBUG bench_test.debug │  UI action: find | target='Multiscript Editor' (hwnd=2950732, pid=70608, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=2950732) | retry=1 | result=ok | run_btn.png
-2026-05-04 10:50:02,287 DEBUG bench_test.debug │  UI action: bring_to_front | target='Multiscript Editor' (hwnd=2950732, pid=70608, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=2950732) | retry=1 | result=ok
-2026-05-04 10:50:03,340 DEBUG bench_test.debug │  UI action: click | target='Multiscript Editor' (hwnd=2950732, pid=70608, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=2950732) | retry=1 | result=ok | x=574, y=807
-2026-05-04 10:50:06,773 DEBUG bench_test.debug │  UI action: bring_to_front | target='Multiscript Editor' (hwnd=2950732, pid=70608, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=2950732) | retry=1 | result=ok
-2026-05-04 10:50:07,068 DEBUG bench_test.debug │  UI action: wait_image | target='Multiscript Editor' (hwnd=2950732, pid=70608, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=2950732) | retry=0 | result=ok | yellow_dot_selected.png
-2026-05-04 10:50:07,135 DEBUG bench_test.debug │  Dialog watchdog durduruldu.
-2026-05-07 11:15:40,042 DEBUG bench_test.debug │  Dialog watchdog started.
-2026-05-07 11:15:45,450 DEBUG bench_test.debug │  Trying manual connection: COM10...
-2026-05-07 11:15:45,835 DEBUG bench_test.debug │  UI action: bring_to_front | target='DropView 8400M' (hwnd=15926598, pid=61152, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=15926598) | retry=1 | result=ok
-2026-05-07 11:15:45,888 DEBUG bench_test.debug │  UI action: sequence_hotkey | target='DropView 8400M' (hwnd=15926598, pid=61152, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=15926598) | retry=1 | result=ok | alt+d
-2026-05-07 11:15:46,442 DEBUG bench_test.debug │  UI action: sequence_press | target='DropView 8400M' (hwnd=15926598, pid=61152, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=15926598) | retry=1 | result=ok | m
-2026-05-07 11:15:46,852 DEBUG bench_test.debug │  Dialog detected: 'Manual Connection' [warning] (hwnd=3083472, pid=61152, owner='DropView 8400M', owner_hwnd=15926598)
-2026-05-07 11:15:48,922 DEBUG bench_test.debug │  Dialog closed: 'Manual Connection' (hwnd=3083472, pid=61152, owner='DropView 8400M', owner_hwnd=15926598)
-2026-05-07 11:15:48,923 DEBUG bench_test.debug │  Dialog detected: 'Connecting' [warning] (hwnd=3149008, pid=61152, owner='DropView 8400M', owner_hwnd=15926598)
-2026-05-07 11:16:01,943 DEBUG bench_test.debug │  Dialog closed: 'Connecting' (hwnd=3149008, pid=61152, owner='DropView 8400M', owner_hwnd=15926598)
-2026-05-07 11:16:03,208 DEBUG bench_test.debug │  DropSens connected (manual: COM10).
-2026-05-07 11:16:08,038 DEBUG bench_test.debug │  UI action: bring_to_front | target='DropView 8400M' (hwnd=15926598, pid=61152, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=15926598) | retry=1 | result=ok
-2026-05-07 11:16:08,357 DEBUG bench_test.debug │  UI action: wait_image | target='DropView 8400M' (hwnd=15926598, pid=61152, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=15926598) | retry=0 | result=ok | scripts_menu.png
-2026-05-07 11:16:09,211 DEBUG bench_test.debug │  UI action: bring_to_front | target='DropView 8400M' (hwnd=15926598, pid=61152, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=15926598) | retry=1 | result=ok
-2026-05-07 11:16:09,265 DEBUG bench_test.debug │  UI action: sequence_hotkey | target='DropView 8400M' (hwnd=15926598, pid=61152, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=15926598) | retry=1 | result=ok | alt+s
-2026-05-07 11:16:09,820 DEBUG bench_test.debug │  UI action: sequence_press | target='DropView 8400M' (hwnd=15926598, pid=61152, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=15926598) | retry=1 | result=ok | s
-2026-05-07 11:16:11,023 DEBUG bench_test.debug Multiscript Editor opened (hwnd=13436424).
-2026-05-07 11:16:11,883 DEBUG bench_test.debug │  UI action: bring_to_front | target='Multiscript Editor' (hwnd=13436424, pid=61152, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=13436424) | retry=1 | result=ok
-2026-05-07 11:16:12,185 DEBUG bench_test.debug │  UI action: find | target='Multiscript Editor' (hwnd=13436424, pid=61152, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=13436424) | retry=1 | result=ok | loaded_scripts_label.png
-2026-05-07 11:16:12,549 DEBUG bench_test.debug │  UI action: bring_to_front | target='Multiscript Editor' (hwnd=13436424, pid=61152, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=13436424) | retry=1 | result=ok
-2026-05-07 11:16:12,932 DEBUG bench_test.debug │  UI action: find | target='Multiscript Editor' (hwnd=13436424, pid=61152, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=13436424) | retry=1 | result=ok | load_btn.png
-2026-05-07 11:16:13,284 DEBUG bench_test.debug │  UI action: bring_to_front | target='Multiscript Editor' (hwnd=13436424, pid=61152, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=13436424) | retry=1 | result=ok
-2026-05-07 11:16:13,837 DEBUG bench_test.debug │  UI action: click | target='Multiscript Editor' (hwnd=13436424, pid=61152, owner='unknown', owner_hwnd=0) | foreground='Open' (hwnd=11147916) | retry=1 | result=ok | x=424, y=637
-2026-05-07 11:16:13,890 DEBUG bench_test.debug │  Dialog detected: 'Open' [warning] (hwnd=11147916, pid=61152, owner='DropView 8400M', owner_hwnd=15926598)
-2026-05-07 11:16:15,417 DEBUG bench_test.debug │  UI action: bring_to_front | target='Open' (hwnd=11147916, pid=61152, owner='DropView 8400M', owner_hwnd=15926598) | foreground='Open' (hwnd=11147916) | retry=1 | result=ok
-2026-05-07 11:16:15,869 DEBUG bench_test.debug │  UI action: click | target='Open' (hwnd=11147916, pid=61152, owner='DropView 8400M', owner_hwnd=15926598) | foreground='Open' (hwnd=11147916) | retry=1 | result=ok | x=893, y=609
-2026-05-07 11:16:16,233 DEBUG bench_test.debug │  UI action: bring_to_front | target='Open' (hwnd=11147916, pid=61152, owner='DropView 8400M', owner_hwnd=15926598) | foreground='Open' (hwnd=11147916) | retry=1 | result=ok
-2026-05-07 11:16:16,287 DEBUG bench_test.debug │  UI action: sequence_hotkey | target='Open' (hwnd=11147916, pid=61152, owner='DropView 8400M', owner_hwnd=15926598) | foreground='Open' (hwnd=11147916) | retry=1 | result=ok | ctrl+a
-2026-05-07 11:16:16,441 DEBUG bench_test.debug │  UI action: sequence_hotkey | target='Open' (hwnd=11147916, pid=61152, owner='DropView 8400M', owner_hwnd=15926598) | foreground='Open' (hwnd=11147916) | retry=1 | result=ok | ctrl+v
-2026-05-07 11:16:16,794 DEBUG bench_test.debug │  UI action: sequence_press | target='Open' (hwnd=11147916, pid=61152, owner='DropView 8400M', owner_hwnd=15926598) | foreground='Open' (hwnd=11147916) | retry=1 | result=ok | enter
-2026-05-07 11:16:17,011 DEBUG bench_test.debug │  Dialog closed: 'Open' (hwnd=11147916, pid=61152, owner='DropView 8400M', owner_hwnd=15926598)
-2026-05-07 11:16:21,137 DEBUG bench_test.debug │  UI action: bring_to_front | target='Multiscript Editor' (hwnd=13436424, pid=61152, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=13436424) | retry=1 | result=ok
-2026-05-07 11:16:21,408 DEBUG bench_test.debug │  UI action: find | target='Multiscript Editor' (hwnd=13436424, pid=61152, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=13436424) | retry=1 | result=ok | run_btn.png
-2026-05-07 11:16:21,760 DEBUG bench_test.debug │  UI action: bring_to_front | target='Multiscript Editor' (hwnd=13436424, pid=61152, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=13436424) | retry=1 | result=ok
-2026-05-07 11:16:22,817 DEBUG bench_test.debug │  UI action: click | target='Multiscript Editor' (hwnd=13436424, pid=61152, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=13436424) | retry=1 | result=ok | x=574, y=807
-2026-05-07 11:16:26,218 DEBUG bench_test.debug │  UI action: bring_to_front | target='Multiscript Editor' (hwnd=13436424, pid=61152, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=13436424) | retry=1 | result=ok
-2026-05-07 11:16:26,552 DEBUG bench_test.debug │  UI action: wait_image | target='Multiscript Editor' (hwnd=13436424, pid=61152, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=13436424) | retry=0 | result=ok | yellow_dot_selected.png
-2026-05-07 11:16:26,580 DEBUG bench_test.debug │  Dialog watchdog durduruldu.
-2026-05-07 11:48:29,371 DEBUG bench_test.debug │  UI action: bring_to_front | target='DropView 8400M' (hwnd=15926598, pid=61152, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=15926598) | retry=1 | result=ok
-2026-05-07 11:48:29,432 DEBUG bench_test.debug │  UI action: sequence_hotkey | target='DropView 8400M' (hwnd=15926598, pid=61152, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=15926598) | retry=1 | result=ok | ctrl+d
-2026-05-07 11:48:41,382 DEBUG bench_test.debug │  DropSens is already disconnected.
-2026-05-07 11:48:41,769 DEBUG bench_test.debug │  UI action: bring_to_front | target='DropView 8400M' (hwnd=15926598, pid=61152, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=15926598) | retry=1 | result=ok
-2026-05-07 11:48:41,827 DEBUG bench_test.debug │  UI action: sequence_hotkey | target='DropView 8400M' (hwnd=15926598, pid=61152, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=15926598) | retry=1 | result=ok | alt+f4
-2026-05-07 11:48:42,863 DEBUG bench_test.debug │  DropView window closed.
-2026-05-07 11:48:42,866 DEBUG bench_test.debug │  DropView process exited.
-2026-05-07 11:48:42,866 DEBUG bench_test.debug │  DropView closed.
-2026-05-07 11:48:42,866 DEBUG bench_test.debug │  Waiting for COM port release...
+2026-05-12 15:58:42,128 DEBUG bench_test.debug Launching DropView and connecting DropSens...
+2026-05-12 15:58:42,129 DEBUG bench_test.debug │  Dialog watchdog started.
+2026-05-12 15:58:46,526 DEBUG bench_test.debug │  Trying manual connection: COM10...
+2026-05-12 15:58:46,901 DEBUG bench_test.debug │  UI action: bring_to_front | target='DropView 8400M' (hwnd=2689978, pid=65788, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=2689978) | retry=1 | result=ok
+2026-05-12 15:58:46,957 DEBUG bench_test.debug │  UI action: sequence_hotkey | target='DropView 8400M' (hwnd=2689978, pid=65788, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=2689978) | retry=1 | result=ok | alt+d
+2026-05-12 15:58:47,512 DEBUG bench_test.debug │  UI action: sequence_press | target='DropView 8400M' (hwnd=2689978, pid=65788, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=2689978) | retry=1 | result=ok | m
+2026-05-12 15:58:47,894 DEBUG bench_test.debug │  Dialog detected: 'Manual Connection' [warning] (hwnd=28708908, pid=65788, owner='DropView 8400M', owner_hwnd=2689978)
+2026-05-12 15:58:50,294 DEBUG bench_test.debug │  Dialog closed: 'Manual Connection' (hwnd=28708908, pid=65788, owner='DropView 8400M', owner_hwnd=2689978)
+2026-05-12 15:58:50,502 DEBUG bench_test.debug │  Dialog detected: 'Connecting' [warning] (hwnd=28774444, pid=65788, owner='DropView 8400M', owner_hwnd=2689978)
+2026-05-12 15:59:10,205 DEBUG bench_test.debug │  Dialog closed: 'Connecting' (hwnd=28774444, pid=65788, owner='DropView 8400M', owner_hwnd=2689978)
+2026-05-12 15:59:10,972 DEBUG bench_test.debug │  DropSens connected (manual: COM10).
+2026-05-12 15:59:15,292 DEBUG bench_test.debug Continuous PAD method: G:\Diğer bilgisayarlar\Bench Test\CGM Measurements\Bench Measurements\PAD & CV Continuous Measurements\SIL\20260512_155841\measurement_parameters\SIL.tp
+2026-05-12 15:59:16,165 DEBUG bench_test.debug Continuous PAD: configuring AutoSave As -> G:\Diğer bilgisayarlar\Bench Test\CGM Measurements\Bench Measurements\PAD & CV Continuous Measurements\SIL\20260512_155841\measurements\SIL
+2026-05-12 15:59:16,526 DEBUG bench_test.debug │  UI action: bring_to_front | target='DropView 8400M' (hwnd=2689978, pid=65788, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=2689978) | retry=1 | result=ok
+2026-05-12 15:59:16,579 DEBUG bench_test.debug │  UI action: sequence_hotkey | target='DropView 8400M' (hwnd=2689978, pid=65788, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=2689978) | retry=1 | result=ok | alt+f
+2026-05-12 15:59:17,557 DEBUG bench_test.debug │  Dialog detected: 'Select nodes to apply' [warning] (hwnd=29231142, pid=65788, owner='DropView 8400M', owner_hwnd=2689978)
+2026-05-12 15:59:17,730 DEBUG bench_test.debug Popup image clicked: autosave_as_menu_item.png
+2026-05-12 15:59:18,780 DEBUG bench_test.debug │  UI action: bring_to_front | target='Select nodes to apply' (hwnd=29231142, pid=65788, owner='DropView 8400M', owner_hwnd=2689978) | foreground='Select nodes to apply' (hwnd=29231142) | retry=1 | result=ok
+2026-05-12 15:59:19,182 DEBUG bench_test.debug │  UI action: click | target='Select nodes to apply' (hwnd=29231142, pid=65788, owner='DropView 8400M', owner_hwnd=2689978) | foreground='Select nodes to apply' (hwnd=29231142) | retry=1 | result=ok | x=825, y=531
+2026-05-12 15:59:20,070 DEBUG bench_test.debug │  UI action: bring_to_front | target='Select nodes to apply' (hwnd=29231142, pid=65788, owner='DropView 8400M', owner_hwnd=2689978) | foreground='Select nodes to apply' (hwnd=29231142) | retry=1 | result=ok
+2026-05-12 15:59:20,423 DEBUG bench_test.debug │  UI action: find | target='Select nodes to apply' (hwnd=29231142, pid=65788, owner='DropView 8400M', owner_hwnd=2689978) | foreground='Select nodes to apply' (hwnd=29231142) | retry=1 | result=ok | accept_btn.png
+2026-05-12 15:59:20,782 DEBUG bench_test.debug │  UI action: bring_to_front | target='Select nodes to apply' (hwnd=29231142, pid=65788, owner='DropView 8400M', owner_hwnd=2689978) | foreground='Select nodes to apply' (hwnd=29231142) | retry=1 | result=ok
+2026-05-12 15:59:20,917 DEBUG bench_test.debug │  Dialog closed: 'Select nodes to apply' (hwnd=29231142, pid=65788, owner='DropView 8400M', owner_hwnd=2689978)
+2026-05-12 15:59:21,383 DEBUG bench_test.debug │  Dialog detected: 'Save as [Node 1]' [warning] (hwnd=9179772, pid=65788, owner='DropView 8400M', owner_hwnd=2689978)
+2026-05-12 15:59:21,834 DEBUG bench_test.debug │  UI action: click | target='(invalid)' (hwnd=29231142, pid=2087648560, owner='unknown', owner_hwnd=None) | foreground='Save as [Node 1]' (hwnd=9179772) | retry=1 | result=ok | x=885, y=562
+2026-05-12 15:59:22,918 DEBUG bench_test.debug │  UI action: bring_to_front | target='Save as [Node 1]' (hwnd=9179772, pid=65788, owner='DropView 8400M', owner_hwnd=2689978) | foreground='Save as [Node 1]' (hwnd=9179772) | retry=1 | result=ok
+2026-05-12 15:59:23,374 DEBUG bench_test.debug │  UI action: click | target='Save as [Node 1]' (hwnd=9179772, pid=65788, owner='DropView 8400M', owner_hwnd=2689978) | foreground='Save as [Node 1]' (hwnd=9179772) | retry=1 | result=ok | x=895, y=609
+2026-05-12 15:59:23,749 DEBUG bench_test.debug │  UI action: bring_to_front | target='Save as [Node 1]' (hwnd=9179772, pid=65788, owner='DropView 8400M', owner_hwnd=2689978) | foreground='Save as [Node 1]' (hwnd=9179772) | retry=1 | result=ok
+2026-05-12 15:59:23,817 DEBUG bench_test.debug │  UI action: sequence_hotkey | target='Save as [Node 1]' (hwnd=9179772, pid=65788, owner='DropView 8400M', owner_hwnd=2689978) | foreground='Save as [Node 1]' (hwnd=9179772) | retry=1 | result=ok | ctrl+a
+2026-05-12 15:59:23,973 DEBUG bench_test.debug │  UI action: sequence_hotkey | target='Save as [Node 1]' (hwnd=9179772, pid=65788, owner='DropView 8400M', owner_hwnd=2689978) | foreground='Save as [Node 1]' (hwnd=9179772) | retry=1 | result=ok | ctrl+v
+2026-05-12 15:59:24,328 DEBUG bench_test.debug │  UI action: sequence_press | target='Save as [Node 1]' (hwnd=9179772, pid=65788, owner='DropView 8400M', owner_hwnd=2689978) | foreground='Save as [Node 1]' (hwnd=9179772) | retry=1 | result=ok | enter
+2026-05-12 15:59:24,529 DEBUG bench_test.debug │  Dialog closed: 'Save as [Node 1]' (hwnd=9179772, pid=65788, owner='DropView 8400M', owner_hwnd=2689978)
+2026-05-12 15:59:25,998 DEBUG bench_test.debug Continuous PAD: loading method -> G:\Diğer bilgisayarlar\Bench Test\CGM Measurements\Bench Measurements\PAD & CV Continuous Measurements\SIL\20260512_155841\measurement_parameters\SIL.tp
+2026-05-12 15:59:26,354 DEBUG bench_test.debug │  UI action: bring_to_front | target='DropView 8400M' (hwnd=2689978, pid=65788, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=2689978) | retry=1 | result=ok
+2026-05-12 15:59:26,413 DEBUG bench_test.debug │  UI action: sequence_hotkey | target='DropView 8400M' (hwnd=2689978, pid=65788, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=2689978) | retry=1 | result=ok | alt+f
+2026-05-12 15:59:26,968 DEBUG bench_test.debug │  UI action: sequence_press | target='DropView 8400M' (hwnd=2689978, pid=65788, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=2689978) | retry=1 | result=ok | m
+2026-05-12 15:59:27,248 DEBUG bench_test.debug │  Dialog detected: 'Load method' [warning] (hwnd=9245308, pid=65788, owner='DropView 8400M', owner_hwnd=2689978)
+2026-05-12 15:59:28,835 DEBUG bench_test.debug │  UI action: bring_to_front | target='Load method' (hwnd=9245308, pid=65788, owner='DropView 8400M', owner_hwnd=2689978) | foreground='Load method' (hwnd=9245308) | retry=1 | result=ok
+2026-05-12 15:59:28,893 DEBUG bench_test.debug │  UI action: sequence_hotkey | target='(invalid)' (hwnd=9245308, pid=2087648560, owner='unknown', owner_hwnd=None) | foreground='DropView 8400M' (hwnd=2689978) | retry=1 | result=ok | alt+y
+2026-05-12 15:59:28,908 DEBUG bench_test.debug │  Dialog closed: 'Load method' (hwnd=9245308, pid=65788, owner='DropView 8400M', owner_hwnd=2689978)
+2026-05-12 15:59:29,113 DEBUG bench_test.debug │  Dialog detected: 'Load method...' [warning] (hwnd=9310844, pid=65788, owner='DropView 8400M', owner_hwnd=2689978)
+2026-05-12 15:59:30,265 DEBUG bench_test.debug │  UI action: bring_to_front | target='Load method...' (hwnd=9310844, pid=65788, owner='DropView 8400M', owner_hwnd=2689978) | foreground='Load method...' (hwnd=9310844) | retry=1 | result=ok
+2026-05-12 15:59:30,719 DEBUG bench_test.debug │  UI action: click | target='Load method...' (hwnd=9310844, pid=65788, owner='DropView 8400M', owner_hwnd=2689978) | foreground='Load method...' (hwnd=9310844) | retry=1 | result=ok | x=891, y=609
+2026-05-12 15:59:31,079 DEBUG bench_test.debug │  UI action: bring_to_front | target='Load method...' (hwnd=9310844, pid=65788, owner='DropView 8400M', owner_hwnd=2689978) | foreground='Load method...' (hwnd=9310844) | retry=1 | result=ok
+2026-05-12 15:59:31,134 DEBUG bench_test.debug │  UI action: sequence_hotkey | target='Load method...' (hwnd=9310844, pid=65788, owner='DropView 8400M', owner_hwnd=2689978) | foreground='Load method...' (hwnd=9310844) | retry=1 | result=ok | ctrl+a
+2026-05-12 15:59:31,289 DEBUG bench_test.debug │  UI action: sequence_hotkey | target='Load method...' (hwnd=9310844, pid=65788, owner='DropView 8400M', owner_hwnd=2689978) | foreground='Load method...' (hwnd=9310844) | retry=1 | result=ok | ctrl+v
+2026-05-12 15:59:31,643 DEBUG bench_test.debug │  UI action: sequence_press | target='Load method...' (hwnd=9310844, pid=65788, owner='DropView 8400M', owner_hwnd=2689978) | foreground='Load method...' (hwnd=9310844) | retry=1 | result=ok | enter
+2026-05-12 15:59:31,817 DEBUG bench_test.debug │  Dialog closed: 'Load method...' (hwnd=9310844, pid=65788, owner='DropView 8400M', owner_hwnd=2689978)
+2026-05-12 15:59:32,022 DEBUG bench_test.debug │  Dialog detected: 'Select nodes to apply' [warning] (hwnd=9376380, pid=65788, owner='DropView 8400M', owner_hwnd=2689978)
+2026-05-12 15:59:32,813 DEBUG bench_test.debug │  UI action: bring_to_front | target='Select nodes to apply' (hwnd=9376380, pid=65788, owner='DropView 8400M', owner_hwnd=2689978) | foreground='Select nodes to apply' (hwnd=9376380) | retry=1 | result=ok
+2026-05-12 15:59:33,017 DEBUG bench_test.debug │  UI action: find | target='Select nodes to apply' (hwnd=9376380, pid=65788, owner='DropView 8400M', owner_hwnd=2689978) | foreground='Select nodes to apply' (hwnd=9376380) | retry=1 | result=ok | select_all_btn.png
+2026-05-12 15:59:33,380 DEBUG bench_test.debug │  UI action: bring_to_front | target='Select nodes to apply' (hwnd=9376380, pid=65788, owner='DropView 8400M', owner_hwnd=2689978) | foreground='Select nodes to apply' (hwnd=9376380) | retry=1 | result=ok
+2026-05-12 15:59:33,732 DEBUG bench_test.debug │  UI action: click | target='Select nodes to apply' (hwnd=9376380, pid=65788, owner='DropView 8400M', owner_hwnd=2689978) | foreground='Select nodes to apply' (hwnd=9376380) | retry=1 | result=ok | x=991, y=560
+2026-05-12 15:59:34,097 DEBUG bench_test.debug │  UI action: bring_to_front | target='Select nodes to apply' (hwnd=9376380, pid=65788, owner='DropView 8400M', owner_hwnd=2689978) | foreground='Select nodes to apply' (hwnd=9376380) | retry=1 | result=ok
+2026-05-12 15:59:34,374 DEBUG bench_test.debug │  UI action: find | target='Select nodes to apply' (hwnd=9376380, pid=65788, owner='DropView 8400M', owner_hwnd=2689978) | foreground='Select nodes to apply' (hwnd=9376380) | retry=1 | result=ok | method_select_nodes_accept_btn.png
+2026-05-12 15:59:34,729 DEBUG bench_test.debug │  UI action: bring_to_front | target='Select nodes to apply' (hwnd=9376380, pid=65788, owner='DropView 8400M', owner_hwnd=2689978) | foreground='Select nodes to apply' (hwnd=9376380) | retry=1 | result=ok
+2026-05-12 15:59:34,930 DEBUG bench_test.debug │  Dialog closed: 'Select nodes to apply' (hwnd=9376380, pid=65788, owner='DropView 8400M', owner_hwnd=2689978)
+2026-05-12 15:59:35,782 DEBUG bench_test.debug │  UI action: click | target='(invalid)' (hwnd=9376380, pid=2087648560, owner='unknown', owner_hwnd=None) | foreground='DropView 8400M' (hwnd=2689978) | retry=1 | result=ok | x=817, y=561
+2026-05-12 15:59:36,673 DEBUG bench_test.debug Continuous PAD: starting segment with Ctrl+R...
+2026-05-12 15:59:37,026 DEBUG bench_test.debug │  UI action: bring_to_front | target='DropView 8400M' (hwnd=2689978, pid=65788, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=2689978) | retry=1 | result=ok
+2026-05-12 15:59:37,081 DEBUG bench_test.debug │  UI action: sequence_hotkey | target='DropView 8400M' (hwnd=2689978, pid=65788, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=2689978) | retry=1 | result=ok | ctrl+r
+2026-05-12 15:59:37,230 DEBUG bench_test.debug │  Dialog detected: 'Send' [warning] (hwnd=9246554, pid=65788, owner='DropView 8400M', owner_hwnd=2689978)
+2026-05-12 15:59:38,651 DEBUG bench_test.debug │  UI action: bring_to_front | target='Send' (hwnd=9246554, pid=65788, owner='DropView 8400M', owner_hwnd=2689978) | foreground='Send' (hwnd=9246554) | retry=1 | result=ok
+2026-05-12 15:59:38,919 DEBUG bench_test.debug │  UI action: find | target='Send' (hwnd=9246554, pid=65788, owner='DropView 8400M', owner_hwnd=2689978) | foreground='Send' (hwnd=9246554) | retry=1 | result=retry | run_experiment_confirm_dialog.png
+2026-05-12 15:59:39,288 DEBUG bench_test.debug │  Dialog closed: 'Send' (hwnd=9246554, pid=65788, owner='DropView 8400M', owner_hwnd=2689978)
+2026-05-12 15:59:45,982 DEBUG bench_test.debug Continuous PAD segment started; .mtp file will be verified after Stop/AutoSave closes it.
+2026-05-12 15:59:45,983 DEBUG bench_test.debug Stopping measurement...
+2026-05-12 15:59:46,850 DEBUG bench_test.debug Continuous PAD: stopping segment with Ctrl+S...
+2026-05-12 15:59:47,204 DEBUG bench_test.debug │  UI action: bring_to_front | target='DropView 8400M' (hwnd=2689978, pid=65788, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=2689978) | retry=1 | result=ok
+2026-05-12 15:59:47,264 DEBUG bench_test.debug │  UI action: sequence_hotkey | target='DropView 8400M' (hwnd=2689978, pid=65788, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=2689978) | retry=1 | result=ok | ctrl+s
+2026-05-12 15:59:47,597 DEBUG bench_test.debug │  Dialog detected: 'Stopping' [warning] (hwnd=9312090, pid=65788, owner='DropView 8400M', owner_hwnd=2689978)
+2026-05-12 15:59:47,802 DEBUG bench_test.debug │  Dialog closed: 'Stopping' (hwnd=9312090, pid=65788, owner='DropView 8400M', owner_hwnd=2689978)
+2026-05-12 15:59:51,335 DEBUG bench_test.debug Continuous PAD segment file closed: G:\Diğer bilgisayarlar\Bench Test\CGM Measurements\Bench Measurements\PAD & CV Continuous Measurements\SIL\20260512_155841\measurements\SIL_12_05_2026_15_59_48.mtp
+2026-05-12 15:59:51,335 DEBUG bench_test.debug Closing DropView...
+2026-05-12 15:59:52,214 DEBUG bench_test.debug │  UI action: bring_to_front | target='DropView 8400M' (hwnd=2689978, pid=65788, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=2689978) | retry=1 | result=ok
+2026-05-12 15:59:52,268 DEBUG bench_test.debug │  UI action: sequence_hotkey | target='DropView 8400M' (hwnd=2689978, pid=65788, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=2689978) | retry=1 | result=ok | ctrl+d
+2026-05-12 15:59:55,415 DEBUG bench_test.debug │  DropSens disconnected.
+2026-05-12 15:59:56,109 DEBUG bench_test.debug │  UI action: bring_to_front | target='DropView 8400M' (hwnd=2689978, pid=65788, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=2689978) | retry=1 | result=ok
+2026-05-12 15:59:56,171 DEBUG bench_test.debug │  UI action: sequence_hotkey | target='DropView 8400M' (hwnd=2689978, pid=65788, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=2689978) | retry=1 | result=ok | alt+f4
+2026-05-12 15:59:57,174 DEBUG bench_test.debug │  DropView window closed.
+2026-05-12 15:59:57,178 DEBUG bench_test.debug │  DropView process exited.
+2026-05-12 15:59:57,178 DEBUG bench_test.debug │  DropView closed.
+2026-05-12 15:59:57,178 DEBUG bench_test.debug │  Waiting for COM port release...
+2026-05-12 15:59:59,235 DEBUG bench_test.debug │  Dialog watchdog durduruldu.
+2026-05-12 15:59:59,291 DEBUG bench_test.debug Continuous PAD: xlsx aggregate skipped; .mtp segments remain available in Viewer.
+2026-05-12 16:23:27,358 DEBUG bench_test.debug Launching DropView and connecting DropSens...
+2026-05-12 16:23:27,359 DEBUG bench_test.debug │  Dialog watchdog started.
+2026-05-12 16:23:32,741 DEBUG bench_test.debug │  Trying manual connection: COM10...
+2026-05-12 16:23:33,110 DEBUG bench_test.debug │  UI action: bring_to_front | target='DropView 8400M' (hwnd=29494064, pid=79148, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=29494064) | retry=1 | result=ok
+2026-05-12 16:23:33,164 DEBUG bench_test.debug │  UI action: sequence_hotkey | target='DropView 8400M' (hwnd=29494064, pid=79148, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=29494064) | retry=1 | result=ok | alt+d
+2026-05-12 16:23:33,719 DEBUG bench_test.debug │  UI action: sequence_press | target='DropView 8400M' (hwnd=29494064, pid=79148, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=29494064) | retry=1 | result=ok | m
+2026-05-12 16:23:33,979 DEBUG bench_test.debug │  Dialog detected: 'Manual Connection' [warning] (hwnd=10028036, pid=79148, owner='DropView 8400M', owner_hwnd=29494064)
+2026-05-12 16:23:36,244 DEBUG bench_test.debug │  Dialog closed: 'Manual Connection' (hwnd=10028036, pid=79148, owner='DropView 8400M', owner_hwnd=29494064)
+2026-05-12 16:23:36,244 DEBUG bench_test.debug │  Dialog detected: 'Connecting' [warning] (hwnd=10093572, pid=79148, owner='DropView 8400M', owner_hwnd=29494064)
+2026-05-12 16:23:47,625 DEBUG bench_test.debug │  Dialog closed: 'Connecting' (hwnd=10093572, pid=79148, owner='DropView 8400M', owner_hwnd=29494064)
+2026-05-12 16:23:47,818 DEBUG bench_test.debug │  DropSens connected (manual: COM10).
+2026-05-12 16:23:50,895 DEBUG bench_test.debug Script: G:\Diğer bilgisayarlar\Bench Test\CGM Measurements\Bench Measurements\PAD & CV Continuous Measurements\SIL\20260512_162326\measurement_parameters\SIL.scr
+2026-05-12 16:23:50,895 DEBUG bench_test.debug Loading script: G:\Diğer bilgisayarlar\Bench Test\CGM Measurements\Bench Measurements\PAD & CV Continuous Measurements\SIL\20260512_162326\measurement_parameters\SIL.scr
+2026-05-12 16:23:52,117 DEBUG bench_test.debug │  UI action: bring_to_front | target='DropView 8400M' (hwnd=29494064, pid=79148, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=29494064) | retry=1 | result=ok
+2026-05-12 16:23:52,452 DEBUG bench_test.debug │  UI action: wait_image | target='DropView 8400M' (hwnd=29494064, pid=79148, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=29494064) | retry=0 | result=ok | scripts_menu.png
+2026-05-12 16:23:53,307 DEBUG bench_test.debug │  UI action: bring_to_front | target='DropView 8400M' (hwnd=29494064, pid=79148, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=29494064) | retry=1 | result=ok
+2026-05-12 16:23:53,362 DEBUG bench_test.debug │  UI action: sequence_hotkey | target='DropView 8400M' (hwnd=29494064, pid=79148, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=29494064) | retry=1 | result=ok | alt+s
+2026-05-12 16:23:53,918 DEBUG bench_test.debug │  UI action: sequence_press | target='DropView 8400M' (hwnd=29494064, pid=79148, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=29494064) | retry=1 | result=ok | s
+2026-05-12 16:23:55,123 DEBUG bench_test.debug Multiscript Editor opened (hwnd=11471676).
+2026-05-12 16:23:55,992 DEBUG bench_test.debug │  UI action: bring_to_front | target='Multiscript Editor' (hwnd=11471676, pid=79148, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=11471676) | retry=1 | result=ok
+2026-05-12 16:23:56,364 DEBUG bench_test.debug │  UI action: find | target='Multiscript Editor' (hwnd=11471676, pid=79148, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=11471676) | retry=1 | result=ok | loaded_scripts_label.png
+2026-05-12 16:23:56,724 DEBUG bench_test.debug │  UI action: bring_to_front | target='Multiscript Editor' (hwnd=11471676, pid=79148, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=11471676) | retry=1 | result=ok
+2026-05-12 16:23:57,098 DEBUG bench_test.debug │  UI action: find | target='Multiscript Editor' (hwnd=11471676, pid=79148, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=11471676) | retry=1 | result=ok | load_btn.png
+2026-05-12 16:23:57,460 DEBUG bench_test.debug │  UI action: bring_to_front | target='Multiscript Editor' (hwnd=11471676, pid=79148, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=11471676) | retry=1 | result=ok
+2026-05-12 16:23:58,032 DEBUG bench_test.debug │  UI action: click | target='Multiscript Editor' (hwnd=11471676, pid=79148, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=11471676) | retry=1 | result=ok | x=424, y=637
+2026-05-12 16:23:58,276 DEBUG bench_test.debug │  Dialog detected: 'Open' [warning] (hwnd=11601292, pid=79148, owner='DropView 8400M', owner_hwnd=29494064)
+2026-05-12 16:24:00,625 DEBUG bench_test.debug │  UI action: bring_to_front | target='Open' (hwnd=11601292, pid=79148, owner='DropView 8400M', owner_hwnd=29494064) | foreground='Open' (hwnd=11601292) | retry=1 | result=ok
+2026-05-12 16:24:01,077 DEBUG bench_test.debug │  UI action: click | target='Open' (hwnd=11601292, pid=79148, owner='DropView 8400M', owner_hwnd=29494064) | foreground='Open' (hwnd=11601292) | retry=1 | result=ok | x=891, y=609
+2026-05-12 16:24:01,443 DEBUG bench_test.debug │  UI action: bring_to_front | target='Open' (hwnd=11601292, pid=79148, owner='DropView 8400M', owner_hwnd=29494064) | foreground='Open' (hwnd=11601292) | retry=1 | result=ok
+2026-05-12 16:24:01,505 DEBUG bench_test.debug │  UI action: sequence_hotkey | target='Open' (hwnd=11601292, pid=79148, owner='DropView 8400M', owner_hwnd=29494064) | foreground='Open' (hwnd=11601292) | retry=1 | result=ok | ctrl+a
+2026-05-12 16:24:01,661 DEBUG bench_test.debug │  UI action: sequence_hotkey | target='Open' (hwnd=11601292, pid=79148, owner='DropView 8400M', owner_hwnd=29494064) | foreground='Open' (hwnd=11601292) | retry=1 | result=ok | ctrl+v
+2026-05-12 16:24:02,016 DEBUG bench_test.debug │  UI action: sequence_press | target='Open' (hwnd=11601292, pid=79148, owner='DropView 8400M', owner_hwnd=29494064) | foreground='Open' (hwnd=11601292) | retry=1 | result=ok | enter
+2026-05-12 16:24:02,295 DEBUG bench_test.debug │  Dialog closed: 'Open' (hwnd=11601292, pid=79148, owner='DropView 8400M', owner_hwnd=29494064)
+2026-05-12 16:24:06,388 DEBUG bench_test.debug │  UI action: bring_to_front | target='Multiscript Editor' (hwnd=11471676, pid=79148, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=11471676) | retry=1 | result=ok
+2026-05-12 16:24:06,661 DEBUG bench_test.debug │  UI action: find | target='Multiscript Editor' (hwnd=11471676, pid=79148, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=11471676) | retry=1 | result=ok | run_btn.png
+2026-05-12 16:24:08,088 DEBUG bench_test.debug │  UI action: click | target='Multiscript Editor' (hwnd=11471676, pid=79148, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=11471676) | retry=1 | result=ok | x=574, y=807
+2026-05-12 16:24:11,500 DEBUG bench_test.debug │  UI action: bring_to_front | target='Multiscript Editor' (hwnd=11471676, pid=79148, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=11471676) | retry=1 | result=ok
+2026-05-12 16:24:11,746 DEBUG bench_test.debug │  UI action: wait_image | target='Multiscript Editor' (hwnd=11471676, pid=79148, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=11471676) | retry=0 | result=ok | yellow_dot_selected.png
+2026-05-12 16:24:11,877 DEBUG bench_test.debug │  Dialog watchdog durduruldu.
+2026-05-12 16:24:11,878 DEBUG bench_test.debug Stopping measurement...
+2026-05-12 16:24:11,880 DEBUG bench_test.debug │  Dialog watchdog started.
+2026-05-12 16:24:12,756 DEBUG bench_test.debug │  UI action: bring_to_front | target='Multiscript Editor' (hwnd=11471676, pid=79148, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=11471676) | retry=1 | result=ok
+2026-05-12 16:24:13,107 DEBUG bench_test.debug │  UI action: find | target='Multiscript Editor' (hwnd=11471676, pid=79148, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=11471676) | retry=1 | result=ok | stop_btn.png
+2026-05-12 16:24:13,461 DEBUG bench_test.debug │  UI action: bring_to_front | target='Multiscript Editor' (hwnd=11471676, pid=79148, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=11471676) | retry=1 | result=ok
+2026-05-12 16:24:14,452 DEBUG bench_test.debug │  Dialog detected: 'Stopping' [warning] (hwnd=10032536, pid=79148, owner='DropView 8400M', owner_hwnd=29494064)
+2026-05-12 16:24:14,513 DEBUG bench_test.debug │  UI action: click | target='Multiscript Editor' (hwnd=11471676, pid=79148, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=11471676) | retry=1 | result=ok | x=572, y=775
+2026-05-12 16:24:14,661 DEBUG bench_test.debug │  Dialog closed: 'Stopping' (hwnd=10032536, pid=79148, owner='DropView 8400M', owner_hwnd=29494064)
+2026-05-12 16:24:14,885 DEBUG bench_test.debug │  UI action: bring_to_front | target='Multiscript Editor' (hwnd=11471676, pid=79148, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=11471676) | retry=1 | result=ok
+2026-05-12 16:24:15,099 DEBUG bench_test.debug │  UI action: wait_image_gone | target='Multiscript Editor' (hwnd=11471676, pid=79148, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=11471676) | retry=0 | result=ok | yellow_dot_selected.png
+2026-05-12 16:24:15,460 DEBUG bench_test.debug │  UI action: bring_to_front | target='Multiscript Editor' (hwnd=11471676, pid=79148, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=11471676) | retry=1 | result=ok
+2026-05-12 16:24:15,748 DEBUG bench_test.debug │  UI action: wait_image | target='Multiscript Editor' (hwnd=11471676, pid=79148, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=11471676) | retry=0 | result=ok | green_dot_selected.png
+2026-05-12 16:24:16,463 DEBUG bench_test.debug │  UI action: find | target='Multiscript Editor' (hwnd=11471676, pid=79148, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=11471676) | retry=1 | result=ok | exit_btn.png
+2026-05-12 16:24:16,817 DEBUG bench_test.debug │  UI action: bring_to_front | target='Multiscript Editor' (hwnd=11471676, pid=79148, owner='unknown', owner_hwnd=0) | foreground='Multiscript Editor' (hwnd=11471676) | retry=1 | result=ok
+2026-05-12 16:24:17,387 DEBUG bench_test.debug │  UI action: click | target='(invalid)' (hwnd=11471676, pid=2087648560, owner='unknown', owner_hwnd=None) | foreground='DropView 8400M' (hwnd=29494064) | retry=1 | result=ok | x=1465, y=884
+2026-05-12 16:24:17,390 DEBUG bench_test.debug Multiscript Editor closed.
+2026-05-12 16:24:17,391 DEBUG bench_test.debug Closing DropView...
+2026-05-12 16:24:18,457 DEBUG bench_test.debug │  UI action: bring_to_front | target='DropView 8400M' (hwnd=29494064, pid=79148, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=29494064) | retry=1 | result=ok
+2026-05-12 16:24:18,521 DEBUG bench_test.debug │  UI action: sequence_hotkey | target='DropView 8400M' (hwnd=29494064, pid=79148, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=29494064) | retry=1 | result=ok | ctrl+d
+2026-05-12 16:24:18,680 DEBUG bench_test.debug │  Dialog detected: 'Some curves have not been saved' [warning] (hwnd=3738554, pid=79148, owner='DropView 8400M', owner_hwnd=29494064)
+2026-05-12 16:24:19,033 DEBUG bench_test.debug │  Auto-dismissing dialog: 'Some curves have not been saved' (hwnd=3738554, pid=79148, owner='DropView 8400M', owner_hwnd=29494064)
+2026-05-12 16:24:19,239 DEBUG bench_test.debug │  Dialog closed: 'Some curves have not been saved' (hwnd=3738554, pid=79148, owner='DropView 8400M', owner_hwnd=29494064)
+2026-05-12 16:24:21,525 DEBUG bench_test.debug │  DropSens disconnected.
+2026-05-12 16:24:21,894 DEBUG bench_test.debug │  UI action: bring_to_front | target='DropView 8400M' (hwnd=29494064, pid=79148, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=29494064) | retry=1 | result=ok
+2026-05-12 16:24:21,949 DEBUG bench_test.debug │  UI action: sequence_hotkey | target='DropView 8400M' (hwnd=29494064, pid=79148, owner='unknown', owner_hwnd=0) | foreground='DropView 8400M' (hwnd=29494064) | retry=1 | result=ok | alt+f4
+2026-05-12 16:24:22,954 DEBUG bench_test.debug │  DropView window closed.
+2026-05-12 16:24:22,959 DEBUG bench_test.debug │  DropView process exited.
+2026-05-12 16:24:22,959 DEBUG bench_test.debug │  DropView closed.
+2026-05-12 16:24:22,959 DEBUG bench_test.debug │  Waiting for COM port release...
+2026-05-12 16:24:25,016 DEBUG bench_test.debug │  Dialog watchdog durduruldu.
