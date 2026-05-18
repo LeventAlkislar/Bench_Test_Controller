@@ -50,6 +50,7 @@ SESSION_FILE     = "session.json"
 
 MEASUREMENT_MODE_SCRIPT_PAD = "script_pad"
 MEASUREMENT_MODE_CONTINUOUS_PAD = "continuous_pad"
+MEASUREMENT_MODE_CV = "cv"
 
 
 class MeasurementSession:

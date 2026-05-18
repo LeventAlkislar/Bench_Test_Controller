@@ -11,20 +11,48 @@ from bench_test.valve.multiport import ValveController
 from bench_test.valve.injector import InjectorValveController
 from bench_test.measurement.session import (
     MEASUREMENT_MODE_CONTINUOUS_PAD,
+    MEASUREMENT_MODE_CV,
     MEASUREMENT_MODE_SCRIPT_PAD,
 )
 from bench_test.utils.debug_log import debug_log
 
 # DropView aksiyon sabitleri
-DROPVIEW_ACTIONS = ["none", "start_dropview", "start_measure", "stop_measure", "exit_dropview"]
+DROPVIEW_ACTIONS = [
+    "none",
+    "start_dropview",
+    "start_discrete_pad",
+    "stop_discrete_pad",
+    "start_continuous_pad",
+    "stop_continuous_pad",
+    "run_cv",
+    "exit_dropview",
+    # Legacy actions kept for older recipe files.
+    "start_measure",
+    "stop_measure",
+]
 DROPVIEW_LABELS  = {
-    "none":           "None",
-    "start_dropview": "Start DropView",
-    "start_measure":  "Start Measure",
-    "stop_measure":   "Stop Measure",
-    "exit_dropview":  "Exit DropView",
+    "none":                 "None",
+    "start_dropview":       "Start DropView",
+    "start_discrete_pad":   "Start Discrete PAD",
+    "stop_discrete_pad":    "Stop Discrete PAD",
+    "start_continuous_pad": "Start Continuous PAD",
+    "stop_continuous_pad":  "Stop Continuous PAD",
+    "run_cv":               "Run CV",
+    "exit_dropview":        "Exit DropView",
+    "start_measure":        "Start Measure",
+    "stop_measure":         "Stop Measure",
 }
-DROPVIEW_ZERO_DURATION_OK = {"start_dropview", "start_measure", "stop_measure", "exit_dropview"}
+DROPVIEW_ZERO_DURATION_OK = {
+    "start_dropview",
+    "start_discrete_pad",
+    "stop_discrete_pad",
+    "start_continuous_pad",
+    "stop_continuous_pad",
+    "run_cv",
+    "start_measure",
+    "stop_measure",
+    "exit_dropview",
+}
 
 
 class RecipeRunner(threading.Thread):
@@ -115,6 +143,22 @@ class RecipeRunner(threading.Thread):
                 log(log_prefix)
             return True
         return False
+
+    def _run_cv_measurement(self) -> bool:
+        if self.dropview_ctrl is None:
+            return True
+
+        method_path = self.session_tp_path
+        if method_path:
+            debug_log(f"CV method: {method_path}")
+        ok = self.dropview_ctrl.do_run_cv(
+            method_path,
+            measurements_dir=self.session_measurements_dir,
+            part_number=self.part_number,
+            log_fn=self._log,
+        )
+        self.measurement_running = False
+        return ok
 
     def _handle_continuous_pause_request(self) -> bool:
         if self.measurement_mode != MEASUREMENT_MODE_CONTINUOUS_PAD:
@@ -250,14 +294,40 @@ class RecipeRunner(threading.Thread):
                 self._cleanup_dropview(step_num)
                 return False
 
-        elif action == "start_measure" and dv:
+        elif action in (
+            "start_measure",
+            "start_discrete_pad",
+            "start_continuous_pad",
+            "run_cv",
+        ) and dv:
+            if action == "start_discrete_pad" and self.measurement_mode != MEASUREMENT_MODE_SCRIPT_PAD:
+                self.status_queue.put(("error", f"Step {step_num}: Start Discrete PAD is not valid in this measurement mode."))
+                return False
+            if action == "start_continuous_pad" and self.measurement_mode != MEASUREMENT_MODE_CONTINUOUS_PAD:
+                self.status_queue.put(("error", f"Step {step_num}: Start Continuous PAD is not valid in this measurement mode."))
+                return False
+            if action == "run_cv" and self.measurement_mode != MEASUREMENT_MODE_CV:
+                self.status_queue.put(("error", f"Step {step_num}: Run CV is not valid in this measurement mode."))
+                return False
             if not self._check_dropview_connected():
                 self.status_queue.put(("error",
                     f"Step {step_num}: DropView is not connected - measurement could not be started. "
                     "Please add a Start DropView step first."))
                 self._cleanup_dropview(step_num)
                 return False
-            if self.measurement_mode == MEASUREMENT_MODE_CONTINUOUS_PAD:
+            if action == "run_cv" or (
+                action == "start_measure"
+                and self.measurement_mode == MEASUREMENT_MODE_CV
+            ):
+                ok = self._run_cv_measurement()
+                if not ok:
+                    self.status_queue.put(("error", f"Step {step_num}: Run CV failed."))
+                    self._cleanup_dropview(step_num)
+                    return False
+            elif action == "start_continuous_pad" or (
+                action == "start_measure"
+                and self.measurement_mode == MEASUREMENT_MODE_CONTINUOUS_PAD
+            ):
                 if self.measurement_running:
                     self._debug_log(
                         "Continuous PAD start skipped: measurement is already running. "
@@ -284,7 +354,11 @@ class RecipeRunner(threading.Thread):
             return False
 
         # ── Süre bekleme döngüsü ──────────────────────────────
-        if step.duration_minutes > 0:
+        cv_run_action = action == "run_cv" or (
+            action == "start_measure"
+            and self.measurement_mode == MEASUREMENT_MODE_CV
+        )
+        if step.duration_minutes > 0 and not cv_run_action:
             parts = []
             if step.port > 0:
                 parts.append(f"A:Port {step.port}")
@@ -340,10 +414,22 @@ class RecipeRunner(threading.Thread):
         if self.stop_event.is_set():
             return False
 
-        if action == "stop_measure" and dv:
+        if action in ("stop_measure", "stop_discrete_pad", "stop_continuous_pad") and dv:
             self._debug_log("Stopping measurement...")
-            if self.measurement_mode == MEASUREMENT_MODE_CONTINUOUS_PAD:
+            if action == "stop_discrete_pad" and self.measurement_mode != MEASUREMENT_MODE_SCRIPT_PAD:
+                self.status_queue.put(("error", f"Step {step_num}: Stop Discrete PAD is not valid in this measurement mode."))
+                return False
+            if action == "stop_continuous_pad" and self.measurement_mode != MEASUREMENT_MODE_CONTINUOUS_PAD:
+                self.status_queue.put(("error", f"Step {step_num}: Stop Continuous PAD is not valid in this measurement mode."))
+                return False
+            if action == "stop_continuous_pad" or (
+                action == "stop_measure"
+                and self.measurement_mode == MEASUREMENT_MODE_CONTINUOUS_PAD
+            ):
                 ok = dv.do_stop_continuous_pad(log_fn=self._log)
+            elif self.measurement_mode == MEASUREMENT_MODE_CV:
+                self.status_queue.put(("error", f"Step {step_num}: Stop is not supported in CV mode. Use Run CV."))
+                return False
             else:
                 ok = dv.do_stop_measure(log_fn=self._log)
             if not ok:

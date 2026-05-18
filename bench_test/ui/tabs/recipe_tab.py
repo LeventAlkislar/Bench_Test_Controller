@@ -20,7 +20,10 @@ from PyQt6.QtGui import QColor, QFont
 from bench_test.valve.multiport import ValveController
 from bench_test.valve.injector import InjectorValveController
 from bench_test.dropview.controller import DropViewController
-from bench_test.measurement.session import MEASUREMENT_MODE_CONTINUOUS_PAD, SessionStatus
+from bench_test.measurement.session import (
+    MEASUREMENT_MODE_CONTINUOUS_PAD,
+    SessionStatus,
+)
 from bench_test.recipe.models import Recipe, RecipeStep, StepLoop
 from bench_test.recipe.runner import RecipeRunner, DROPVIEW_ACTIONS, DROPVIEW_LABELS, DROPVIEW_ZERO_DURATION_OK
 from bench_test.utils.paths import (
@@ -36,16 +39,22 @@ from bench_test.ui.widgets import _btn, _lbl
 _DV_COMBO_LABELS = [
     "None",
     "Start DropView",
-    "Start Measure",
-    "Stop Measure",
+    "Start Discrete PAD",
+    "Stop Discrete PAD",
+    "Start Continuous PAD",
+    "Stop Continuous PAD",
+    "Run CV",
     "Exit DropView",
 ]
 _DV_IDX_TO_KEY = {
     0: "none",
     1: "start_dropview",
-    2: "start_measure",
-    3: "stop_measure",
-    4: "exit_dropview",
+    2: "start_discrete_pad",
+    3: "stop_discrete_pad",
+    4: "start_continuous_pad",
+    5: "stop_continuous_pad",
+    6: "run_cv",
+    7: "exit_dropview",
 }
 VALVE_B_LABELS   = {0: "-", 1: "Load", 2: "Inject"}
 COL_STEP, COL_VA, COL_VB, COL_DUR, COL_DESC, COL_DV, COL_SCR, COL_LOOP = range(8)
@@ -297,6 +306,8 @@ class RecipeTab(QWidget):
         vb_state = int(vb_str[0]) if vb_str and vb_str[0].isdigit() else 0
         dv_idx   = self.step_dv.currentIndex()
         dv_action = _DV_IDX_TO_KEY.get(dv_idx, "none")
+        if dv_action == "run_cv":
+            duration = 0.0
 
         # Süre 0 sadece DropView aksiyonu olduğunda geçerli
         if duration <= 0 and dv_action == "none":
@@ -350,7 +361,9 @@ class RecipeTab(QWidget):
                 str(step.duration_minutes),
                 step.description,
                 DROPVIEW_LABELS.get(step.dropview_action, "-"),
-                self._get_session_scr_name() if step.dropview_action == "start_measure" else "--",
+                self._get_session_scr_name()
+                if step.dropview_action in ("start_measure", "start_discrete_pad")
+                else "--",
                 loop_info
             ]
             for j, v in enumerate(vals):
@@ -396,6 +409,11 @@ class RecipeTab(QWidget):
                     "start dropview": "start_dropview", "start_dropview": "start_dropview", "1": "start_dropview",
                     "start measure": "start_measure",   "start_measure": "start_measure",   "2": "start_measure",
                     "stop measure": "stop_measure",     "stop_measure": "stop_measure",     "3": "stop_measure",
+                    "start discrete pad": "start_discrete_pad", "start_discrete_pad": "start_discrete_pad",
+                    "stop discrete pad": "stop_discrete_pad", "stop_discrete_pad": "stop_discrete_pad",
+                    "start continuous pad": "start_continuous_pad", "start_continuous_pad": "start_continuous_pad",
+                    "stop continuous pad": "stop_continuous_pad", "stop_continuous_pad": "stop_continuous_pad",
+                    "run cv": "run_cv", "run_cv": "run_cv",
                     "exit dropview": "exit_dropview",   "exit_dropview": "exit_dropview",   "4": "exit_dropview",
                 }
                 step.dropview_action = _dv_map.get(val.lower(), "none")

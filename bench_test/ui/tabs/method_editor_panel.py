@@ -29,6 +29,7 @@ from PyQt6.QtCore import pyqtSignal, Qt
 
 from bench_test.measurement.session import (
     MEASUREMENT_MODE_CONTINUOUS_PAD,
+    MEASUREMENT_MODE_CV,
     MEASUREMENT_MODE_SCRIPT_PAD,
 )
 from bench_test.utils.paths import get_value, remember_value, open_file
@@ -41,9 +42,28 @@ class MethodEditorPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._current_path = ""
+        self._current_tech_id = ""
         self._measurement_mode = MEASUREMENT_MODE_SCRIPT_PAD
+        self._mode_provider = None
         self._build_ui()
-        self._restore_last_method()
+        self._show_empty_for_mode(self._measurement_mode)
+
+    @staticmethod
+    def _last_method_key_for_mode(mode: str) -> str:
+        mode = mode or MEASUREMENT_MODE_SCRIPT_PAD
+        return f"last_method_file_{mode}"
+
+    @staticmethod
+    def _expected_tech_id_for_mode(mode: str) -> str:
+        if mode == MEASUREMENT_MODE_CV:
+            return "CV"
+        return "PAD"
+
+    @staticmethod
+    def _method_tech_id(path: str) -> str:
+        tree = ET.parse(path)
+        technic = tree.getroot().find("technic")
+        return technic.get("id", "") if technic is not None else ""
 
     def _build_ui(self):
         outer = QVBoxLayout(self)
@@ -62,7 +82,7 @@ class MethodEditorPanel(QWidget):
         self.file_lbl.setStyleSheet("color: #888; font-size: 11px;")
         self.file_lbl.setWordWrap(True)
         top_row.addWidget(self.file_lbl, stretch=1)
-        top_row.addWidget(_btn("Load .tp", self._load))
+        top_row.addWidget(_btn("Load Method", self._load))
         layout.addLayout(top_row)
 
         self.technic_lbl = QLabel("Pulsed Amperometric Detection")
@@ -112,6 +132,7 @@ class MethodEditorPanel(QWidget):
         meas_grp = QGroupBox("Measurement")
         meas_grid = QGridLayout(meas_grp)
         self._meas = {}
+        self._meas_rows = {}
 
         meas_params = [
             ("E1", "V"),
@@ -126,18 +147,23 @@ class MethodEditorPanel(QWidget):
             ("t5", "s"),
             ("ti", "s"),
             ("t", "s"),
+            ("Estep", "V"),
+            ("Srate", "V/s"),
+            ("nscans", ""),
         ]
 
         row = 0
         col = 0
         meas_grid.setColumnMinimumWidth(2, 50)
         for pid, unit in meas_params:
+            label = QLabel(f"{pid} [{unit}]" if unit else pid)
             spin = self._dspin(
                 decimals=2,
                 rng=(-10.0, 10.0) if pid.startswith("E") else (0.0, 85000.0),
             )
             self._meas[pid] = spin
-            meas_grid.addWidget(QLabel(f"{pid} [{unit}]"), row, col)
+            self._meas_rows[pid] = (label, spin)
+            meas_grid.addWidget(label, row, col)
             meas_grid.addWidget(spin, row, col + 1)
             col += 3
             if col >= 6:
@@ -152,10 +178,19 @@ class MethodEditorPanel(QWidget):
         self.multi_channel_lbl = self._ro_label()
         self.multi_current_range_lbl = self._ro_label()
         self.multi_ei_spin = self._dspin(decimals=3, rng=(-10.0, 10.0))
+        self.multi_ei_label = QLabel("Ei [V]:")
+        self._cv_channel = {}
+        self._cv_channel_rows = {}
         multi_form.addRow("Technic:", self.multi_tech_lbl)
         multi_form.addRow("Measurement of:", self.multi_channel_lbl)
         multi_form.addRow("Current range:", self.multi_current_range_lbl)
-        multi_form.addRow("Ei [V]:", self.multi_ei_spin)
+        multi_form.addRow(self.multi_ei_label, self.multi_ei_spin)
+        for pid in ("Ebegin", "Evtx1", "Evtx2"):
+            spin = self._dspin(decimals=3, rng=(-10.0, 10.0))
+            label = QLabel(f"{pid} [V]:")
+            multi_form.addRow(label, spin)
+            self._cv_channel[pid] = spin
+            self._cv_channel_rows[pid] = (label, spin)
         layout.addWidget(multi_grp)
 
         # 2) Information (en altta)
@@ -169,6 +204,7 @@ class MethodEditorPanel(QWidget):
         info_form.addRow("Sample:", self.sample_edit)
         layout.addWidget(info_grp)
 
+        self._apply_technic_to_ui("PAD")
         layout.addStretch()
         scroll.setWidget(container)
         outer.addWidget(scroll)
@@ -186,14 +222,29 @@ class MethodEditorPanel(QWidget):
         return spin
 
     def _load(self):
+        self._sync_mode_from_provider()
         path = open_file(
             self,
             "Select Method File",
             "method_dir",
-            "DropView Method (*.tp);;All files (*.*)",
+            "DropView Method (*.tp *.tc);;All files (*.*)",
         )
         if path:
             self.load_from_path(path)
+
+    def set_mode_provider(self, provider):
+        self._mode_provider = provider
+        self._sync_mode_from_provider()
+
+    def _sync_mode_from_provider(self):
+        if self._mode_provider is None:
+            return
+        try:
+            mode = self._mode_provider()
+        except Exception:
+            return
+        if mode and mode != self._measurement_mode:
+            self.set_measurement_mode(mode)
 
     def load_from_path(self, path: str, persist: bool = True):
         try:
@@ -201,12 +252,16 @@ class MethodEditorPanel(QWidget):
             root = tree.getroot()
             technic = root.find("technic")
             if technic is None:
-                raise ValueError("<technic> not found in .tp file.")
+                raise ValueError("<technic> not found in method file.")
 
             tech_id = technic.get("id", "")
-            self.technic_lbl.setText(
-                "Pulsed Amperometric Detection" if tech_id == "PAD" else tech_id
-            )
+            expected_tech = self._expected_tech_id_for_mode(self._measurement_mode)
+            if tech_id != expected_tech:
+                raise ValueError(
+                    f"Selected method is {self._technic_display_name(tech_id)}, "
+                    f"but current mode expects {self._technic_display_name(expected_tech)}."
+                )
+            self.technic_lbl.setText(self._technic_display_name(expected_tech))
 
             self.cellon_lbl.setText(technic.findtext("cellon", "-"))
             self.standbypotential_lbl.setText(
@@ -232,9 +287,7 @@ class MethodEditorPanel(QWidget):
             if sample:
                 self.sample_edit.setText(sample)
 
-            self.multi_tech_lbl.setText(
-                "Pulsed Amperometric Detection" if tech_id == "PAD" else tech_id
-            )
+            self.multi_tech_lbl.setText(self._technic_display_name(expected_tech))
             self.multi_channel_lbl.setText(
                 f"channel {technic.findtext('numchannels', '1')}"
             )
@@ -249,6 +302,16 @@ class MethodEditorPanel(QWidget):
                 else:
                     self.multi_ei_spin.setValue(0.0)
 
+                for pid, spin in self._cv_channel.items():
+                    param = channel.find(f"parameter[@id='{pid}']")
+                    if param is not None:
+                        try:
+                            spin.setValue(float(param.text))
+                        except (ValueError, TypeError):
+                            spin.setValue(0.0)
+                    else:
+                        spin.setValue(0.0)
+
                 current = channel.find("parameter[@id='Current']")
                 if current is None or current.text is None:
                     self.multi_current_range_lbl.setText("-")
@@ -262,31 +325,83 @@ class MethodEditorPanel(QWidget):
                         self.multi_current_range_lbl.setText(raw)
             else:
                 self.multi_ei_spin.setValue(0.0)
+                for spin in self._cv_channel.values():
+                    spin.setValue(0.0)
                 self.multi_current_range_lbl.setText("-")
 
             self._current_path = path
+            self._current_tech_id = expected_tech
             if persist:
-                remember_value("last_method_file", path)
+                remember_value(
+                    self._last_method_key_for_mode(self._measurement_mode),
+                    path,
+                )
+                if expected_tech == "PAD":
+                    remember_value("last_method_file", path)
             self.file_lbl.setText(os.path.basename(path))
             self.file_lbl.setStyleSheet("color: #4CAF50; font-size: 11px;")
             self.file_lbl.setToolTip(path)
+            self._apply_technic_to_ui(expected_tech)
             self._apply_measurement_mode_to_ui()
             self.tp_loaded.emit(path)
 
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to load .tp:\n{e}")
+            QMessageBox.critical(self, "Error", f"Failed to load method:\n{e}")
 
-    def _restore_last_method(self):
-        path = get_value("last_method_file", "")
+    @staticmethod
+    def _technic_display_name(tech_id: str) -> str:
+        if tech_id == "PAD":
+            return "Pulsed Amperometric Detection"
+        if tech_id == "CV":
+            return "Cyclic Voltammetry"
+        return tech_id or "-"
+
+    def _apply_technic_to_ui(self, tech_id: str):
+        cv = tech_id == "CV"
+        cv_meas = {"Estep", "Srate", "nscans"}
+        for pid, widgets in self._meas_rows.items():
+            visible = (pid in cv_meas) if cv else (pid not in cv_meas)
+            for widget in widgets:
+                widget.setVisible(visible)
+
+        self.multi_ei_spin.setVisible(not cv)
+        self.multi_ei_label.setVisible(not cv)
+        for pid, widgets in self._cv_channel_rows.items():
+            for widget in widgets:
+                widget.setVisible(cv)
+
+    def _restore_last_method(self, mode: str = None):
+        mode = mode or self._measurement_mode
+        mode_key = self._last_method_key_for_mode(mode)
+        expected_tech = self._expected_tech_id_for_mode(mode)
+        path = get_value(mode_key, "")
+        used_legacy_key = False
+        if not path and expected_tech == "PAD":
+            path = get_value("last_method_file", "")
+            used_legacy_key = bool(path)
         if not path:
+            self._show_empty_for_mode(mode)
             return
 
         if os.path.isfile(path):
+            try:
+                tech_id = self._method_tech_id(path)
+            except Exception:
+                tech_id = ""
+            if tech_id != expected_tech:
+                remember_value(mode_key, "")
+                if used_legacy_key and get_value("last_method_file", "") == path:
+                    remember_value("last_method_file", "")
+                self._show_empty_for_mode(mode)
+                return
             self.load_from_path(path)
             return
 
         # Dosya artık erişilebilir değil; sessizce boş bırak ve stale kaydı temizle.
-        remember_value("last_method_file", "")
+        remember_value(mode_key, "")
+        if get_value("last_method_file", "") == path:
+            remember_value("last_method_file", "")
+        self._show_empty_for_mode(mode)
 
     def get_tp_data(self) -> dict:
         return {
@@ -306,8 +421,23 @@ class MethodEditorPanel(QWidget):
         return self._current_path
 
     def set_measurement_mode(self, mode: str):
-        self._measurement_mode = mode or MEASUREMENT_MODE_SCRIPT_PAD
+        mode = mode or MEASUREMENT_MODE_SCRIPT_PAD
+        if mode == self._measurement_mode:
+            if not self._current_path:
+                self._restore_last_method(mode)
+            self._apply_measurement_mode_to_ui()
+            return
+        self._measurement_mode = mode
+        expected = self._expected_tech_id_for_mode(mode)
+        if self._current_path and self._current_tech_id == expected:
+            self._apply_measurement_mode_to_ui()
+            return
+        self._restore_last_method(mode)
         self._apply_measurement_mode_to_ui()
+
+    def _show_empty_for_mode(self, mode: str):
+        self.clear(technic_id=self._expected_tech_id_for_mode(mode))
+        self.tp_loaded.emit("")
 
     def _apply_measurement_mode_to_ui(self):
         if not hasattr(self, "_meas"):
@@ -329,27 +459,32 @@ class MethodEditorPanel(QWidget):
             t_spin.setToolTip("")
         t_spin.setEnabled(not continuous)
 
-    def clear(self):
+    def clear(self, technic_id: str = "PAD"):
         """MethodEditorPanel'i açılış haline getirir."""
         self._current_path = ""
+        self._current_tech_id = ""
         self.file_lbl.setText("File not loaded")
         self.file_lbl.setStyleSheet("color: #888; font-size: 11px;")
         self.file_lbl.setToolTip("")
 
-        self.technic_lbl.setText("Pulsed Amperometric Detection")
+        self.technic_lbl.setText(self._technic_display_name(technic_id))
         self.node_lbl.setText("Node 1")
         self.cellon_lbl.setText("-")
         self.standbypotential_lbl.setText("-")
 
         for lbl in self._pre.values():
             lbl.setText("-")
+
         for spin in self._meas.values():
             spin.setValue(0.0)
 
         self.sensor_edit.clear()
         self.sample_edit.clear()
-        self.multi_tech_lbl.setText("-")
+        self.multi_tech_lbl.setText(self._technic_display_name(technic_id))
         self.multi_channel_lbl.setText("-")
         self.multi_current_range_lbl.setText("-")
         self.multi_ei_spin.setValue(0.0)
+        for spin in self._cv_channel.values():
+            spin.setValue(0.0)
+        self._apply_technic_to_ui(technic_id)
         self._apply_measurement_mode_to_ui()

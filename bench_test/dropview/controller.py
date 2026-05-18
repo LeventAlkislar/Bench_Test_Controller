@@ -182,6 +182,37 @@ class DropViewController(QObject):
             if log_fn: log_fn(f"Continuous PAD stop error: {e}")
             return False
 
+    def do_run_cv(
+        self,
+        method_path: str,
+        measurements_dir: str = "",
+        part_number: str = "",
+        log_fn=None,
+    ) -> bool:
+        if not method_path:
+            if log_fn: log_fn("DropView: method file path is empty - CV could not be run.")
+            return False
+        if not measurements_dir:
+            if log_fn: log_fn("DropView: measurements directory is empty - CV could not be run.")
+            return False
+        if not part_number:
+            if log_fn: log_fn("DropView: part number is empty - CV could not be run.")
+            return False
+        try:
+            path = automator.step_run_cv(
+                {
+                    "method_path": method_path,
+                    "measurements_dir": measurements_dir,
+                    "part_number": part_number,
+                },
+                log_fn=log_fn,
+            )
+            if log_fn: log_fn(f"CV measurement completed: {path}")
+            return True
+        except Exception as e:
+            if log_fn: log_fn(f"CV run error: {e}")
+            return False
+
     def do_exit_dropview(self, log_fn=None) -> bool:
         try:
             automator.step_exit_dropview({}, log_fn=log_fn)

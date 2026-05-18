@@ -84,7 +84,10 @@ class Packager:
         str
             Kopyalanan dosyanın tam yolu.
         """
-        dest_name = f"{self.session.part_number}.tp"
+        source_ext = os.path.splitext(tp_path)[1].lower()
+        if source_ext not in (".tp", ".tc"):
+            source_ext = ".tp"
+        dest_name = f"{self.session.part_number}{source_ext}"
         dest = self._copy_to_params(tp_path, dest_name)
         if duration_s is not None:
             self._patch_tp_duration(dest, duration_s)

@@ -56,6 +56,7 @@ class MeasurementSetupTab(QWidget):
         self.package_panel = PackagePanel()
         self.method_panel  = MethodEditorPanel()
         self.script_panel  = ScriptParamsPanel()
+        self.method_panel.set_mode_provider(self.script_panel.get_measurement_mode)
 
         self._connect_signals()
         self._build_ui()
@@ -290,6 +291,10 @@ class MeasurementSetupTab(QWidget):
             return
 
         files = data.get("files", {})
+        measurement_mode = data.get("measurement_mode", "")
+        if measurement_mode:
+            self.script_panel.set_measurement_mode(measurement_mode)
+            self.method_panel.set_measurement_mode(measurement_mode)
 
         # Part Number → PackagePanel
         part_number = data.get("part_number", "")
@@ -338,6 +343,10 @@ class MeasurementSetupTab(QWidget):
             os.path.basename(session.session_dir)
         )
         self.package_panel.session_dir_lbl.setText(session.session_dir)
+        measurement_mode = getattr(session, "measurement_mode", "") or ""
+        if measurement_mode:
+            self.script_panel.set_measurement_mode(measurement_mode)
+            self.method_panel.set_measurement_mode(measurement_mode)
 
         tp_path = session.get_file_path("tp")
         if not tp_path:

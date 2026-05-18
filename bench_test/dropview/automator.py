@@ -94,6 +94,8 @@ _continuous_pad_method_path = None
 _continuous_pad_measurements_dir = ""
 _continuous_pad_active_file = ""
 _continuous_pad_last_snapshot = set()
+_cv_autosave_key = None
+_cv_method_path = None
 _dialog_watchdog_lock = threading.Lock()
 _dialog_watchdog_thread = None
 _dialog_watchdog_stop = None
@@ -802,16 +804,25 @@ def _accept_if_dialog_present(
     return False
 
 
-def _snapshot_mtp_files(measurements_dir: str) -> set[str]:
+def _snapshot_measurement_files(measurements_dir: str, extension: str) -> set[str]:
+    extension = extension.lower()
     try:
         return {
             os.path.join(measurements_dir, name)
             for name in os.listdir(measurements_dir)
-            if name.lower().endswith(".mtp")
+            if name.lower().endswith(extension)
             and os.path.isfile(os.path.join(measurements_dir, name))
         }
     except OSError:
         return set()
+
+
+def _snapshot_mtp_files(measurements_dir: str) -> set[str]:
+    return _snapshot_measurement_files(measurements_dir, ".mtp")
+
+
+def _snapshot_mtc_files(measurements_dir: str) -> set[str]:
+    return _snapshot_measurement_files(measurements_dir, ".mtc")
 
 
 def _latest_mtp_file(measurements_dir: str) -> str:
@@ -821,21 +832,47 @@ def _latest_mtp_file(measurements_dir: str) -> str:
     return max(files, key=lambda path: os.path.getmtime(path))
 
 
-def _wait_for_new_mtp(measurements_dir: str, before: set[str], timeout: float) -> str:
+def _wait_for_new_file(
+    measurements_dir: str,
+    before: set[str],
+    extension: str,
+    timeout: float,
+    label: str,
+) -> str:
     deadline = time.time() + timeout
     while time.time() < deadline:
-        current = _snapshot_mtp_files(measurements_dir)
+        current = _snapshot_measurement_files(measurements_dir, extension)
         new_files = sorted(current - before, key=lambda path: os.path.getmtime(path))
         if new_files:
             return new_files[-1]
         time.sleep(0.5)
     raise RuntimeError(
-        f"Continuous PAD did not create a new .mtp file within {timeout:.0f}s: "
+        f"{label} did not create a new {extension} file within {timeout:.0f}s: "
         f"{measurements_dir}"
     )
 
 
-def _mtp_has_xml_close(path: str) -> bool:
+def _wait_for_new_mtp(measurements_dir: str, before: set[str], timeout: float) -> str:
+    return _wait_for_new_file(
+        measurements_dir,
+        before,
+        ".mtp",
+        timeout,
+        "Continuous PAD",
+    )
+
+
+def _wait_for_new_mtc(measurements_dir: str, before: set[str], timeout: float) -> str:
+    return _wait_for_new_file(
+        measurements_dir,
+        before,
+        ".mtc",
+        timeout,
+        "CV",
+    )
+
+
+def _xml_has_root_close(path: str) -> bool:
     try:
         with open(path, "rb") as f:
             if os.path.getsize(path) > 4096:
@@ -846,7 +883,11 @@ def _mtp_has_xml_close(path: str) -> bool:
         return False
 
 
-def _wait_for_stable_mtp(path: str, timeout: float = _CONTINUOUS_PAD_STABLE_TIMEOUT) -> str:
+def _wait_for_stable_xml(
+    path: str,
+    timeout: float,
+    label: str,
+) -> str:
     deadline = time.time() + timeout
     last_size = -1
     stable_since = None
@@ -860,7 +901,7 @@ def _wait_for_stable_mtp(path: str, timeout: float = _CONTINUOUS_PAD_STABLE_TIME
                 stable_since = time.time()
             if (
                 time.time() - stable_since >= _CONTINUOUS_PAD_STABLE_SECONDS
-                and _mtp_has_xml_close(path)
+                and _xml_has_root_close(path)
             ):
                 return path
         else:
@@ -868,8 +909,16 @@ def _wait_for_stable_mtp(path: str, timeout: float = _CONTINUOUS_PAD_STABLE_TIME
             last_size = size
         time.sleep(0.5)
     raise RuntimeError(
-        f"Continuous PAD .mtp file did not become stable or complete: {path}"
+        f"{label} file did not become stable or complete: {path}"
     )
+
+
+def _wait_for_stable_mtp(path: str, timeout: float = _CONTINUOUS_PAD_STABLE_TIMEOUT) -> str:
+    return _wait_for_stable_xml(path, timeout, "Continuous PAD .mtp")
+
+
+def _wait_for_stable_mtc(path: str, timeout: float = _CONTINUOUS_PAD_STABLE_TIMEOUT) -> str:
+    return _wait_for_stable_xml(path, timeout, "CV .mtc")
 
 
 def _read_error_window_text(hwnd) -> str:
@@ -1573,6 +1622,194 @@ def step_load_continuous_pad_method(config: dict, log_fn=None):
         post_delay=SLEEP_AFTER_COMMAND,
     )
     _continuous_pad_method_path = method_key
+
+
+def step_run_cv(config: dict, log_fn=None) -> str:
+    """Load/configure CV, run it, and wait until AutoSave writes a stable .mtc."""
+    config = config or {}
+    measurements_dir = config.get("measurements_dir", "")
+    if not measurements_dir or not os.path.isdir(measurements_dir):
+        raise RuntimeError(f"CV measurements directory not found: {measurements_dir}")
+
+    step_configure_cv_autosave(config, log_fn=log_fn)
+    step_load_cv_method(config, log_fn=log_fn)
+
+    dv_hwnd = _ensure_dropview_ready("CV run", log_fn=log_fn)
+    before = _snapshot_mtc_files(measurements_dir)
+    debug_log("CV: running measurement with Ctrl+R...")
+    try:
+        safe_sequence(
+            dv_hwnd,
+            [{"type": "hotkey", "keys": ("ctrl", "r"), "post_delay": SLEEP_AFTER_COMMAND}],
+            log_fn=log_fn,
+        )
+    except Exception as exc:
+        debug_log(f"CV: Ctrl+R failed ({exc}); trying Alt+D -> R.")
+        safe_sequence(
+            dv_hwnd,
+            [
+                {"type": "hotkey", "keys": ("alt", "d"), "post_delay": SLEEP_AFTER_FOCUS},
+                {"type": "press", "key": "r", "post_delay": SLEEP_AFTER_COMMAND},
+            ],
+            log_fn=log_fn,
+        )
+
+    _accept_if_dialog_present(
+        "Run experiment",
+        wait=2.5,
+        log_fn=log_fn,
+        owner_hwnd=dv_hwnd,
+        image_key="run_experiment_confirm_dialog",
+        exact=True,
+    )
+    _wait_for_optional_dialog_close(
+        "Send",
+        owner_hwnd=dv_hwnd,
+        appear_wait=2.0,
+        close_timeout=float(config.get("send_timeout", _CONTINUOUS_PAD_SEND_TIMEOUT)),
+        log_fn=log_fn,
+        exact=True,
+    )
+    _accept_if_dialog_present(
+        "Run experiment",
+        wait=3.0,
+        log_fn=log_fn,
+        owner_hwnd=dv_hwnd,
+        image_key="run_experiment_confirm_dialog",
+        exact=True,
+    )
+
+    mtc_path = _wait_for_new_mtc(
+        measurements_dir,
+        before,
+        timeout=float(config.get("file_timeout", _CONTINUOUS_PAD_FILE_TIMEOUT)),
+    )
+    stable_path = _wait_for_stable_mtc(
+        mtc_path,
+        timeout=float(config.get("stable_timeout", _CONTINUOUS_PAD_STABLE_TIMEOUT)),
+    )
+    debug_log(f"CV measurement file closed: {stable_path}")
+    return stable_path
+
+
+def step_configure_cv_autosave(config: dict, log_fn=None):
+    """Set DropView AutoSave As for CV .mtc output."""
+    global _cv_autosave_key
+
+    config = config or {}
+    measurements_dir = config.get("measurements_dir", "")
+    part_number = config.get("part_number", "")
+    if not measurements_dir or not os.path.isdir(measurements_dir):
+        raise RuntimeError(f"CV AutoSave directory not found: {measurements_dir}")
+    if not part_number:
+        raise RuntimeError("CV AutoSave part number is empty.")
+
+    save_base = os.path.join(measurements_dir, part_number)
+    dv_hwnd = _ensure_dropview_ready("CV AutoSave", log_fn=log_fn)
+    autosave_key = (
+        get_window_pid(dv_hwnd),
+        os.path.normcase(os.path.abspath(measurements_dir)),
+        part_number,
+    )
+    if _cv_autosave_key == autosave_key:
+        return
+    debug_log(f"CV: configuring AutoSave As -> {save_base}")
+    safe_sequence(
+        dv_hwnd,
+        [{"type": "hotkey", "keys": ("alt", "f"), "post_delay": SLEEP_AFTER_FOCUS}],
+        log_fn=log_fn,
+    )
+    _click_popup_image("autosave_as_menu_item", log_fn=log_fn, threshold=THRESHOLD_LOW)
+
+    nodes_hwnd = _find_dialog_by_title(
+        "Select nodes to apply",
+        timeout=10,
+        owner_hwnd=dv_hwnd,
+        image_key="select_nodes_unchecked",
+    )
+    _ensure_node_checked(nodes_hwnd, log_fn=log_fn)
+    _click_button(nodes_hwnd, "Accept", "accept_btn", log_fn=log_fn, post_delay=SLEEP_AFTER_COMMAND)
+
+    save_hwnd = _find_dialog_by_title(
+        "Save as",
+        timeout=12,
+        owner_hwnd=dv_hwnd,
+        image_key="save_as_node_dialog",
+    )
+    _paste_path_into_file_dialog(save_hwnd, save_base, log_fn=log_fn, submit=True)
+    _submit_file_dialog_or_fallback(
+        save_hwnd,
+        "Save as",
+        "Save",
+        "save_btn",
+        log_fn=log_fn,
+    )
+    _cv_autosave_key = autosave_key
+
+
+def step_load_cv_method(config: dict, log_fn=None):
+    """Load the CV .tc method and apply it to Node 1."""
+    global _cv_method_path
+
+    config = config or {}
+    method_path = config.get("method_path", "")
+    if not method_path or not os.path.isfile(method_path):
+        raise RuntimeError(f"CV method file not found: {method_path}")
+
+    dv_hwnd = _ensure_dropview_ready("CV method load", log_fn=log_fn)
+    method_key = (get_window_pid(dv_hwnd), os.path.normcase(os.path.abspath(method_path)))
+    if _cv_method_path == method_key:
+        return
+
+    debug_log(f"CV: loading method -> {method_path}")
+    safe_sequence(
+        dv_hwnd,
+        [
+            {"type": "hotkey", "keys": ("alt", "f"), "post_delay": SLEEP_AFTER_FOCUS},
+            {"type": "press", "key": "m", "post_delay": SLEEP_AFTER_COMMAND},
+        ],
+        log_fn=log_fn,
+    )
+    _accept_if_dialog_present(
+        "Load method",
+        wait=5.0,
+        log_fn=log_fn,
+        owner_hwnd=dv_hwnd,
+        image_key="load_method_confirm_dialog",
+        exact=True,
+    )
+
+    open_hwnd = _find_dialog_by_title(
+        "Load method...",
+        timeout=10,
+        owner_hwnd=dv_hwnd,
+        image_key="load_method_open_dialog",
+        exact=True,
+    )
+    _paste_path_into_file_dialog(open_hwnd, method_path, log_fn=log_fn, submit=True)
+    _submit_file_dialog_or_fallback(
+        open_hwnd,
+        "Load method...",
+        "Open",
+        "open_btn",
+        log_fn=log_fn,
+    )
+
+    nodes_hwnd = _find_dialog_by_title(
+        "Select nodes to apply",
+        timeout=10,
+        owner_hwnd=dv_hwnd,
+        image_key="method_select_nodes_unchecked",
+    )
+    _ensure_node_checked(nodes_hwnd, log_fn=log_fn)
+    _click_button(
+        nodes_hwnd,
+        "Accept",
+        "method_select_nodes_accept",
+        log_fn=log_fn,
+        post_delay=SLEEP_AFTER_COMMAND,
+    )
+    _cv_method_path = method_key
 
 
 def _force_close_multiscript(log_fn=None) -> bool:

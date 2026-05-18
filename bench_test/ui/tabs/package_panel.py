@@ -25,6 +25,7 @@ from PyQt6.QtGui import QFont
 
 from bench_test.measurement.session import (
     MEASUREMENT_MODE_CONTINUOUS_PAD,
+    MEASUREMENT_MODE_CV,
     MEASUREMENT_MODE_SCRIPT_PAD,
     MeasurementSession,
     SessionStatus,
@@ -298,12 +299,14 @@ class PackagePanel(QWidget):
 
         if not tp_path or not os.path.isfile(tp_path):
             QMessageBox.warning(self, "Warning",
-                "Method file (.tp) not loaded.\n"
-                "Load a .tp file from the Measurement Setup tab.")
+                "Method file (.tp/.tc) not loaded.\n"
+                "Load a method file from the Measurement Setup tab.")
             return False
 
         measurement_mode = measurement_mode or MEASUREMENT_MODE_SCRIPT_PAD
         continuous_pad = measurement_mode == MEASUREMENT_MODE_CONTINUOUS_PAD
+        cv_mode = measurement_mode == MEASUREMENT_MODE_CV
+        direct_method_mode = continuous_pad or cv_mode
 
         if not scr_params.get("method_file"):
             QMessageBox.warning(self, "Warning",
@@ -323,8 +326,9 @@ class PackagePanel(QWidget):
             self._log(f"✓ .tp copied: {os.path.basename(tp_path)}")
 
             # .scr üret ve kopyala
-            if continuous_pad:
-                self._log("Continuous PAD mode: .scr generation skipped.")
+            if direct_method_mode:
+                mode_name = "CV" if cv_mode else "Continuous PAD"
+                self._log(f"{mode_name} mode: .scr generation skipped.")
             else:
                 from bench_test.dropview.script_generator import generate_dropview_script
                 import tempfile
@@ -362,7 +366,7 @@ class PackagePanel(QWidget):
             packager.finalize()
 
             # Referansları güncelle
-            self.set_scr_ref("" if continuous_pad else packager.get_packed_scr_path())
+            self.set_scr_ref("" if direct_method_mode else packager.get_packed_scr_path())
             self.set_tp_ref(self._session.tp_path if hasattr(self._session, "tp_path") else tp_path)
             self.set_recipe_ref(effective_recipe_path)
 
@@ -370,7 +374,7 @@ class PackagePanel(QWidget):
             self._set_status(f"Aktif: {part_number} / {session_name}", _COLOR_RUNNING)
             self.session_dir_lbl.setText(self._session.session_dir)
             self.session_id_edit.setText(session_name)
-            self.aggregate_btn.setEnabled(not continuous_pad)
+            self.aggregate_btn.setEnabled(not direct_method_mode)
 
             self._log_writer = LogWriter(self._session)
             self._log_writer.open()

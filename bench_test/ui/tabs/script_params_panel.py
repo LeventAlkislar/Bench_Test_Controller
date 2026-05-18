@@ -23,6 +23,7 @@ from PyQt6.QtCore import pyqtSignal, Qt
 from bench_test.config import DEFAULT_REPEAT_COUNT, DEFAULT_WAIT_DURATION_SEC
 from bench_test.measurement.session import (
     MEASUREMENT_MODE_CONTINUOUS_PAD,
+    MEASUREMENT_MODE_CV,
     MEASUREMENT_MODE_SCRIPT_PAD,
 )
 from bench_test.ui.widgets import _btn
@@ -49,8 +50,9 @@ class ScriptParamsPanel(QWidget):
         mode_grp = QGroupBox("Measurement Mode")
         mode_form = QFormLayout(mode_grp)
         self.mode_combo = QComboBox()
-        self.mode_combo.addItem("Script PAD", MEASUREMENT_MODE_SCRIPT_PAD)
+        self.mode_combo.addItem("Discrete PAD", MEASUREMENT_MODE_SCRIPT_PAD)
         self.mode_combo.addItem("Continuous PAD", MEASUREMENT_MODE_CONTINUOUS_PAD)
+        self.mode_combo.addItem("CV", MEASUREMENT_MODE_CV)
         saved_mode = get_value("measurement_mode", MEASUREMENT_MODE_SCRIPT_PAD)
         mode_idx = self.mode_combo.findData(saved_mode)
         self.mode_combo.setCurrentIndex(mode_idx if mode_idx >= 0 else 0)
@@ -217,14 +219,22 @@ class ScriptParamsPanel(QWidget):
         self.params_changed.emit()
 
     def _apply_mode_to_ui(self):
-        continuous = self.get_measurement_mode() == MEASUREMENT_MODE_CONTINUOUS_PAD
-        self.repeat_spin.setEnabled(not continuous)
-        self.wait_spin.setEnabled(not continuous)
-        self.csv_edit.setEnabled(not continuous)
+        mode = self.get_measurement_mode()
+        continuous = mode == MEASUREMENT_MODE_CONTINUOUS_PAD
+        cv_mode = mode == MEASUREMENT_MODE_CV
+        direct_method_mode = continuous or cv_mode
+        self.repeat_spin.setEnabled(not direct_method_mode)
+        self.wait_spin.setEnabled(not direct_method_mode)
+        self.csv_edit.setEnabled(not direct_method_mode)
         if continuous:
             self.mode_hint_lbl.setText(
                 "Loads the .tp directly. DropView AutoSave .mtp files are used; "
                 "live CSV plotting and script repeat/wait are disabled."
+            )
+        elif cv_mode:
+            self.mode_hint_lbl.setText(
+                "Loads the .tc directly. DropView AutoSave .mtc files are used; "
+                "Run CV waits until the method finishes."
             )
         else:
             self.mode_hint_lbl.setText(
@@ -245,7 +255,10 @@ class ScriptParamsPanel(QWidget):
 
     def is_ready(self) -> bool:
         """Method ve CSV yolu doluysa True."""
-        if self.get_measurement_mode() == MEASUREMENT_MODE_CONTINUOUS_PAD:
+        if self.get_measurement_mode() in (
+            MEASUREMENT_MODE_CONTINUOUS_PAD,
+            MEASUREMENT_MODE_CV,
+        ):
             return bool(self.method_edit.text())
         return bool(self.method_edit.text()) and bool(self.csv_edit.text())
 
