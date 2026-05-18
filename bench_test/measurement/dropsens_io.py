@@ -55,6 +55,18 @@ def read_pad_measurement(path: str) -> DropSensMeasurement:
     return measurement
 
 
+def read_cv_measurement(path: str) -> DropSensMeasurement:
+    """Read a DropSens CV .mtc file."""
+    measurement = read_dropsens_measurement(path)
+    if measurement.technique.upper() != "CV":
+        raise MeasurementDataError(
+            f"Only CV DropSens files are supported for CV view: {path}"
+        )
+    if not measurement.curves:
+        raise MeasurementDataError(f"No curves found in DropSens file: {path}")
+    return measurement
+
+
 def read_pad_measurement_series(path: str) -> tuple[List[float], List[float]]:
     """Return PAD data as ``(unix_timestamps, current_uA)`` lists."""
     measurement = read_pad_measurement(path)

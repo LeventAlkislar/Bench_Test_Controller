@@ -104,6 +104,7 @@ if _PG_OK:
 
 from bench_test.measurement.session import (
     MEASUREMENT_MODE_CONTINUOUS_PAD,
+    MEASUREMENT_MODE_CV,
     MeasurementSession,
     SessionStatus,
 )
@@ -111,9 +112,13 @@ from bench_test.measurement.legacy_session import LegacySession
 from bench_test.measurement.log_parser import LogParser, ParseResult, StepEvent, SystemEvent
 from bench_test.measurement.data_io import (
     MeasurementDataError,
+    find_session_xlsx_path,
+    read_csv_measurement_series,
     read_session_measurement_series,
+    read_session_pad_segment_series,
+    read_xlsx_measurement_series,
 )
-from bench_test.measurement.dropsens_io import read_pad_measurement
+from bench_test.measurement.dropsens_io import read_cv_measurement, read_pad_measurement
 from bench_test.ui.widgets import _btn
 from bench_test.utils.paths import open_dir, get_value
 
@@ -194,6 +199,7 @@ class ViewerTab(QWidget):
         self._event_marker_points: list = []
         self._vline_hover_points: list = []
         self._restoring_response_delay = False
+        self._plot_axis_mode = "time"
         self.plot_widget_top = None
         self.plot_widget_bottom = None
 
@@ -657,11 +663,14 @@ class ViewerTab(QWidget):
     def _set_plot_titles(self, part_text: str = ""):
         """Part bilgisini grafik başlıklarına yazar."""
         title_opts = {"color": "k", "size": "10pt", "bold": True}
+        cv_view = self._has_cv_measurements()
         if self.plot_widget_top:
-            title = f"{part_text} - Raw" if part_text else ""
+            suffix = "CV Potential-Current" if cv_view else "Raw"
+            title = f"{part_text} - {suffix}" if part_text else ""
             self.plot_widget_top.setTitle(title, **title_opts)
         if self.plot_widget_bottom:
-            title = f"{part_text} - Mean" if part_text else ""
+            suffix = "PAD Mean" if cv_view else "Mean"
+            title = f"{part_text} - {suffix}" if part_text else ""
             self.plot_widget_bottom.setTitle(title, **title_opts)
 
     def _refresh(self, reset_view: bool = False):
@@ -745,11 +754,11 @@ class ViewerTab(QWidget):
             "error"      : "#F44336",
             "pending"    : "#888888",
         }.get(s.status.value, "#888888")
-        mode_label = (
-            "Continuous PAD"
-            if getattr(s, "measurement_mode", "") == MEASUREMENT_MODE_CONTINUOUS_PAD
-            else "Script PAD"
-        )
+        measurement_mode = getattr(s, "measurement_mode", "")
+        mode_label = {
+            MEASUREMENT_MODE_CONTINUOUS_PAD: "Continuous PAD",
+            MEASUREMENT_MODE_CV: "CV",
+        }.get(measurement_mode, "Script PAD")
 
         self.meta_lbl.setText(
             f"<b>Part:</b> {s.part_number}<br>"
@@ -846,6 +855,46 @@ class ViewerTab(QWidget):
 
     # ── Grafik çizimi ─────────────────────────────────────────────
 
+    def _configure_plot_axes(self, mode: str):
+        """Switch plot axes between timestamp timeline and CV numeric axes."""
+        if not _PG_OK or not self.plot_widget_top:
+            return
+        if self._plot_axis_mode == mode:
+            return
+
+        if mode == "cv":
+            self.plot_widget_top.getPlotItem().setAxisItems({
+                "bottom": pg.AxisItem(orientation="bottom"),
+            })
+            self.plot_widget_top.setLabel("left", "Current", units="A")
+            self.plot_widget_top.setLabel("bottom", "Potential", units="V")
+
+            if self.plot_widget_bottom:
+                self.plot_widget_bottom.getPlotItem().setAxisItems({
+                    "bottom": VerticalDateAxisItem(orientation="bottom"),
+                })
+                self.plot_widget_bottom.setXLink(None)
+                self.plot_widget_bottom.setYLink(None)
+                self.plot_widget_bottom.setLabel("left", "Current", units="A")
+                self.plot_widget_bottom.setLabel("bottom", "Time")
+        else:
+            self.plot_widget_top.getPlotItem().setAxisItems({
+                "bottom": VerticalDateAxisItem(orientation="bottom"),
+            })
+            self.plot_widget_top.setLabel("left", "Current", units="A")
+            self.plot_widget_top.setLabel("bottom", "Time")
+
+            if self.plot_widget_bottom:
+                self.plot_widget_bottom.getPlotItem().setAxisItems({
+                    "bottom": VerticalDateAxisItem(orientation="bottom"),
+                })
+                self.plot_widget_bottom.setXLink(self.plot_widget_top)
+                self.plot_widget_bottom.setYLink(self.plot_widget_top)
+                self.plot_widget_bottom.setLabel("left", "Current", units="A")
+                self.plot_widget_bottom.setLabel("bottom", "Time")
+
+        self._plot_axis_mode = mode
+
     def _plot_data(self, reset_view: bool = False):
         if not self.plot_widget_top:
             return
@@ -854,6 +903,11 @@ class ViewerTab(QWidget):
             self._manual_top_view_active = False
             self._saved_top_view_range = None
 
+        if self._has_cv_measurements():
+            self._plot_cv_data(reset_view=reset_view)
+            return
+
+        self._configure_plot_axes("time")
         self._rebuilding_top_view = True
 
         self.plot_widget_top.clear()
@@ -873,13 +927,13 @@ class ViewerTab(QWidget):
         currents = []
         bottom_timestamps = []
         bottom_currents = []
-        continuous_pad_view = self._is_continuous_pad_view()
-        mean_group_size = 21 if self._dropsens_pad or continuous_pad_view else 5
-        centered_mean = bool(self._dropsens_pad or continuous_pad_view)
 
-        for _, series_timestamps, series_currents in series_data:
+        for series_item in series_data:
+            _label, series_timestamps, series_currents, mean_kind = self._normalize_pad_series_item(series_item)
             timestamps.extend(series_timestamps)
             currents.extend(series_currents)
+            mean_group_size = 21 if mean_kind == "continuous" else 5
+            centered_mean = mean_kind == "continuous"
             mean_ts, mean_cur = self._build_mean_series(
                 series_timestamps,
                 series_currents,
@@ -910,7 +964,8 @@ class ViewerTab(QWidget):
             )
 
         # Ana seri — kaynak Current uA gelir; grafikte A olarak çizilir.
-        for label, series_timestamps, series_currents in series_data:
+        for series_item in series_data:
+            _label, series_timestamps, series_currents, _mean_kind = self._normalize_pad_series_item(series_item)
             self.plot_widget_top.plot(
                 series_timestamps,
                 series_currents,
@@ -936,7 +991,10 @@ class ViewerTab(QWidget):
 
         # ── Bottom grafik: downsample edilmiş veri ─────────────────
         if self.plot_widget_bottom:
-            for label, series_timestamps, series_currents in series_data:
+            for series_item in series_data:
+                _label, series_timestamps, series_currents, mean_kind = self._normalize_pad_series_item(series_item)
+                mean_group_size = 21 if mean_kind == "continuous" else 5
+                centered_mean = mean_kind == "continuous"
                 mean_ts, mean_cur = self._build_mean_series(
                     series_timestamps,
                     series_currents,
@@ -984,13 +1042,229 @@ class ViewerTab(QWidget):
             self._update_measure_dots_for_plot(self.plot_widget_bottom)
         self._rebuilding_top_view = False
 
+    def _plot_cv_data(self, reset_view: bool = False):
+        """Draw CV .mtc curves with potential-current and time-current axes."""
+        self._configure_plot_axes("cv")
+        self._rebuilding_top_view = True
+
+        self.plot_widget_top.clear()
+        if self.plot_widget_bottom:
+            self.plot_widget_bottom.clear()
+        self._marker_items.clear()
+        self._measure_dots.clear()
+        self._clear_hover_data()
+
+        series_data = self._read_cv_measurement_series()
+        if not series_data:
+            self._show_no_data_msg()
+            self._rebuilding_top_view = False
+            return
+
+        colors = [
+            (0, 0, 128),
+            (33, 150, 243),
+            (76, 175, 80),
+            (244, 67, 54),
+            (156, 39, 176),
+            (255, 152, 0),
+        ]
+        hover_x = []
+        hover_y = []
+
+        file_color_map = {}
+        legend_file_labels = set()
+        next_color_index = 0
+        for label, times_s, potentials_v, currents_a in series_data:
+            file_label = label.split(" - ", 1)[0]
+            if file_label not in file_color_map:
+                file_color_map[file_label] = colors[next_color_index % len(colors)]
+                next_color_index += 1
+            color = file_color_map[file_label]
+            legend_label = None
+            if file_label not in legend_file_labels:
+                legend_label = file_label
+                legend_file_labels.add(file_label)
+            pen = pg.mkPen(color=color, width=1)
+            self.plot_widget_top.plot(
+                potentials_v,
+                currents_a,
+                pen=pen,
+                name=legend_label,
+            )
+            hover_x.extend(potentials_v)
+            hover_y.extend(currents_a)
+
+        self._set_hover_data(
+            self.plot_widget_top,
+            hover_x,
+            hover_y,
+            x_kind="potential",
+        )
+        self._plot_cv_bottom_pad_data()
+
+        if reset_view or not self._manual_top_view_active or self._saved_top_view_range is None:
+            self._auto_fit_top_view()
+            if self.plot_widget_bottom and self._hover_points.get(self.plot_widget_bottom):
+                self.plot_widget_bottom.enableAutoRange()
+                self.plot_widget_bottom.autoRange()
+        else:
+            self._apply_saved_top_view_range()
+
+        self._rebuilding_top_view = False
+
+    def _plot_cv_bottom_pad_data(self):
+        if not self.plot_widget_bottom:
+            return
+
+        series_data = self._read_pad_plot_series(self._session)
+        if not series_data:
+            self._show_bottom_no_data_msg("PAD verisi bulunamadı.")
+            return
+
+        bottom_timestamps = []
+        bottom_currents = []
+        for series_item in series_data:
+            _label, series_timestamps, series_currents, mean_kind = self._normalize_pad_series_item(series_item)
+            mean_group_size = 21 if mean_kind == "continuous" else 5
+            centered_mean = mean_kind == "continuous"
+            mean_ts, mean_cur = self._build_mean_series(
+                series_timestamps,
+                series_currents,
+                group_size=mean_group_size,
+                centered=centered_mean,
+            )
+            bottom_timestamps.extend(mean_ts)
+            bottom_currents.extend(mean_cur)
+            self.plot_widget_bottom.plot(
+                mean_ts,
+                mean_cur,
+                pen=None,
+                symbol="o",
+                symbolSize=5,
+                symbolBrush=pg.mkBrush(_C_DATA_LINE),
+                symbolPen=pg.mkPen(color=_C_DATA_LINE, width=1),
+                name=None,
+            )
+
+        if bottom_timestamps:
+            pairs = sorted(
+                zip(bottom_timestamps, bottom_currents),
+                key=lambda item: item[0],
+            )
+            bottom_timestamps = [item[0] for item in pairs]
+            bottom_currents = [item[1] for item in pairs]
+
+        self._set_hover_data(
+            self.plot_widget_bottom,
+            bottom_timestamps,
+            bottom_currents,
+        )
+
+    def _has_cv_measurements(self) -> bool:
+        return bool(self._find_cv_measurement_files())
+
+    def _find_cv_measurement_files(self) -> List[str]:
+        if self._dropsens_pad or self._history_sessions or self._session is None:
+            return []
+        measurements_dir = getattr(self._session, "measurements_dir", "")
+        if not measurements_dir or not os.path.isdir(measurements_dir):
+            return []
+        try:
+            files = [
+                os.path.join(measurements_dir, name)
+                for name in os.listdir(measurements_dir)
+                if name.lower().endswith(".mtc")
+            ]
+        except OSError:
+            return []
+        files.sort(key=lambda path: os.path.getctime(path))
+        return files
+
+    def _read_cv_measurement_series(self):
+        series = []
+        for path in self._find_cv_measurement_files():
+            try:
+                measurement = read_cv_measurement(path)
+            except MeasurementDataError as exc:
+                self.log_signal.emit(f"Viewer CV verisi okuma hatasi: {exc}")
+                continue
+
+            file_label = os.path.splitext(os.path.basename(path))[0]
+            for idx, curve in enumerate(measurement.curves, start=1):
+                times_s = curve.points.get("time", [])
+                potentials_v = curve.points.get("potential", [])
+                currents_ua = curve.points.get("i1", [])
+                total = min(len(potentials_v), len(currents_ua))
+                if total <= 0:
+                    continue
+                if times_s:
+                    times_s = times_s[:total]
+                else:
+                    times_s = list(range(total))
+                curve_label = curve.title or curve.name or f"Curve {idx}"
+                label = f"{file_label} - {curve_label}" if curve_label else file_label
+                series.append((
+                    label,
+                    times_s,
+                    potentials_v[:total],
+                    [value * _CURRENT_UA_TO_A for value in currents_ua[:total]],
+                ))
+        return series
+
+    def _normalize_pad_series_item(self, item):
+        if len(item) >= 4:
+            return item
+        label, timestamps, currents = item
+        mean_kind = "continuous" if self._dropsens_pad or self._is_continuous_pad_view() else "discrete"
+        return label, timestamps, currents, mean_kind
+
+    def _read_pad_plot_series(self, session: MeasurementSession):
+        """Read PAD-like session data separately from CV files."""
+        if session is None:
+            return []
+
+        series = []
+        xlsx_path = find_session_xlsx_path(session)
+        if xlsx_path:
+            try:
+                timestamps, currents = read_xlsx_measurement_series(
+                    xlsx_path,
+                    current_scale=_CURRENT_UA_TO_A,
+                )
+                if timestamps:
+                    series.append(("Discrete PAD", timestamps, currents, "discrete"))
+            except MeasurementDataError as exc:
+                self.log_signal.emit(f"Viewer xlsx verisi okuma hatasi: {exc}")
+        else:
+            try:
+                timestamps, currents = read_csv_measurement_series(
+                    session.measurements_dir,
+                    current_scale=_CURRENT_UA_TO_A,
+                )
+                if timestamps:
+                    series.append(("Discrete PAD", timestamps, currents, "discrete"))
+            except MeasurementDataError:
+                pass
+
+        try:
+            timestamps, currents = read_session_pad_segment_series(
+                session.measurements_dir,
+                current_scale=_CURRENT_UA_TO_A,
+            )
+            if timestamps:
+                series.append(("Continuous PAD", timestamps, currents, "continuous"))
+        except MeasurementDataError:
+            pass
+
+        return series
+
     def _read_measurement_series(self):
         """Tek session veya history modu icin olcum serilerini okur."""
         if self._dropsens_pad:
             timestamps, currents = self._read_dropsens_pad_data()
             if not timestamps:
                 return []
-            return [("Current", timestamps, currents)]
+            return [("Current", timestamps, currents, "continuous")]
 
         if self._history_sessions:
             all_series = []
@@ -1002,13 +1276,15 @@ class ViewerTab(QWidget):
                     )
                     continue
                 label = session.created_at.strftime("%Y-%m-%d %H:%M:%S")
-                all_series.append((label, timestamps, currents))
+                mean_kind = (
+                    "continuous"
+                    if getattr(session, "measurement_mode", "") == MEASUREMENT_MODE_CONTINUOUS_PAD
+                    else "discrete"
+                )
+                all_series.append((label, timestamps, currents, mean_kind))
             return all_series
 
-        timestamps, currents = self._read_session_measurement_data(self._session)
-        if not timestamps:
-            return []
-        return [("Current", timestamps, currents)]
+        return self._read_pad_plot_series(self._session)
 
     def _is_continuous_pad_view(self) -> bool:
         if self._session is not None:
@@ -1495,6 +1771,21 @@ class ViewerTab(QWidget):
         text.setPos(x_mid, 0)
         self._apply_empty_time_axis(x_start, x_end)
 
+    def _show_bottom_no_data_msg(self, message: str):
+        """Alt grafikte veri yoksa sade bir mesaj gösterir."""
+        if not self.plot_widget_bottom:
+            return
+        x_start, x_end, x_mid = self._empty_time_axis_range()
+        text = pg.TextItem(
+            message,
+            color=(150, 150, 150),
+            anchor=(0.5, 0.5),
+        )
+        self.plot_widget_bottom.addItem(text)
+        text.setPos(x_mid, 0)
+        self.plot_widget_bottom.getViewBox().disableAutoRange(axis="x")
+        self.plot_widget_bottom.setXRange(x_start, x_end, padding=0)
+
     def _empty_time_axis_range(self):
         """Veri yokken epoch yerine bugunun tarih araligini kullanir."""
         today_start = datetime.now().replace(
@@ -1531,13 +1822,19 @@ class ViewerTab(QWidget):
         )
         self._hover_hooks[plot_widget] = proxy
 
-    def _set_hover_data(self, plot_widget, timestamps, currents):
+    def _set_hover_data(self, plot_widget, timestamps, currents, x_kind: str = "time"):
         """Hover için kullanılacak veri serisini saklar."""
         if not plot_widget:
             return
+        x_values = list(timestamps)
         self._hover_points[plot_widget] = {
-            "x": list(timestamps),
+            "x": x_values,
             "y": list(currents),
+            "x_kind": x_kind,
+            "sorted": all(
+                x_values[idx] <= x_values[idx + 1]
+                for idx in range(max(0, len(x_values) - 1))
+            ),
         }
         self._hover_state[plot_widget] = {
             "index": None,
@@ -1614,7 +1911,11 @@ class ViewerTab(QWidget):
 
         x_value = point_data["x"][nearest_index]
         y_value = point_data["y"][nearest_index]
-        label_text = self._format_data_point_hover_text(x_value, y_value)
+        label_text = self._format_data_point_hover_text(
+            x_value,
+            y_value,
+            point_data.get("x_kind", "time"),
+        )
         self._show_hover_label(plot_widget, nearest_index, label_text, pos)
 
     def _show_hover_label(self, plot_widget, point_key,
@@ -1671,12 +1972,16 @@ class ViewerTab(QWidget):
             return None
 
         mouse_point = plot_widget.getViewBox().mapSceneToView(scene_pos)
-        insert_at = bisect_left(x_values, mouse_point.x())
+        if point_data.get("sorted", True):
+            insert_at = bisect_left(x_values, mouse_point.x())
+            candidate_start = max(0, insert_at - 3)
+            candidate_end = min(len(x_values), insert_at + 3)
+        else:
+            candidate_start = 0
+            candidate_end = len(x_values)
 
         best_index = None
         best_distance = None
-        candidate_start = max(0, insert_at - 3)
-        candidate_end = min(len(x_values), insert_at + 3)
 
         for idx in range(candidate_start, candidate_end):
             scene_point = plot_widget.getViewBox().mapViewToScene(
@@ -1740,8 +2045,23 @@ class ViewerTab(QWidget):
             return None
         return best_item
 
-    def _format_data_point_hover_text(self, timestamp: float, current_a: float) -> str:
+    def _format_data_point_hover_text(
+        self,
+        timestamp: float,
+        current_a: float,
+        x_kind: str = "time",
+    ) -> str:
         """Measurement point hover bilgisini ortak iki satirli forma cevirir."""
+        if x_kind == "potential":
+            return (
+                f"Potential: {timestamp:.4f} V\n"
+                f"Current: {current_a / _CURRENT_UA_TO_A:.3f} uA"
+            )
+        if x_kind == "seconds":
+            return (
+                f"Time: {timestamp:.3f} s\n"
+                f"Current: {current_a / _CURRENT_UA_TO_A:.3f} uA"
+            )
         return self._format_hover_text({
             "timestamp": timestamp,
             "value": f"{current_a / _CURRENT_UA_TO_A:.3f} uA",
