@@ -20,6 +20,7 @@ Kullanım:
 """
 
 import os
+import tempfile
 from datetime import datetime, timedelta
 from typing import Optional, List, Tuple
 
@@ -48,6 +49,18 @@ class AggregatorError(Exception):
 # ─────────────────────────────────────────────────────────────────
 #  Düşük seviye: GUI bağımsız
 # ─────────────────────────────────────────────────────────────────
+
+def _is_output_current(csv_files: List[str], output_path: str) -> bool:
+    """Return True when the existing xlsx is newer than all source CSV files."""
+    if not os.path.isfile(output_path):
+        return False
+    try:
+        output_mtime = os.path.getmtime(output_path)
+        newest_csv_mtime = max(os.path.getmtime(path) for path in csv_files)
+    except OSError:
+        return False
+    return output_mtime >= newest_csv_mtime
+
 
 def _write_xlsx(rows: List[Tuple[datetime, float]], output_path: str):
     """
@@ -90,7 +103,31 @@ def _write_xlsx(rows: List[Tuple[datetime, float]], output_path: str):
     ws.column_dimensions["A"].width = 22
     ws.column_dimensions["B"].width = 16
 
-    wb.save(output_path)
+    output_dir = os.path.dirname(output_path) or "."
+    output_name = os.path.basename(output_path)
+    tmp_path = ""
+    try:
+        with tempfile.NamedTemporaryFile(
+            prefix=f".{output_name}.",
+            suffix=".tmp.xlsx",
+            dir=output_dir,
+            delete=False,
+        ) as tmp:
+            tmp_path = tmp.name
+
+        wb.save(tmp_path)
+        os.replace(tmp_path, output_path)
+        tmp_path = ""
+    except OSError as exc:
+        raise AggregatorError(f"Failed to write xlsx: {output_path}\n{exc}")
+    finally:
+        if hasattr(wb, "close"):
+            wb.close()
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
 
 def aggregate(
@@ -121,6 +158,10 @@ def aggregate(
     except MeasurementDataError as e:
         raise AggregatorError(str(e))
 
+    output_path = os.path.join(measurements_dir, f"{part_number}.xlsx")
+    if _is_output_current(csv_files, output_path):
+        return output_path
+
     all_rows: List[Tuple[datetime, float]] = []
     for path in csv_files:
         try:
@@ -136,7 +177,6 @@ def aggregate(
     # ama güvenli olmak için)
     all_rows.sort(key=lambda r: r[0])
 
-    output_path = os.path.join(measurements_dir, f"{part_number}.xlsx")
     _write_xlsx(all_rows, output_path)
     return output_path
 

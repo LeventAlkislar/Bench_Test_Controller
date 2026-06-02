@@ -31,6 +31,8 @@ Kullanım (PackagePanel içinde):
     self.sm.stop()               # kullanıcı durdurdu veya hata
 """
 
+import traceback
+
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 
 from bench_test.config import AGGREGATE_INTERVAL_MS
@@ -66,6 +68,7 @@ class SessionStateMachine(QObject):
         super().__init__(parent)
         self._state  : str                          = IDLE
         self._session: MeasurementSession | None    = None
+        self._aggregate_running = False
 
         # Periyodik aggregate timer — sadece RUNNING'de aktif
         self._timer = QTimer(self)
@@ -166,26 +169,35 @@ class SessionStateMachine(QObject):
         """
         if not self._session:
             return
-        if getattr(self._session, "measurement_mode", "") == MEASUREMENT_MODE_CONTINUOUS_PAD:
+
+        if self._aggregate_running:
             if not periodic:
-                debug_log("Continuous PAD: xlsx aggregate skipped; .mtp segments remain available in Viewer.")
-            if self._state == AGGREGATING:
-                self._on_agg_done()
+                self._log("⚠ Aggregate already running; skipped duplicate request.")
             return
 
+        self._aggregate_running = True
         try:
-            agg = Aggregator(self._session)
-            xlsx_path = agg.run_silent(offset_hours=0.0)
-            self._session.register_file("xlsx", xlsx_path)
-            self._session.save()
-            self.aggregate_done.emit(xlsx_path)
-        except AggregatorError:
-            if not periodic:
-                self._log("⚠ Aggregate: CSV not found or could not be read.")
-        except Exception as e:
-            if not periodic:
-                self._log(f"✗ Aggregate error: {e}")
+            if getattr(self._session, "measurement_mode", "") == MEASUREMENT_MODE_CONTINUOUS_PAD:
+                if not periodic:
+                    debug_log("Continuous PAD: xlsx aggregate skipped; .mtp segments remain available in Viewer.")
+                return
+
+            try:
+                agg = Aggregator(self._session)
+                xlsx_path = agg.run_silent(offset_hours=0.0)
+                self._session.register_file("xlsx", xlsx_path)
+                self._session.save()
+                self.aggregate_done.emit(xlsx_path)
+            except AggregatorError:
+                debug_log("AggregateError:\n" + traceback.format_exc())
+                if not periodic:
+                    self._log("⚠ Aggregate: CSV not found or could not be read.")
+            except Exception as e:
+                debug_log("Aggregate exception:\n" + traceback.format_exc())
+                if not periodic:
+                    self._log(f"✗ Aggregate error: {e}")
         finally:
+            self._aggregate_running = False
             if self._state == AGGREGATING:
                 self._on_agg_done()
 
