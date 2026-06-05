@@ -34,6 +34,9 @@ from PyQt6.QtGui import QFont, QColor
 try:
     import pyqtgraph as pg
     from pyqtgraph import DateAxisItem
+    from bench_test.pyqtgraph_downsample_patch import install_offset_downsample
+
+    install_offset_downsample()
     _PG_OK = True
 except ImportError:
     _PG_OK = False
@@ -200,6 +203,14 @@ class ViewerTab(QWidget):
         self._vline_hover_points: list = []
         self._restoring_response_delay = False
         self._plot_axis_mode = "time"
+        self._polling_live = False
+        self._viewer_mode = "pad"
+        self._viewer_mode_user_selected = False
+        self.view_mode_widget = None
+        self.view_pad_btn = None
+        self.view_cv_btn = None
+        self.top_group = None
+        self.bottom_group = None
         self.plot_widget_top = None
         self.plot_widget_bottom = None
 
@@ -342,6 +353,25 @@ class ViewerTab(QWidget):
         pg.setConfigOption("foreground", "k")   # siyah yazı
 
         # Zaman ekseni için dikey etiketli tarih ekseni
+        self.view_mode_widget = QWidget()
+        view_mode_layout = QHBoxLayout(self.view_mode_widget)
+        view_mode_layout.setContentsMargins(0, 0, 0, 4)
+        view_mode_layout.setSpacing(6)
+        view_mode_layout.addWidget(QLabel("View:"))
+
+        self.view_pad_btn = QPushButton("PAD")
+        self.view_pad_btn.setCheckable(True)
+        self.view_pad_btn.clicked.connect(lambda: self._on_view_mode_selected("pad"))
+        view_mode_layout.addWidget(self.view_pad_btn)
+
+        self.view_cv_btn = QPushButton("CV")
+        self.view_cv_btn.setCheckable(True)
+        self.view_cv_btn.clicked.connect(lambda: self._on_view_mode_selected("cv"))
+        view_mode_layout.addWidget(self.view_cv_btn)
+        view_mode_layout.addStretch(1)
+        self.view_mode_widget.setVisible(False)
+        layout.addWidget(self.view_mode_widget)
+
         date_axis = VerticalDateAxisItem(orientation="bottom")
         self.plot_widget_top = pg.PlotWidget(axisItems={"bottom": date_axis})
         self.plot_widget_top.setLabel("left",   "Current", units="A")
@@ -365,6 +395,7 @@ class ViewerTab(QWidget):
         self.legend = self.plot_widget_top.addLegend(offset=(10, 10))
 
         top_group_layout.addWidget(self.plot_widget_top)
+        self.top_group = top_group
         layout.addWidget(top_group)
 
         # ── Bottom GroupBox (panel) ──────────────────────
@@ -398,6 +429,7 @@ class ViewerTab(QWidget):
         self._apply_empty_time_axis()
 
         bottom_group_layout.addWidget(self.plot_widget_bottom)
+        self.bottom_group = bottom_group
         layout.addWidget(bottom_group)
 
         layout.addStretch(1)
@@ -450,13 +482,44 @@ class ViewerTab(QWidget):
         self._poll_timer.setInterval(POLL_INTERVAL_MS)
         self._poll_timer.timeout.connect(self._on_poll)
 
+    def _is_pollable_session(self, session: Optional[MeasurementSession] = None) -> bool:
+        session = session or self._session
+        if session is None:
+            return False
+        if session.status != SessionStatus.IN_PROGRESS:
+            return False
+        return getattr(session, "measurement_mode", "") != MEASUREMENT_MODE_CONTINUOUS_PAD
+
+    def _sync_polling_for_session(self, live: bool = False):
+        continuous_pad = (
+            self._session is not None
+            and getattr(self._session, "measurement_mode", "") == MEASUREMENT_MODE_CONTINUOUS_PAD
+        )
+        if self._is_pollable_session():
+            self._polling_live = live
+            label = "Live mode" if live else "Archive live monitor"
+            self.live_lbl.setText(f"{label} ({POLL_INTERVAL_MS // 1000}sn)")
+            self.delete_btn.setEnabled(False)
+            if not self._poll_timer.isActive():
+                self._poll_timer.start()
+            return
+
+        self._poll_timer.stop()
+        self._polling_live = False
+        self.live_lbl.setText("Continuous PAD (.mtp)" if continuous_pad else "")
+        if self._session is not None:
+            self.delete_btn.setEnabled(self._session.status != SessionStatus.IN_PROGRESS)
+
     def _on_poll(self):
         """10sn'de bir: canlı session gösteriliyorsa mevcut veriyi yeniden yükle."""
         if not self._session:
+            self._poll_timer.stop()
             return
-        if self._session.status != SessionStatus.IN_PROGRESS:
+        if not self._is_pollable_session():
+            self._sync_polling_for_session(live=self._polling_live)
             return
         self._refresh(reset_view=False)
+        self._sync_polling_for_session(live=self._polling_live)
 
     # ── Session yükleme ───────────────────────────────────────────
 
@@ -474,7 +537,7 @@ class ViewerTab(QWidget):
         if mw:
             mw.switch_display(session, "active")
             return
-        self._load_session(session)
+        self._load_session(session, live=True)
 
     def _get_main_window(self):
         """MainWindow referansini parent zincirinden bul."""
@@ -600,6 +663,7 @@ class ViewerTab(QWidget):
         self._session = None
         self._history_sessions = []
         self._dropsens_pad = measurement
+        self._viewer_mode_user_selected = False
         self._parse_result = None
         self._poll_timer.stop()
         self.live_lbl.setText("")
@@ -611,11 +675,12 @@ class ViewerTab(QWidget):
             mw.set_part_banner(measurement.part_number)
 
 
-    def _load_session(self, session: MeasurementSession):
+    def _load_session(self, session: MeasurementSession, live: bool = False):
         """Session nesnesini set eder ve grafiği yeniler."""
         self._session = session
         self._history_sessions = []
         self._dropsens_pad = None
+        self._viewer_mode_user_selected = False
         self.restore_response_delay(getattr(session, "experiment_params", {}))
 
         # Canlı mod: sadece IN_PROGRESS iken
@@ -632,12 +697,14 @@ class ViewerTab(QWidget):
             self.delete_btn.setEnabled(session.status != SessionStatus.IN_PROGRESS)
 
         self._refresh(reset_view=True)
+        self._sync_polling_for_session(live=live)
 
     def render_history(self, sessions: List[MeasurementSession]) -> None:
         """Bir part altindaki tum session verilerini yukler."""
         self._session = None
         self._history_sessions = list(sessions)
         self._dropsens_pad = None
+        self._viewer_mode_user_selected = False
         self._poll_timer.stop()
         self.live_lbl.setText("")
         self.delete_btn.setEnabled(False)
@@ -655,23 +722,79 @@ class ViewerTab(QWidget):
         MainWindow.switch_display() tarafindan cagrilir.
         live=True ise poll_timer baslatilir.
         """
-        self._load_session(session)
+        self._load_session(session, live=live)
         self._set_plot_titles(session.part_number)
-        if live and not self._poll_timer.isActive():
+        if live and self._is_pollable_session() and not self._poll_timer.isActive():
             self.live_lbl.setText(f"⟳ Canlı mod ({POLL_INTERVAL_MS // 1000}sn)")
 
     def _set_plot_titles(self, part_text: str = ""):
         """Part bilgisini grafik başlıklarına yazar."""
         title_opts = {"color": "k", "size": "10pt", "bold": True}
-        cv_view = self._has_cv_measurements()
+        cv_view = self._viewer_mode == "cv"
         if self.plot_widget_top:
             suffix = "CV Potential-Current" if cv_view else "Raw"
             title = f"{part_text} - {suffix}" if part_text else ""
             self.plot_widget_top.setTitle(title, **title_opts)
         if self.plot_widget_bottom:
-            suffix = "PAD Mean" if cv_view else "Mean"
-            title = f"{part_text} - {suffix}" if part_text else ""
+            suffix = "" if cv_view else "Mean"
+            title = f"{part_text} - {suffix}" if part_text and suffix else ""
             self.plot_widget_bottom.setTitle(title, **title_opts)
+
+    def _on_view_mode_selected(self, mode: str):
+        if mode not in ("pad", "cv"):
+            return
+        if mode == "cv" and not self._has_cv_measurements():
+            self._sync_view_mode_controls()
+            return
+        if mode == "pad" and not self._has_pad_measurements():
+            self._sync_view_mode_controls()
+            return
+        self._viewer_mode = mode
+        self._viewer_mode_user_selected = True
+        self._sync_view_mode_controls()
+        self._reset_auto_follow()
+        self._refresh(reset_view=True)
+        self._set_plot_titles(self._current_part_title())
+
+    def _current_part_title(self) -> str:
+        if self._session is not None:
+            return self._session.part_number
+        if self._history_sessions:
+            return f"{self._history_sessions[0].part_number} [session: {len(self._history_sessions)}]"
+        if self._dropsens_pad:
+            return self._dropsens_pad.part_number
+        return ""
+
+    def _sync_view_mode_options(self):
+        has_pad = self._has_pad_measurements()
+        has_cv = self._has_cv_measurements()
+
+        if has_pad and has_cv:
+            if not self._viewer_mode_user_selected or self._viewer_mode not in ("pad", "cv"):
+                self._viewer_mode = "pad"
+        elif has_cv:
+            self._viewer_mode = "cv"
+            self._viewer_mode_user_selected = False
+        else:
+            self._viewer_mode = "pad"
+            if not has_pad:
+                self._viewer_mode_user_selected = False
+
+        self._sync_view_mode_controls(has_pad=has_pad, has_cv=has_cv)
+
+    def _sync_view_mode_controls(self, has_pad: bool | None = None, has_cv: bool | None = None):
+        if not self.view_mode_widget or not self.view_pad_btn or not self.view_cv_btn:
+            return
+        if has_pad is None:
+            has_pad = self._has_pad_measurements()
+        if has_cv is None:
+            has_cv = self._has_cv_measurements()
+        mixed = has_pad and has_cv
+        self.view_mode_widget.setVisible(mixed)
+        self.view_pad_btn.setEnabled(has_pad)
+        self.view_cv_btn.setEnabled(has_cv)
+        self.view_pad_btn.setChecked(self._viewer_mode == "pad")
+        self.view_cv_btn.setChecked(self._viewer_mode == "cv")
 
     def _refresh(self, reset_view: bool = False):
         """Veriyi yeniden okur ve grafiği günceller."""
@@ -704,6 +827,7 @@ class ViewerTab(QWidget):
             if refreshed_sessions:
                 self._history_sessions = refreshed_sessions
 
+        self._sync_view_mode_options()
         self._update_meta()
         self._load_log()
         self._plot_data(reset_view=reset_view)
@@ -895,6 +1019,18 @@ class ViewerTab(QWidget):
 
         self._plot_axis_mode = mode
 
+    def _apply_graph_layout_for_mode(self, mode: str):
+        if not self.plot_widget_top:
+            return
+        if mode == "cv":
+            if self.bottom_group:
+                self.bottom_group.setVisible(False)
+            self.plot_widget_top.setMaximumHeight(16777215)
+        else:
+            if self.bottom_group:
+                self.bottom_group.setVisible(True)
+            self.plot_widget_top.setMaximumHeight(520)
+
     def _plot_data(self, reset_view: bool = False):
         if not self.plot_widget_top:
             return
@@ -903,10 +1039,11 @@ class ViewerTab(QWidget):
             self._manual_top_view_active = False
             self._saved_top_view_range = None
 
-        if self._has_cv_measurements():
+        if self._viewer_mode == "cv" and self._has_cv_measurements():
             self._plot_cv_data(reset_view=reset_view)
             return
 
+        self._apply_graph_layout_for_mode("pad")
         self._configure_plot_axes("time")
         self._rebuilding_top_view = True
 
@@ -966,7 +1103,7 @@ class ViewerTab(QWidget):
         # Ana seri — kaynak Current uA gelir; grafikte A olarak çizilir.
         for series_item in series_data:
             _label, series_timestamps, series_currents, _mean_kind = self._normalize_pad_series_item(series_item)
-            self.plot_widget_top.plot(
+            series_curve = self.plot_widget_top.plot(
                 series_timestamps,
                 series_currents,
                 pen=None,
@@ -976,6 +1113,7 @@ class ViewerTab(QWidget):
                 symbolPen=pg.mkPen(color=_C_DATA_LINE, width=1),
                 name=None,
             )
+            series_curve.opts["movingAverageSkip"] = True
 
         self.top_curve = self.plot_widget_top.plot(
             timestamps,
@@ -987,6 +1125,7 @@ class ViewerTab(QWidget):
             symbolPen=pg.mkPen(color=_C_DATA_LINE, width=1),
             name=None
         )
+        self.top_curve.opts["movingAverageSource"] = True
 
 
         # ── Bottom grafik: downsample edilmiş veri ─────────────────
@@ -1001,7 +1140,7 @@ class ViewerTab(QWidget):
                     group_size=mean_group_size,
                     centered=centered_mean,
                 )
-                self.plot_widget_bottom.plot(
+                series_curve = self.plot_widget_bottom.plot(
                     mean_ts,
                     mean_cur,
                     pen=None,
@@ -1011,6 +1150,7 @@ class ViewerTab(QWidget):
                     symbolPen=pg.mkPen(color=_C_DATA_LINE, width=1),
                     name=None,
                 )
+                series_curve.opts["movingAverageSkip"] = True
             self.bottom_curve = self.plot_widget_bottom.plot(
                 bottom_timestamps,
                 bottom_currents,
@@ -1021,6 +1161,11 @@ class ViewerTab(QWidget):
                 symbolPen=pg.mkPen(color=_C_DATA_LINE, width=1),
                 name=None
             )
+            self.bottom_curve.opts["movingAverageSource"] = True
+
+        self.plot_widget_top.getPlotItem().updateMovingAverage()
+        if self.plot_widget_bottom:
+            self.plot_widget_bottom.getPlotItem().updateMovingAverage()
 
         # Marker çizgileri
         if self._parse_result:
@@ -1043,11 +1188,14 @@ class ViewerTab(QWidget):
         self._rebuilding_top_view = False
 
     def _plot_cv_data(self, reset_view: bool = False):
-        """Draw CV .mtc curves with potential-current and time-current axes."""
+        """Draw CV .mtc curves as a single potential-current view."""
+        self._apply_graph_layout_for_mode("cv")
         self._configure_plot_axes("cv")
         self._rebuilding_top_view = True
 
         self.plot_widget_top.clear()
+        if getattr(self, "legend", None):
+            self.legend.clear()
         if self.plot_widget_bottom:
             self.plot_widget_bottom.clear()
         self._marker_items.clear()
@@ -1100,13 +1248,9 @@ class ViewerTab(QWidget):
             hover_y,
             x_kind="potential",
         )
-        self._plot_cv_bottom_pad_data()
 
         if reset_view or not self._manual_top_view_active or self._saved_top_view_range is None:
             self._auto_fit_top_view()
-            if self.plot_widget_bottom and self._hover_points.get(self.plot_widget_bottom):
-                self.plot_widget_bottom.enableAutoRange()
-                self.plot_widget_bottom.autoRange()
         else:
             self._apply_saved_top_view_range()
 
@@ -1162,6 +1306,13 @@ class ViewerTab(QWidget):
 
     def _has_cv_measurements(self) -> bool:
         return bool(self._find_cv_measurement_files())
+
+    def _has_pad_measurements(self) -> bool:
+        if self._dropsens_pad is not None:
+            return True
+        if self._history_sessions:
+            return True
+        return bool(self._read_pad_plot_series(self._session))
 
     def _find_cv_measurement_files(self) -> List[str]:
         if self._dropsens_pad or self._history_sessions or self._session is None:
@@ -1743,6 +1894,10 @@ class ViewerTab(QWidget):
         self._session = None
         self._history_sessions = []
         self._parse_result = None
+        self._viewer_mode = "pad"
+        self._viewer_mode_user_selected = False
+        self._sync_view_mode_controls(has_pad=False, has_cv=False)
+        self._apply_graph_layout_for_mode("pad")
         self.session_lbl.setText("Oturum silindi")
         self.meta_lbl.setText("—")
         self.notes_edit.clear()
@@ -1751,6 +1906,8 @@ class ViewerTab(QWidget):
         self._set_plot_titles("")
         if self.plot_widget_top:
             self.plot_widget_top.clear()
+            if getattr(self, "legend", None):
+                self.legend.clear()
         if self.plot_widget_bottom:
             self.plot_widget_bottom.clear()
         self._apply_empty_time_axis()
@@ -2120,6 +2277,10 @@ class ViewerTab(QWidget):
         self._measure_range_hooks.clear()
         self._saved_top_view_range = None
         self._manual_top_view_active = False
+        self._viewer_mode = "pad"
+        self._viewer_mode_user_selected = False
+        self._sync_view_mode_controls(has_pad=False, has_cv=False)
+        self._apply_graph_layout_for_mode("pad")
 
         self._poll_timer.stop()
         self.live_lbl.setText("")
@@ -2134,6 +2295,8 @@ class ViewerTab(QWidget):
 
         if self.plot_widget_top:
             self.plot_widget_top.clear()
+            if getattr(self, "legend", None):
+                self.legend.clear()
         if self.plot_widget_bottom:
             self.plot_widget_bottom.clear()
         self._apply_empty_time_axis()

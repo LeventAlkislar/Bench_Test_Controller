@@ -47,7 +47,7 @@ DEFAULT_REPEAT_COUNT      = 1440
 DEFAULT_WAIT_DURATION_SEC = 47.5
 
 # ── Manuel DropSens bağlantı ayarları ─────────────────────────
-DROPSENS_COM_PORTS         = ["COM3", "COM10"]
+DROPSENS_COM_PORTS         = ["COM3", "COM4", "COM10"]
 MANUAL_CONNECTION_WINDOW   = "Manual Connection"
 ERROR_WINDOW               = "Error"
 MSG_NO_DEVICE              = "No device connected"

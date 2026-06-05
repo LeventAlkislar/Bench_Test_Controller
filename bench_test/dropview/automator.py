@@ -62,6 +62,7 @@ _IMG = {k: os.path.join(_IMG_DIR, v) for k, v in {
     "connected":                    "connected_status.png",
     "disconnected":                 "disconnected_status.png",
     "manual_conn_com3":             "manual_connection_com3.png",
+    "manual_conn_com4":             "manual_connection_com4.png",
     "manual_conn_com10":            "manual_connection_com10.png",
     "manual_conn_connect_btn":      "manual_connection_connect_btn.png",
     "manual_conn_dropdown_arrow":   "manual_connection_dropdown_arrow.png",
@@ -1165,7 +1166,11 @@ def _connect_manual(dv_hwnd, target_com: str, log_fn=None) -> str:
         _log(f"│  WARNING: COM port dropdown could not be opened: {e}")
         return "timeout"
 
-    com_key = "manual_conn_com3" if target_com == "COM3" else "manual_conn_com10"
+    com_key = {
+        "COM3": "manual_conn_com3",
+        "COM4": "manual_conn_com4",
+        "COM10": "manual_conn_com10",
+    }[target_com]
     try:
         cx, cy = find_on_screen(
             _IMG[com_key],
