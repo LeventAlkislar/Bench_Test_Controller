@@ -18,6 +18,7 @@ ViewerTab
 
 import os
 import shutil
+import math
 from bisect import bisect_left
 from datetime import datetime, timedelta
 from typing import Optional, List
@@ -35,8 +36,10 @@ try:
     import pyqtgraph as pg
     from pyqtgraph import DateAxisItem
     from bench_test.pyqtgraph_downsample_patch import install_offset_downsample
+    from bench_test.ui.visible_xlsx_exporter import register_visible_xlsx_exporter
 
     install_offset_downsample()
+    register_visible_xlsx_exporter()
     _PG_OK = True
 except ImportError:
     _PG_OK = False
@@ -213,6 +216,8 @@ class ViewerTab(QWidget):
         self.bottom_group = None
         self.plot_widget_top = None
         self.plot_widget_bottom = None
+        self.top_curve = None
+        self.bottom_curve = None
 
         self._build_ui()
         self._setup_poll_timer()
@@ -427,6 +432,7 @@ class ViewerTab(QWidget):
         self.plot_widget_bottom.setXLink(self.plot_widget_top)
         self.plot_widget_bottom.setYLink(self.plot_widget_top)
         self._apply_empty_time_axis()
+        self._install_visible_xlsx_export_provider()
 
         bottom_group_layout.addWidget(self.plot_widget_bottom)
         self.bottom_group = bottom_group
@@ -1035,6 +1041,9 @@ class ViewerTab(QWidget):
         if not self.plot_widget_top:
             return
 
+        self.top_curve = None
+        self.bottom_curve = None
+
         if reset_view:
             self._manual_top_view_active = False
             self._saved_top_view_range = None
@@ -1189,6 +1198,9 @@ class ViewerTab(QWidget):
 
     def _plot_cv_data(self, reset_view: bool = False):
         """Draw CV .mtc curves as a single potential-current view."""
+        self.top_curve = None
+        self.bottom_curve = None
+
         self._apply_graph_layout_for_mode("cv")
         self._configure_plot_axes("cv")
         self._rebuilding_top_view = True
@@ -1526,6 +1538,147 @@ class ViewerTab(QWidget):
             mean_currents.append(sum(chunk_currents) / len(chunk_currents))
 
         return mean_timestamps, mean_currents
+
+    def _install_visible_xlsx_export_provider(self):
+        """Expose Viewer visible data to the custom pyqtgraph XLSX exporter."""
+        for plot_widget in (self.plot_widget_top, self.plot_widget_bottom):
+            if not plot_widget:
+                continue
+            plot_item = plot_widget.getPlotItem()
+            plot_item._visible_xlsx_export_provider = self._build_visible_xlsx_export
+
+    def _build_visible_xlsx_export(self) -> dict:
+        if self._viewer_mode == "cv":
+            raise ValueError("Visible XLSX export sadece PAD zaman gorunumu icin kullanilabilir.")
+        if not self.plot_widget_top or not self.plot_widget_bottom:
+            raise ValueError("Export edilecek grafik bulunamadi.")
+
+        x_range = self.plot_widget_top.getViewBox().viewRange()[0]
+        x_min, x_max = sorted(x_range)
+
+        top_plot = self.plot_widget_top.getPlotItem()
+        bottom_plot = self.plot_widget_bottom.getPlotItem()
+        top_source = getattr(self, "top_curve", None)
+        bottom_source = getattr(self, "bottom_curve", None)
+        top_average = self._visible_average_curve(top_plot, top_source)
+        bottom_average = self._visible_average_curve(bottom_plot, bottom_source)
+
+        series = {
+            "top_pad": self._visible_curve_series(top_source, x_min, x_max),
+            "bottom_mean": self._visible_curve_series(bottom_source, x_min, x_max),
+            "top_average": self._visible_curve_series(top_average, x_min, x_max),
+            "bottom_average": self._visible_curve_series(bottom_average, x_min, x_max),
+        }
+        return {
+            "series": series,
+            "metadata": self._visible_export_metadata(
+                x_min,
+                x_max,
+                top_average is not None or bottom_average is not None,
+            ),
+        }
+
+    def _visible_average_curve(self, plot_item, source_curve):
+        if plot_item is None or source_curve is None:
+            return None
+        overlay_curves = getattr(plot_item, "_movingAverageCurves", {})
+        return overlay_curves.get(source_curve)
+
+    def _visible_curve_series(self, curve, x_min: float, x_max: float) -> dict:
+        if curve is None or not hasattr(curve, "getData"):
+            return {"x": [], "y": []}
+
+        data_x, data_y = curve.getData()
+        if data_x is None or data_y is None:
+            return {"x": [], "y": []}
+
+        result_x = []
+        result_y = []
+        total = min(len(data_x), len(data_y))
+        for idx in range(total):
+            try:
+                x_val = float(data_x[idx])
+                y_val = float(data_y[idx])
+            except (TypeError, ValueError):
+                continue
+            if not (math.isfinite(x_val) and math.isfinite(y_val)):
+                continue
+            if x_min <= x_val <= x_max:
+                result_x.append(x_val)
+                result_y.append(y_val / _CURRENT_UA_TO_A)
+        return {"x": result_x, "y": result_y}
+
+    def _visible_export_metadata(
+        self,
+        x_min: float,
+        x_max: float,
+        average_exported: bool,
+    ) -> list:
+        top_plot = self.plot_widget_top.getPlotItem() if self.plot_widget_top else None
+        bottom_plot = self.plot_widget_bottom.getPlotItem() if self.plot_widget_bottom else None
+        metadata = [
+            ("exported_at", datetime.now()),
+            ("visible_start", datetime.fromtimestamp(x_min)),
+            ("visible_end", datetime.fromtimestamp(x_max)),
+            ("viewer_mode", self._viewer_mode),
+            ("average_exported", average_exported),
+        ]
+        metadata.extend(self._plot_downsample_metadata(top_plot, "top"))
+        metadata.extend(self._plot_downsample_metadata(bottom_plot, "bottom"))
+        metadata.extend(self._plot_average_metadata(top_plot))
+        return metadata
+
+    def _plot_downsample_metadata(self, plot_item, prefix: str) -> list:
+        if plot_item is None or not hasattr(plot_item, "downsampleMode"):
+            return [
+                (f"{prefix}_downsample_enabled", False),
+            ]
+        try:
+            ds, auto, method, offset = plot_item.downsampleMode()
+        except Exception:
+            return [
+                (f"{prefix}_downsample_enabled", False),
+            ]
+        return [
+            (f"{prefix}_downsample_enabled", ds > 1 or bool(auto)),
+            (f"{prefix}_downsample_ds", ds),
+            (f"{prefix}_downsample_auto", bool(auto)),
+            (f"{prefix}_downsample_method", method),
+            (f"{prefix}_downsample_offset", offset),
+        ]
+
+    def _plot_average_metadata(self, plot_item) -> list:
+        ctrl = getattr(plot_item, "ctrl", None) if plot_item is not None else None
+        if ctrl is None or not hasattr(ctrl, "averageGroup"):
+            return [
+                ("average_enabled", False),
+            ]
+
+        method = ""
+        if hasattr(ctrl, "smoothingMethodCombo"):
+            method = ctrl.smoothingMethodCombo.currentData()
+        return [
+            ("average_enabled", ctrl.averageGroup.isChecked()),
+            ("average_method", method or "moving_average"),
+            (
+                "average_radius",
+                ctrl.movingAverageRadiusSpin.value()
+                if hasattr(ctrl, "movingAverageRadiusSpin")
+                else "",
+            ),
+            (
+                "savgol_polyorder",
+                ctrl.savgolPolySpin.value()
+                if hasattr(ctrl, "savgolPolySpin")
+                else "",
+            ),
+            (
+                "savgol_deriv",
+                ctrl.savgolDerivCombo.currentData()
+                if hasattr(ctrl, "savgolDerivCombo")
+                else "",
+            ),
+        ]
 
     def _draw_glucose_regions(self, data_timestamps: list):
         """Port A step geçişleri arasındaki bölgeleri porta göre renklendirir."""

@@ -44,13 +44,24 @@ def install_offset_downsample() -> None:
         if hasattr(ctrl, "downsampleOffsetSpin"):
             return
 
+        ctrl.smoothingMethodLabel = QtWidgets.QLabel(ctrl.averageGroup)
+        ctrl.smoothingMethodLabel.setObjectName("smoothingMethodLabel")
+        ctrl.smoothingMethodLabel.setText("Method:")
+        ctrl.gridLayout_5.addWidget(ctrl.smoothingMethodLabel, 1, 0, 1, 1)
+
+        ctrl.smoothingMethodCombo = QtWidgets.QComboBox(ctrl.averageGroup)
+        ctrl.smoothingMethodCombo.setObjectName("smoothingMethodCombo")
+        ctrl.smoothingMethodCombo.addItem("Moving Average", "moving_average")
+        ctrl.smoothingMethodCombo.addItem("Savitzky-Golay", "savitzky_golay")
+        ctrl.gridLayout_5.addWidget(ctrl.smoothingMethodCombo, 1, 1, 1, 1)
+
         ctrl.movingAverageRadiusLabel = QtWidgets.QLabel(ctrl.averageGroup)
         ctrl.movingAverageRadiusLabel.setObjectName("movingAverageRadiusLabel")
         ctrl.movingAverageRadiusLabel.setText("Window:")
         ctrl.movingAverageRadiusLabel.setToolTip(
             "Number of previous and next visible data points used for Average."
         )
-        ctrl.gridLayout_5.addWidget(ctrl.movingAverageRadiusLabel, 1, 0, 1, 1)
+        ctrl.gridLayout_5.addWidget(ctrl.movingAverageRadiusLabel, 2, 0, 1, 1)
 
         ctrl.movingAverageRadiusSpin = QtWidgets.QSpinBox(ctrl.averageGroup)
         ctrl.movingAverageRadiusSpin.setObjectName("movingAverageRadiusSpin")
@@ -61,7 +72,34 @@ def install_offset_downsample() -> None:
             "Window N: average each displayed point with up to N points before "
             "and N points after it."
         )
-        ctrl.gridLayout_5.addWidget(ctrl.movingAverageRadiusSpin, 1, 1, 1, 1)
+        ctrl.gridLayout_5.addWidget(ctrl.movingAverageRadiusSpin, 2, 1, 1, 1)
+
+        ctrl.savgolPolyLabel = QtWidgets.QLabel(ctrl.averageGroup)
+        ctrl.savgolPolyLabel.setObjectName("savgolPolyLabel")
+        ctrl.savgolPolyLabel.setText("Poly:")
+        ctrl.savgolPolyLabel.setToolTip("Savitzky-Golay polynomial degree.")
+        ctrl.gridLayout_5.addWidget(ctrl.savgolPolyLabel, 3, 0, 1, 1)
+
+        ctrl.savgolPolySpin = QtWidgets.QSpinBox(ctrl.averageGroup)
+        ctrl.savgolPolySpin.setObjectName("savgolPolySpin")
+        ctrl.savgolPolySpin.setMinimum(1)
+        ctrl.savgolPolySpin.setMaximum(10)
+        ctrl.savgolPolySpin.setValue(2)
+        ctrl.savgolPolySpin.setToolTip("Polynomial degree used by Savitzky-Golay.")
+        ctrl.gridLayout_5.addWidget(ctrl.savgolPolySpin, 3, 1, 1, 1)
+
+        ctrl.savgolDerivLabel = QtWidgets.QLabel(ctrl.averageGroup)
+        ctrl.savgolDerivLabel.setObjectName("savgolDerivLabel")
+        ctrl.savgolDerivLabel.setText("Deriv:")
+        ctrl.savgolDerivLabel.setToolTip("Savitzky-Golay derivative order.")
+        ctrl.gridLayout_5.addWidget(ctrl.savgolDerivLabel, 4, 0, 1, 1)
+
+        ctrl.savgolDerivCombo = QtWidgets.QComboBox(ctrl.averageGroup)
+        ctrl.savgolDerivCombo.setObjectName("savgolDerivCombo")
+        ctrl.savgolDerivCombo.addItem("0", 0)
+        ctrl.savgolDerivCombo.addItem("1", 1)
+        ctrl.savgolDerivCombo.addItem("2", 2)
+        ctrl.gridLayout_5.addWidget(ctrl.savgolDerivCombo, 4, 1, 1, 1)
 
         ctrl.downsampleOffsetLabel = QtWidgets.QLabel(ctrl.decimateGroup)
         ctrl.downsampleOffsetLabel.setObjectName("downsampleOffsetLabel")
@@ -81,6 +119,13 @@ def install_offset_downsample() -> None:
         ctrl.gridLayout_4.addWidget(ctrl.downsampleOffsetSpin, 4, 2, 1, 1)
 
         ctrl.movingAverageRadiusSpin.valueChanged.connect(
+            plot_item.updateMovingAverage
+        )
+        ctrl.smoothingMethodCombo.currentIndexChanged.connect(
+            plot_item.updateMovingAverage
+        )
+        ctrl.savgolPolySpin.valueChanged.connect(plot_item.updateMovingAverage)
+        ctrl.savgolDerivCombo.currentIndexChanged.connect(
             plot_item.updateMovingAverage
         )
         ctrl.downsampleOffsetSpin.valueChanged.connect(plot_item.updateDownsampling)
@@ -134,6 +179,13 @@ def install_offset_downsample() -> None:
         source_curve.opts["movingAverageRadius"] = (
             plot_item.ctrl.movingAverageRadiusSpin.value()
         )
+        source_curve.opts["smoothingMethod"] = (
+            plot_item.ctrl.smoothingMethodCombo.currentData()
+        )
+        source_curve.opts["savgolPolyorder"] = plot_item.ctrl.savgolPolySpin.value()
+        source_curve.opts["savgolDeriv"] = (
+            plot_item.ctrl.savgolDerivCombo.currentData()
+        )
 
         dataset = source_curve._getDisplayDataset()
         if dataset is None or len(dataset.x) == 0:
@@ -159,10 +211,19 @@ def install_offset_downsample() -> None:
             plot_item._movingAverageCurves = overlay_curves
 
         radius = source_curve.opts.get("movingAverageRadius", 5)
+        method = source_curve.opts.get("smoothingMethod", "moving_average")
+        smoothed_y = smooth_values(
+            dataset.x,
+            dataset.y,
+            method=method,
+            radius=radius,
+            polyorder=source_curve.opts.get("savgolPolyorder", 2),
+            deriv=source_curve.opts.get("savgolDeriv", 0),
+        )
         connect = dataset.connect if dataset.connect is not None else "all"
         overlay.setData(
             dataset.x,
-            moving_average(dataset.y, radius),
+            smoothed_y,
             connect=connect,
             stepMode=None,
         )
@@ -216,9 +277,33 @@ def install_offset_downsample() -> None:
         radius = 5
         if hasattr(self.ctrl, "movingAverageRadiusSpin"):
             radius = self.ctrl.movingAverageRadiusSpin.value()
+        if hasattr(self.ctrl, "smoothingMethodCombo"):
+            savgol_enabled = self.ctrl.smoothingMethodCombo.currentData() == "savitzky_golay"
+            self.ctrl.savgolPolyLabel.setEnabled(savgol_enabled)
+            self.ctrl.savgolPolySpin.setEnabled(savgol_enabled)
+            self.ctrl.savgolDerivLabel.setEnabled(savgol_enabled)
+            self.ctrl.savgolDerivCombo.setEnabled(savgol_enabled)
         for curve in self.curves:
             if hasattr(curve, "setMovingAverage") and not is_average_overlay(curve):
-                curve.setMovingAverage(enabled=enabled, radius=radius)
+                curve.setMovingAverage(
+                    enabled=enabled,
+                    radius=radius,
+                    method=(
+                        self.ctrl.smoothingMethodCombo.currentData()
+                        if hasattr(self.ctrl, "smoothingMethodCombo")
+                        else "moving_average"
+                    ),
+                    polyorder=(
+                        self.ctrl.savgolPolySpin.value()
+                        if hasattr(self.ctrl, "savgolPolySpin")
+                        else 2
+                    ),
+                    deriv=(
+                        self.ctrl.savgolDerivCombo.currentData()
+                        if hasattr(self.ctrl, "savgolDerivCombo")
+                        else 0
+                    ),
+                )
                 refresh_average_curve(self, curve)
 
     def patched_plotitem_set_downsampling(
@@ -292,6 +377,9 @@ def install_offset_downsample() -> None:
         self,
         enabled=None,
         radius=None,
+        method=None,
+        polyorder=None,
+        deriv=None,
     ):
         changed = False
         if enabled is not None:
@@ -303,6 +391,21 @@ def install_offset_downsample() -> None:
             radius = max(1, int(radius))
             if self.opts.get("movingAverageRadius", 5) != radius:
                 self.opts["movingAverageRadius"] = radius
+                changed = True
+        if method is not None:
+            method = str(method)
+            if self.opts.get("smoothingMethod", "moving_average") != method:
+                self.opts["smoothingMethod"] = method
+                changed = True
+        if polyorder is not None:
+            polyorder = max(0, int(polyorder))
+            if self.opts.get("savgolPolyorder", 2) != polyorder:
+                self.opts["savgolPolyorder"] = polyorder
+                changed = True
+        if deriv is not None:
+            deriv = max(0, min(2, int(deriv)))
+            if self.opts.get("savgolDeriv", 0) != deriv:
+                self.opts["savgolDeriv"] = deriv
                 changed = True
         if changed:
             invalidate_display_dataset(self)
@@ -342,6 +445,56 @@ def install_offset_downsample() -> None:
             where=window_counts > 0,
         )
         return result
+
+    def savitzky_golay(values_x, values_y, radius: int, polyorder: int, deriv: int):
+        if radius <= 0 or len(values_y) == 0:
+            return values_y
+
+        x = np.asarray(values_x, dtype=float)
+        y = np.asarray(values_y, dtype=float)
+        result = np.empty(len(y), dtype=float)
+        result.fill(np.nan)
+
+        for index in range(len(y)):
+            left = max(0, index - radius)
+            right = min(len(y), index + radius + 1)
+            window_x = x[left:right]
+            window_y = y[left:right]
+            finite = np.isfinite(window_x) & np.isfinite(window_y)
+            window_x = window_x[finite]
+            window_y = window_y[finite]
+            if len(window_y) <= deriv:
+                continue
+
+            local_polyorder = min(max(polyorder, deriv), len(window_y) - 1)
+            centered_x = window_x - x[index]
+            vandermonde = np.vander(
+                centered_x,
+                N=local_polyorder + 1,
+                increasing=True,
+            )
+            try:
+                coeffs, *_ = np.linalg.lstsq(vandermonde, window_y, rcond=None)
+            except np.linalg.LinAlgError:
+                continue
+            if deriv >= len(coeffs):
+                continue
+            result[index] = coeffs[deriv] * math.factorial(deriv)
+
+        return result
+
+    def smooth_values(
+        values_x,
+        values_y,
+        *,
+        method: str,
+        radius: int,
+        polyorder: int,
+        deriv: int,
+    ):
+        if method == "savitzky_golay":
+            return savitzky_golay(values_x, values_y, radius, polyorder, deriv)
+        return moving_average(values_y, radius)
 
     def patched_get_display_dataset(self):
         offset_enabled = (
