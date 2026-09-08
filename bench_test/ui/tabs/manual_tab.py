@@ -6,14 +6,15 @@ import serial.tools.list_ports
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QLineEdit, QPushButton, QComboBox, QSpinBox,
+    QLabel, QLineEdit, QPushButton, QComboBox, QSpinBox, QDoubleSpinBox,
     QGroupBox, QMessageBox, QScrollArea, QFrame, QTextEdit
 )
-from PyQt6.QtCore import pyqtSignal, Qt, QMetaObject, Q_ARG
+from PyQt6.QtCore import pyqtSignal, Qt, QMetaObject, Q_ARG, QTimer
 from PyQt6.QtGui import QFont
 
 from bench_test.valve.multiport import ValveController, SV01Protocol
 from bench_test.valve.injector import InjectorValveController
+from bench_test.pump import ArduinoPumpController
 from bench_test.dropview.controller import DropViewController
 from bench_test.utils.paths import get_value, remember_value
 from bench_test.ui.widgets import _btn, _lbl, _status_lbl
@@ -23,14 +24,17 @@ class ManualControlTab(QWidget):
     log_signal = pyqtSignal(str)
 
     def __init__(self, ctrl_a: ValveController, ctrl_b: InjectorValveController,
-                 dv_ctrl: DropViewController):
+                 dv_ctrl: DropViewController,
+                 pump_ctrl: ArduinoPumpController = None):
         super().__init__()
         self.ctrl_a = ctrl_a
         self.ctrl_b = ctrl_b
         self.dv_ctrl = dv_ctrl
+        self.pump_ctrl = pump_ctrl or ArduinoPumpController()
         self._build()
         self._restore_saved()
         self._refresh_ports()
+        self._pump_log_timer = None
 
         dv_ctrl.status_changed.connect(self._on_dv_status)
         dv_ctrl.status_changed.connect(self._update_summary)
@@ -55,6 +59,7 @@ class ManualControlTab(QWidget):
 
         layout.addWidget(self._build_valve_a())
         layout.addWidget(self._build_valve_b())
+        layout.addWidget(self._build_pump())
         layout.addWidget(self._build_dropsens())
         layout.addWidget(self._build_general())
         layout.addStretch()
@@ -280,6 +285,94 @@ class ManualControlTab(QWidget):
 
         return gb
 
+    # ── Peristaltic Pump ─────────────────────────────────────
+
+    def _build_pump(self):
+        gp = QGroupBox("Peristaltic Pump - Arduino Nano + MCP4725")
+        flp = QVBoxLayout(gp)
+
+        row_conn = QHBoxLayout()
+        row_conn.addWidget(QLabel("COM Port:"))
+        self.port_pump = QComboBox()
+        self.port_pump.setMinimumWidth(100)
+        row_conn.addWidget(self.port_pump)
+        row_conn.addWidget(QLabel("Baud: 115200"))
+        self.conn_pump_btn = _btn("Connect Pump", self._connect_pump, "#4CAF50")
+        self.disc_pump_btn = _btn("Disconnect Pump", self._disconnect_pump, "#F44336")
+        self.test_pump_btn = _btn("Status", self._query_pump, "#607D8B")
+        self.status_pump = _status_lbl()
+        self.disc_pump_btn.setEnabled(False)
+        self.test_pump_btn.setEnabled(False)
+        row_conn.addWidget(self.conn_pump_btn)
+        row_conn.addWidget(self.disc_pump_btn)
+        row_conn.addWidget(self.test_pump_btn)
+        row_conn.addWidget(self.status_pump)
+        row_conn.addStretch()
+        flp.addLayout(row_conn)
+
+        row_speed = QHBoxLayout()
+        row_speed.addWidget(QLabel("Speed mV (0-5000):"))
+        self.pump_mv_spin = QSpinBox()
+        self.pump_mv_spin.setRange(0, 5000)
+        self.pump_mv_spin.setSingleStep(100)
+        self.pump_mv_spin.setValue(500)
+        self.pump_mv_spin.setFixedWidth(90)
+        row_speed.addWidget(self.pump_mv_spin)
+        self.set_pump_mv_btn = _btn("Set mV", self._set_pump_mv, "#FF9800")
+        row_speed.addWidget(self.set_pump_mv_btn)
+
+        row_speed.addWidget(QLabel("Max RPM:"))
+        self.pump_max_rpm_spin = QDoubleSpinBox()
+        self.pump_max_rpm_spin.setRange(0.1, 5000.0)
+        self.pump_max_rpm_spin.setDecimals(1)
+        self.pump_max_rpm_spin.setValue(300.0)
+        self.pump_max_rpm_spin.setFixedWidth(90)
+        row_speed.addWidget(self.pump_max_rpm_spin)
+        self.set_pump_max_btn = _btn("Set Max", self._set_pump_max_rpm, "#795548")
+        row_speed.addWidget(self.set_pump_max_btn)
+
+        row_speed.addWidget(QLabel("RPM:"))
+        self.pump_rpm_spin = QDoubleSpinBox()
+        self.pump_rpm_spin.setRange(0.0, 5000.0)
+        self.pump_rpm_spin.setDecimals(1)
+        self.pump_rpm_spin.setValue(30.0)
+        self.pump_rpm_spin.setFixedWidth(90)
+        row_speed.addWidget(self.pump_rpm_spin)
+        self.set_pump_rpm_btn = _btn("Set RPM", self._set_pump_rpm, "#FF9800")
+        row_speed.addWidget(self.set_pump_rpm_btn)
+        row_speed.addStretch()
+        flp.addLayout(row_speed)
+
+        row_run = QHBoxLayout()
+        row_run.addWidget(QLabel("Pulse (ms):"))
+        self.pump_pulse_spin = QSpinBox()
+        self.pump_pulse_spin.setRange(1, 600000)
+        self.pump_pulse_spin.setSingleStep(100)
+        self.pump_pulse_spin.setValue(1000)
+        self.pump_pulse_spin.setFixedWidth(100)
+        row_run.addWidget(self.pump_pulse_spin)
+        self.pump_pulse_fwd_btn = _btn("Pulse FWD", lambda: self._pulse_pump("FWD"), "#2196F3")
+        self.pump_pulse_rev_btn = _btn("Pulse REV", lambda: self._pulse_pump("REV"), "#9C27B0")
+        self.pump_run_fwd_btn = _btn("Run FWD", lambda: self._run_pump("FWD"), "#4CAF50")
+        self.pump_run_rev_btn = _btn("Run REV", lambda: self._run_pump("REV"), "#4CAF50")
+        self.stop_pump_btn = _btn("Stop Pump", self._stop_pump, "#B71C1C")
+        for b in [
+            self.pump_pulse_fwd_btn, self.pump_pulse_rev_btn,
+            self.pump_run_fwd_btn, self.pump_run_rev_btn, self.stop_pump_btn,
+        ]:
+            row_run.addWidget(b)
+        row_run.addStretch()
+        flp.addLayout(row_run)
+
+        self.pump_state_lbl = QLabel("Pump: Not connected")
+        self.pump_state_lbl.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+        flp.addWidget(self.pump_state_lbl)
+        flp.addWidget(_lbl(
+            "Pump speed is controlled by MCP4725 VOUT -> Pump Pin 9. Stop/Direction use Nano D8/D7.",
+            color="#888"))
+        self._set_pump_controls(False)
+        return gp
+
     # ── DropSens ──────────────────────────────────────────────
 
     def _build_dropsens(self):
@@ -344,8 +437,11 @@ class ManualControlTab(QWidget):
         saved_a  = get_value("valve_a_port", "")
         saved_b  = get_value("valve_b_port", "")
         saved_dv = get_value("dropsens_com", "")
+        saved_pump = get_value("pump_com", "")
         if saved_a:  self.port_a.setCurrentText(saved_a)
         if saved_b:  self.port_b.setCurrentText(saved_b)
+        if saved_pump:
+            self.port_pump.setCurrentText(saved_pump)
         if saved_dv and self.port_dv.findText(saved_dv) >= 0:
             self.port_dv.setCurrentText(saved_dv)
 
@@ -355,7 +451,7 @@ class ManualControlTab(QWidget):
 
     def _refresh_ports(self):
         ports = [p.device for p in serial.tools.list_ports.comports()]
-        for combo in [self.port_a, self.port_b]:
+        for combo in [self.port_a, self.port_b, self.port_pump]:
             current = combo.currentText()
             combo.clear()
             combo.addItems(ports)
@@ -630,6 +726,104 @@ class ManualControlTab(QWidget):
             self.log_signal.emit(f"Valve B: {r.get('state_name', '')}")
 
     # ──────────────────────────────────────────────────────────
+    #  Peristaltic Pump
+    # ──────────────────────────────────────────────────────────
+
+    def _set_pump_controls(self, enabled: bool):
+        for b in [
+            self.test_pump_btn, self.set_pump_mv_btn, self.set_pump_max_btn,
+            self.set_pump_rpm_btn, self.pump_pulse_fwd_btn, self.pump_pulse_rev_btn,
+            self.pump_run_fwd_btn, self.pump_run_rev_btn, self.stop_pump_btn,
+        ]:
+            b.setEnabled(enabled)
+
+    def _connect_pump(self):
+        port = self.port_pump.currentText()
+        if not port:
+            QMessageBox.warning(self, "Warning", "Select a pump COM port")
+            return
+        self.log_signal.emit(f"Pump: Connecting to {port} @ 115200...")
+        ok = self.pump_ctrl.connect(port)
+        if not ok:
+            QMessageBox.critical(self, "Pump Connection Error", "Pump controller identity check failed.")
+            self.log_signal.emit("Pump connection failed")
+            return
+        self.status_pump.setText("● Connected")
+        self.status_pump.setStyleSheet("color:#4CAF50;")
+        self.conn_pump_btn.setEnabled(False)
+        self.disc_pump_btn.setEnabled(True)
+        self.port_pump.setEnabled(False)
+        self._set_pump_controls(True)
+        remember_value("pump_com", port)
+        self.log_signal.emit(f"Pump connected to {port}")
+        self._update_summary()
+        self._query_pump()
+
+    def _disconnect_pump(self):
+        self.pump_ctrl.disconnect()
+        self.status_pump.setText("● Disconnected")
+        self.status_pump.setStyleSheet("color:#F44336;")
+        self.conn_pump_btn.setEnabled(True)
+        self.disc_pump_btn.setEnabled(False)
+        self.port_pump.setEnabled(True)
+        self._set_pump_controls(False)
+        self.pump_state_lbl.setText("Pump: Not connected")
+        self.log_signal.emit("Pump disconnected")
+        self._update_summary()
+
+    def _pump_command(self, fn, label: str):
+        if not self.pump_ctrl.is_connected():
+            QMessageBox.warning(self, "Warning", "Pump not connected")
+            return []
+        try:
+            lines = fn()
+        except Exception as e:
+            QMessageBox.critical(self, "Pump Error", str(e))
+            self.log_signal.emit(f"Pump {label} failed: {e}")
+            return []
+        for line in lines:
+            self.log_signal.emit(f"Pump [{label}]: {line}")
+        self._log_pump_pending()
+        return lines
+
+    def _log_pump_pending(self):
+        for line in self.pump_ctrl.read_available():
+            self.log_signal.emit(f"Pump: {line}")
+            if line == "OK STOP TIMEOUT":
+                self.pump_state_lbl.setText("Pump: STOPPED")
+
+    def _query_pump(self):
+        lines = self._pump_command(self.pump_ctrl.status, "STATUS")
+        if lines:
+            self.pump_state_lbl.setText(lines[-1])
+
+    def _set_pump_mv(self):
+        mv = self.pump_mv_spin.value()
+        self._pump_command(lambda: self.pump_ctrl.set_speed_mv(mv), "SPEEDV")
+
+    def _set_pump_max_rpm(self):
+        rpm = self.pump_max_rpm_spin.value()
+        self._pump_command(lambda: self.pump_ctrl.set_max_rpm(rpm), "MAXRPM")
+
+    def _set_pump_rpm(self):
+        rpm = self.pump_rpm_spin.value()
+        self._pump_command(lambda: self.pump_ctrl.set_speed_rpm(rpm), "SPEED")
+
+    def _run_pump(self, direction: str):
+        self._pump_command(lambda: self.pump_ctrl.run(direction), f"RUN {direction}")
+        self.pump_state_lbl.setText(f"Pump: RUNNING {direction}")
+
+    def _pulse_pump(self, direction: str):
+        duration = self.pump_pulse_spin.value()
+        self._pump_command(lambda: self.pump_ctrl.pulse(direction, duration), f"PULSE {direction}")
+        self.pump_state_lbl.setText(f"Pump: PULSE {direction} {duration} ms")
+        QTimer.singleShot(duration + 300, self._log_pump_pending)
+
+    def _stop_pump(self):
+        self._pump_command(self.pump_ctrl.stop, "STOP")
+        self.pump_state_lbl.setText("Pump: STOPPED")
+
+    # ──────────────────────────────────────────────────────────
     #  DropSens
     # ──────────────────────────────────────────────────────────
 
@@ -688,6 +882,8 @@ class ManualControlTab(QWidget):
             f"{'Connected - ' + self.port_a.currentText() if self.ctrl_a.is_connected() else 'Not connected'}",
             f"Valve B (SY-07B)  : "
             f"{'Connected - ' + self.port_b.currentText() if self.ctrl_b.is_connected() else 'Not connected'}",
+            f"Pump (Nano)       : "
+            f"{'Connected - ' + self.port_pump.currentText() if self.pump_ctrl.is_connected() else 'Not connected'}",
             f"DropSens          : "
             f"{'Connected (DropView 8400M)' if self.dv_ctrl._is_connected() else 'Not connected'}",
         ]
@@ -700,8 +896,12 @@ class ManualControlTab(QWidget):
     def _stop_all(self):
         if self.ctrl_a.is_connected(): self.ctrl_a.stop()
         if self.ctrl_b.is_connected(): self.ctrl_b.stop()
+        if self.pump_ctrl.is_connected():
+            self.pump_ctrl.stop()
+            self.pump_ctrl.set_speed_mv(0)
         self.status_a_lbl.setText("STOPPED")
         self.status_b_lbl.setText("STOPPED")
+        self.pump_state_lbl.setText("Pump: STOPPED")
         self.log_signal.emit("EMERGENCY STOP ALL")
 
     def _query_all(self):

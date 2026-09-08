@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import (
 from bench_test.dropview.controller import DropViewController
 from bench_test.measurement.session import MeasurementSession
 from bench_test.measurement.session_context import SessionContext
+from bench_test.pump import ArduinoPumpController
 from bench_test.ui.tabs.log_tab import LogTab
 from bench_test.ui.tabs.manual_tab import ManualControlTab
 from bench_test.ui.tabs.measurement_setup_tab import MeasurementSetupTab
@@ -101,6 +102,7 @@ class MainWindow(QMainWindow):
 
         self.ctrl_a = ValveController()
         self.ctrl_b = InjectorValveController()
+        self.pump_ctrl = ArduinoPumpController()
         self.dv_ctrl = DropViewController(self)
         self._ctx = SessionContext()
 
@@ -133,7 +135,7 @@ class MainWindow(QMainWindow):
         tabs = RightAlignedLogTabWidget()
         layout.addWidget(tabs)
 
-        self.manual_tab = ManualControlTab(self.ctrl_a, self.ctrl_b, self.dv_ctrl)
+        self.manual_tab = ManualControlTab(self.ctrl_a, self.ctrl_b, self.dv_ctrl, self.pump_ctrl)
         self.recipe_tab = RecipeTab(self.ctrl_a, self.ctrl_b, self.dv_ctrl)
         self.recipe_tab._main_window = self
         self.setup_tab = MeasurementSetupTab(recipe_tab=self.recipe_tab)
