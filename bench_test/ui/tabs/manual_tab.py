@@ -315,7 +315,7 @@ class ManualControlTab(QWidget):
         self.pump_mv_spin = QSpinBox()
         self.pump_mv_spin.setRange(0, 5000)
         self.pump_mv_spin.setSingleStep(100)
-        self.pump_mv_spin.setValue(500)
+        self.pump_mv_spin.setValue(int(get_value("pump_speed_mv", 500)))
         self.pump_mv_spin.setFixedWidth(90)
         row_speed.addWidget(self.pump_mv_spin)
         self.set_pump_mv_btn = _btn("Set mV", self._set_pump_mv, "#FF9800")
@@ -325,7 +325,7 @@ class ManualControlTab(QWidget):
         self.pump_max_rpm_spin = QDoubleSpinBox()
         self.pump_max_rpm_spin.setRange(0.1, 5000.0)
         self.pump_max_rpm_spin.setDecimals(1)
-        self.pump_max_rpm_spin.setValue(300.0)
+        self.pump_max_rpm_spin.setValue(float(get_value("pump_max_rpm", 300.0)))
         self.pump_max_rpm_spin.setFixedWidth(90)
         row_speed.addWidget(self.pump_max_rpm_spin)
         self.set_pump_max_btn = _btn("Set Max", self._set_pump_max_rpm, "#795548")
@@ -335,7 +335,7 @@ class ManualControlTab(QWidget):
         self.pump_rpm_spin = QDoubleSpinBox()
         self.pump_rpm_spin.setRange(0.0, 5000.0)
         self.pump_rpm_spin.setDecimals(1)
-        self.pump_rpm_spin.setValue(30.0)
+        self.pump_rpm_spin.setValue(float(get_value("pump_speed_rpm", 30.0)))
         self.pump_rpm_spin.setFixedWidth(90)
         row_speed.addWidget(self.pump_rpm_spin)
         self.set_pump_rpm_btn = _btn("Set RPM", self._set_pump_rpm, "#FF9800")
@@ -348,7 +348,7 @@ class ManualControlTab(QWidget):
         self.pump_pulse_spin = QSpinBox()
         self.pump_pulse_spin.setRange(1, 600000)
         self.pump_pulse_spin.setSingleStep(100)
-        self.pump_pulse_spin.setValue(1000)
+        self.pump_pulse_spin.setValue(int(get_value("pump_pulse_ms", 1000)))
         self.pump_pulse_spin.setFixedWidth(100)
         row_run.addWidget(self.pump_pulse_spin)
         self.pump_pulse_fwd_btn = _btn("Pulse FWD", lambda: self._pulse_pump("FWD"), "#2196F3")
@@ -440,8 +440,6 @@ class ManualControlTab(QWidget):
         saved_pump = get_value("pump_com", "")
         if saved_a:  self.port_a.setCurrentText(saved_a)
         if saved_b:  self.port_b.setCurrentText(saved_b)
-        if saved_pump:
-            self.port_pump.setCurrentText(saved_pump)
         if saved_dv and self.port_dv.findText(saved_dv) >= 0:
             self.port_dv.setCurrentText(saved_dv)
 
@@ -451,12 +449,19 @@ class ManualControlTab(QWidget):
 
     def _refresh_ports(self):
         ports = [p.device for p in serial.tools.list_ports.comports()]
-        for combo in [self.port_a, self.port_b, self.port_pump]:
+        for combo in [self.port_a, self.port_b]:
             current = combo.currentText()
             combo.clear()
             combo.addItems(ports)
             if current in ports:
                 combo.setCurrentText(current)
+        saved_pump = get_value("pump_com", "")
+        current_pump = self.port_pump.currentText()
+        self.port_pump.clear()
+        self.port_pump.addItems(ports)
+        preferred_pump = saved_pump or current_pump
+        if preferred_pump and self.port_pump.findText(preferred_pump) >= 0:
+            self.port_pump.setCurrentText(preferred_pump)
         saved_dv   = get_value("dropsens_com", "")
         current_dv = self.port_dv.currentText()
         self.port_dv.clear()
@@ -756,6 +761,10 @@ class ManualControlTab(QWidget):
         self._set_pump_controls(True)
         remember_value("pump_com", port)
         self.log_signal.emit(f"Pump connected to {port}")
+        max_rpm = self.pump_max_rpm_spin.value()
+        remember_value("pump_max_rpm", max_rpm)
+        for line in self.pump_ctrl.set_max_rpm(max_rpm):
+            self.log_signal.emit(f"Pump [MAXRPM]: {line}")
         self._update_summary()
         self._query_pump()
 
@@ -799,14 +808,17 @@ class ManualControlTab(QWidget):
 
     def _set_pump_mv(self):
         mv = self.pump_mv_spin.value()
+        remember_value("pump_speed_mv", mv)
         self._pump_command(lambda: self.pump_ctrl.set_speed_mv(mv), "SPEEDV")
 
     def _set_pump_max_rpm(self):
         rpm = self.pump_max_rpm_spin.value()
+        remember_value("pump_max_rpm", rpm)
         self._pump_command(lambda: self.pump_ctrl.set_max_rpm(rpm), "MAXRPM")
 
     def _set_pump_rpm(self):
         rpm = self.pump_rpm_spin.value()
+        remember_value("pump_speed_rpm", rpm)
         self._pump_command(lambda: self.pump_ctrl.set_speed_rpm(rpm), "SPEED")
 
     def _run_pump(self, direction: str):
@@ -815,6 +827,7 @@ class ManualControlTab(QWidget):
 
     def _pulse_pump(self, direction: str):
         duration = self.pump_pulse_spin.value()
+        remember_value("pump_pulse_ms", duration)
         self._pump_command(lambda: self.pump_ctrl.pulse(direction, duration), f"PULSE {direction}")
         self.pump_state_lbl.setText(f"Pump: PULSE {direction} {duration} ms")
         QTimer.singleShot(duration + 300, self._log_pump_pending)
