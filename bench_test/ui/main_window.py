@@ -1,3 +1,5 @@
+import os
+
 from PyQt6.QtCore import QSize, Qt
 from PyQt6.QtWidgets import (
     QLabel,
@@ -136,7 +138,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(tabs)
 
         self.manual_tab = ManualControlTab(self.ctrl_a, self.ctrl_b, self.dv_ctrl, self.pump_ctrl)
-        self.recipe_tab = RecipeTab(self.ctrl_a, self.ctrl_b, self.dv_ctrl)
+        self.recipe_tab = RecipeTab(self.ctrl_a, self.ctrl_b, self.dv_ctrl, self.pump_ctrl)
         self.recipe_tab._main_window = self
         self.setup_tab = MeasurementSetupTab(recipe_tab=self.recipe_tab)
         self.viewer_tab = ViewerTab(self.setup_tab.package_panel)
@@ -218,6 +220,14 @@ class MainWindow(QMainWindow):
         self.setup_tab.method_panel.clear()
         self.setup_tab.script_panel.clear()
 
+    def _clear_session_views_preserve_recipe(self):
+        self.viewer_tab.clear()
+        self.log_tab.clear()
+        self.setup_tab.package_panel.clear_display()
+        self.setup_tab.method_panel.clear()
+        self.setup_tab.script_panel.clear()
+        self.set_part_banner("")
+
     def _on_sm_state_changed(self, state: str):
         """StateMachine gecislerinde context'i guncelle."""
         session = self.setup_tab.sm.session or self.setup_tab.package_panel.get_session()
@@ -236,6 +246,9 @@ class MainWindow(QMainWindow):
             last_active = self._ctx.active_session
             self._ctx.clear_active()
             if was_live and last_active is not None:
+                if not os.path.isdir(last_active.session_dir):
+                    self._clear_session_views_preserve_recipe()
+                    return
                 self.switch_display(last_active, "archived")
 
     def _on_aggregate_done(self, xlsx: str):
@@ -293,4 +306,5 @@ class MainWindow(QMainWindow):
         self.dv_ctrl.stop_polling()
         self.ctrl_a.disconnect()
         self.ctrl_b.disconnect()
+        self.pump_ctrl.disconnect()
         event.accept()

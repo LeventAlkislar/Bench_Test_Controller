@@ -7,6 +7,7 @@ from typing import Optional
 
 from bench_test.recipe.models import Recipe, RecipeStep
 from bench_test.dropview.controller import DropViewController
+from bench_test.pump import ArduinoPumpController
 from bench_test.valve.multiport import ValveController
 from bench_test.valve.injector import InjectorValveController
 from bench_test.measurement.session import (
@@ -59,6 +60,7 @@ class RecipeRunner(threading.Thread):
     def __init__(self, controller_a, controller_b, recipe: Recipe,
                  status_queue: queue.Queue, stop_event: threading.Event,
                   dropview_ctrl: Optional[DropViewController] = None,
+                  pump_ctrl: Optional[ArduinoPumpController] = None,
                   session_scr_path: str = "",
                   session_tp_path: str = "",
                   session_method_paths: dict = None,
@@ -73,6 +75,7 @@ class RecipeRunner(threading.Thread):
         self.status_queue     = status_queue
         self.stop_event       = stop_event
         self.dropview_ctrl    = dropview_ctrl
+        self.pump_ctrl        = pump_ctrl
         self.session_scr_path = session_scr_path
         self.session_tp_path  = session_tp_path
         self.session_method_paths = session_method_paths or {}
@@ -90,6 +93,47 @@ class RecipeRunner(threading.Thread):
         self._continuous_pause_requested = False
         self._continuous_resume_requested = False
         self._continuous_stopped_for_pause = False
+
+    def _pump_connected(self) -> bool:
+        return self.pump_ctrl is not None and self.pump_ctrl.is_connected()
+
+    def _log_pump_lines(self, label: str, lines: list[str]):
+        for line in lines:
+            self._log(f"Pump [{label}]: {line}")
+
+    def _safe_stop_pump(self, label: str = "STOP"):
+        if not self._pump_connected():
+            return
+        try:
+            self._log_pump_lines(label, self.pump_ctrl.stop())
+            self._log_pump_lines("SPEED", self.pump_ctrl.set_speed_rpm(0))
+        except Exception as e:
+            self.status_queue.put(("warning", f"Pump stop failed: {e}"))
+
+    def _apply_pump_rpm(self, step: RecipeStep, step_num: int, loop_info: str = "") -> bool:
+        if step.pump_rpm is None:
+            return True
+
+        if not self._pump_connected():
+            self.status_queue.put(("error", f"Step {step_num}: Pump is not connected."))
+            return False
+
+        try:
+            rpm = float(step.pump_rpm)
+            if rpm <= 0:
+                self.status_queue.put(("switching", f"{loop_info}Pump -> Stop"))
+                self._log_pump_lines("STOP", self.pump_ctrl.stop())
+                self._log_pump_lines("SPEED", self.pump_ctrl.set_speed_rpm(0))
+                self._log(f"{loop_info}Pump: stopped")
+            else:
+                self.status_queue.put(("switching", f"{loop_info}Pump -> {rpm:g} RPM"))
+                self._log_pump_lines("SPEED", self.pump_ctrl.set_speed_rpm(rpm))
+                self._log_pump_lines("RUN FWD", self.pump_ctrl.run("FWD"))
+                self._log(f"{loop_info}Pump: running FWD at {rpm:g} RPM")
+        except Exception as e:
+            self.status_queue.put(("error", f"Step {step_num}: Pump RPM change failed: {e}"))
+            return False
+        return True
 
     def pause(self):
         if self.active_measurement_kind == "continuous_pad":
@@ -293,6 +337,10 @@ class RecipeRunner(threading.Thread):
             state_name = InjectorValveController.STATE_NAMES.get(step.valve_b_state, "")
             self._log(f"SIMULATED: Valve B -> {state_name} (not connected, skipped)")
 
+        # ── Pompa ─────────────────────────────────────────────
+        if not self._apply_pump_rpm(step, step_num, loop_info):
+            return False
+
         if self.stop_event.is_set():
             return False
 
@@ -366,6 +414,10 @@ class RecipeRunner(threading.Thread):
                 parts.append(f"A:Port {step.port}")
             if step.valve_b_state > 0:
                 parts.append(f"B:{'Load' if step.valve_b_state==1 else 'Inject'}")
+            if step.pump_rpm is not None:
+                pump_rpm = float(step.pump_rpm)
+                pump_text = "Stop" if pump_rpm <= 0 else f"{pump_rpm:g} RPM"
+                parts.append(f"Pump:{pump_text}")
             if action != "none":
                 parts.append(f"DV:{DROPVIEW_LABELS.get(action, action)}")
             valve_str = ", ".join(parts) if parts else "No valve change"
@@ -406,6 +458,7 @@ class RecipeRunner(threading.Thread):
                     "total_minutes": step.duration_minutes,
                     "port": step.port,
                     "valve_b_state": step.valve_b_state,
+                    "pump_rpm": step.pump_rpm,
                     "description": step.description,
                     "loop_info": loop_info,
                     "loop_index": self.current_loop_index,
@@ -450,6 +503,7 @@ class RecipeRunner(threading.Thread):
         self.recipe_start_t = time.time()
         self.current_loop_count = loop_count
         self.status_queue.put(("started", f"Recipe '{recipe.name}' started."))
+        self._safe_stop_pump("RECIPE START")
 
         for loop_i in range(loop_count):
             self.current_loop_index = loop_i + 1
@@ -476,12 +530,14 @@ class RecipeRunner(threading.Thread):
             total = len(expanded)
             for step_num, idx in enumerate(expanded, 1):
                 if self.stop_event.is_set():
+                    self._safe_stop_pump("RECIPE STOP")
                     if self._stop_measurement_for_recipe_stop():
                         self.status_queue.put(("stopped", "Recipe stopped."))
                     return
                 step = steps[idx]
                 ok = self._execute_step(step, step_num, total, loop_info)
                 if not ok:
+                    self._safe_stop_pump("RECIPE STOP")
                     if self.stop_event.is_set():
                         if self._stop_measurement_for_recipe_stop():
                             self.status_queue.put(("stopped", "Recipe stopped."))
@@ -489,4 +545,5 @@ class RecipeRunner(threading.Thread):
                     self.status_queue.put(("stopped", "Recipe stopped."))
                     return
 
+        self._safe_stop_pump("RECIPE FINISH")
         self.status_queue.put(("finished", f"Recipe '{recipe.name}' completed."))

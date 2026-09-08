@@ -19,6 +19,7 @@ from PyQt6.QtGui import QColor, QFont
 
 from bench_test.valve.multiport import ValveController
 from bench_test.valve.injector import InjectorValveController
+from bench_test.pump import ArduinoPumpController
 from bench_test.dropview.controller import DropViewController
 from bench_test.measurement.session import (
     MEASUREMENT_MODE_CONTINUOUS_PAD,
@@ -57,7 +58,7 @@ _DV_IDX_TO_KEY = {
     7: "exit_dropview",
 }
 VALVE_B_LABELS   = {0: "-", 1: "Load", 2: "Inject"}
-COL_STEP, COL_VA, COL_VB, COL_DUR, COL_DESC, COL_DV, COL_SCR, COL_LOOP = range(8)
+COL_STEP, COL_VA, COL_VB, COL_PUMP, COL_DUR, COL_DESC, COL_DV, COL_SCR, COL_LOOP = range(9)
 
 class StepLoopDialog(QDialog):
     def __init__(self, parent, total_steps, existing_loops, selected_steps=None):
@@ -125,10 +126,12 @@ class RecipeTab(QWidget):
 
     def __init__(self, ctrl_a: ValveController, ctrl_b: InjectorValveController,
                  dv_ctrl: DropViewController,
+                 pump_ctrl: ArduinoPumpController = None,
                  package_tab=None):
         super().__init__()
         self.ctrl_a = ctrl_a; self.ctrl_b = ctrl_b
         self.dv_ctrl = dv_ctrl
+        self.pump_ctrl = pump_ctrl
         self.package_tab = package_tab                        # ← YENİ
 
         self.recipe_steps: List[RecipeStep] = []
@@ -183,6 +186,15 @@ class RecipeTab(QWidget):
         self.step_vb.addItems(["0 - No change", "1 - Load (1-6,2-3,4-5)", "2 - Inject (1-2,3-4,5-6)"])
         fla.addWidget(self.step_vb)
 
+        fla.addWidget(QLabel("Pump RPM:"))
+        self.step_pump = QComboBox()
+        self.step_pump.setEditable(True)
+        self.step_pump.addItems(["-", "0", "5", "10", "20", "30", "50", "100"])
+        self.step_pump.setCurrentText("-")
+        self.step_pump.setMaximumWidth(80)
+        self.step_pump.setToolTip("- = No change, 0 = Stop pump, >0 = Run FWD at RPM")
+        fla.addWidget(self.step_pump)
+
         fla.addWidget(QLabel("Duration (min):"))
         self.step_dur = QDoubleSpinBox()
         self.step_dur.setRange(0, 9999)  # 0'a izin var
@@ -206,11 +218,11 @@ class RecipeTab(QWidget):
         # ── Steps table ───────────────────────────────────────
         gt = QGroupBox("Recipe Steps (Double-click to edit | Select rows for step loops)")
         gtl = QVBoxLayout(gt)
-        self.table = QTableWidget(0, 8)
+        self.table = QTableWidget(0, 9)
         self.table.setHorizontalHeaderLabels(
-            ["Step #", "Valve A", "Valve B", "Duration (min)", "Description", "DropView Action", "Script (.scr)", "Loop Info"])
+            ["Step #", "Valve A", "Valve B", "Pump RPM", "Duration (min)", "Description", "DropView Action", "Script (.scr)", "Loop Info"])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(COL_DESC, QHeaderView.ResizeMode.Stretch)
         self.table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
         self.table.verticalHeader().setDefaultSectionSize(22)
         self.table.verticalHeader().setVisible(False)
@@ -298,6 +310,22 @@ class RecipeTab(QWidget):
 
 
     # ── Step management ───────────────────────────────────────
+    @staticmethod
+    def _parse_pump_rpm(value: str) -> Optional[float]:
+        text = (value or "").strip()
+        if not text or text == "-":
+            return None
+        rpm = float(text)
+        if rpm < 0:
+            raise ValueError()
+        return rpm
+
+    @staticmethod
+    def _format_pump_rpm(value: Optional[float]) -> str:
+        if value is None:
+            return "-"
+        return f"{value:g}"
+
     def _add_step(self):
         port     = self.step_port.value()
         duration = self.step_dur.value()
@@ -306,25 +334,32 @@ class RecipeTab(QWidget):
         vb_state = int(vb_str[0]) if vb_str and vb_str[0].isdigit() else 0
         dv_idx   = self.step_dv.currentIndex()
         dv_action = _DV_IDX_TO_KEY.get(dv_idx, "none")
+        try:
+            pump_rpm = self._parse_pump_rpm(self.step_pump.currentText())
+        except ValueError:
+            QMessageBox.warning(self, "Warning", "Pump RPM must be '-', 0, or a positive number.")
+            return
         if dv_action == "run_cv":
             duration = 0.0
 
         # Süre 0 sadece DropView aksiyonu olduğunda geçerli
-        if duration <= 0 and dv_action == "none":
+        if duration <= 0 and dv_action == "none" and pump_rpm is None:
             QMessageBox.warning(self, "Warning",
-                "Duration 0 is only valid when a DropView action is selected.\n"
+                "Duration 0 is only valid when a DropView or pump change is selected.\n"
                 "Duration 0 cannot be used with no action.")
             return
 
         # En az bir aksiyon olmalı
-        if port == 0 and vb_state == 0 and dv_action == "none":
+        if port == 0 and vb_state == 0 and dv_action == "none" and pump_rpm is None:
             QMessageBox.warning(self, "Warning", "At least one action must be specified"); return
 
         step = RecipeStep(port=port, duration_minutes=duration, description=desc,
-                          valve_b_state=vb_state, dropview_action=dv_action)
+                          valve_b_state=vb_state, pump_rpm=pump_rpm,
+                          dropview_action=dv_action)
         self.recipe_steps.append(step)
         self._refresh_table(); self._update_total_time()
         log_msg = (f"Step added: A=Port{port}, B={VALVE_B_LABELS[vb_state]}, "
+                   f"Pump={self._format_pump_rpm(pump_rpm)}, "
                    f"DV={DROPVIEW_LABELS.get(dv_action, dv_action)}, {duration}min")
         if desc:
             log_msg += f"  |  {desc}"
@@ -368,6 +403,7 @@ class RecipeTab(QWidget):
                 str(i + 1),
                 port_display,
                 VALVE_B_LABELS.get(step.valve_b_state, "-"),
+                self._format_pump_rpm(step.pump_rpm),
                 str(step.duration_minutes),
                 step.description,
                 DROPVIEW_LABELS.get(step.dropview_action, "-"),
@@ -378,7 +414,7 @@ class RecipeTab(QWidget):
             ]
             for j, v in enumerate(vals):
                 item = QTableWidgetItem(v)
-                if j in (0, 7) or (
+                if j in (COL_STEP, COL_LOOP) or (
                     j == COL_DUR and step.dropview_action == "run_cv"
                 ):
                     item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
@@ -406,13 +442,15 @@ class RecipeTab(QWidget):
                 else:
                     rev = {v: k for k, v in VALVE_B_LABELS.items()}
                     step.valve_b_state = rev.get(val, 0)
+            elif col == COL_PUMP:
+                step.pump_rpm = self._parse_pump_rpm(val)
             elif col == COL_DUR:
                 if step.dropview_action == "run_cv":
                     step.duration_minutes = 0.0
                 else:
                     d = float(val)
                     if d >= 0:
-                        if d <= 0 and step.dropview_action == "none":
+                        if d <= 0 and step.dropview_action == "none" and step.pump_rpm is None:
                             pass
                         else:
                             step.duration_minutes = d
@@ -473,8 +511,14 @@ class RecipeTab(QWidget):
         r = rows[0]
         if r < len(self.recipe_steps):
             s = self.recipe_steps[r]
-            ns = RecipeStep(s.port, s.duration_minutes, s.description + " (copy)",
-                            s.valve_b_state, "none")
+            ns = RecipeStep(
+                port=s.port,
+                duration_minutes=s.duration_minutes,
+                description=s.description + " (copy)",
+                valve_b_state=s.valve_b_state,
+                pump_rpm=s.pump_rpm,
+                dropview_action="none",
+            )
             self.recipe_steps.insert(r+1, ns)
             self._refresh_table(); self._update_total_time()
 
@@ -575,6 +619,16 @@ class RecipeTab(QWidget):
         if path:
             self._load_recipe_from_path(path)
 
+    def _recipe_step_from_data(self, data: dict) -> RecipeStep:
+        step_data = {k: v for k, v in data.items() if k != "dropview_scr"}
+        if "pump_rpm" in step_data:
+            raw_rpm = step_data.get("pump_rpm")
+            if raw_rpm in ("", "-"):
+                step_data["pump_rpm"] = None
+            elif raw_rpm is not None:
+                step_data["pump_rpm"] = float(raw_rpm)
+        return RecipeStep(**step_data)
+
     def _load_recipe_from_path(self, path: str, persist: bool = True):
         try:
             with open(path, "r", encoding="utf-8") as f:
@@ -582,7 +636,7 @@ class RecipeTab(QWidget):
             self.name_edit.setText(data.get("name", ""))
             self.loop_spin.setValue(data.get("loop_count", 1))
             self.recipe_steps = [
-                RecipeStep(**{k: v for k, v in s.items() if k != "dropview_scr"})
+                self._recipe_step_from_data(s)
                 for s in data.get("steps", [])]
             self._normalize_recipe_steps()
             self.step_loops = [StepLoop(**l) for l in data.get("step_loops", [])]
@@ -658,6 +712,17 @@ class RecipeTab(QWidget):
 
         valve_a_ok = self.ctrl_a.is_connected()
         valve_b_ok = self.ctrl_b.is_connected()
+        pump_required = any(
+            step.pump_rpm is not None and step.pump_rpm > 0
+            for step in self.recipe_steps
+        )
+        if pump_required and not (self.pump_ctrl and self.pump_ctrl.is_connected()):
+            QMessageBox.warning(
+                self,
+                "Pump Not Connected",
+                "This recipe contains Pump RPM values above 0, but the pump is not connected."
+            )
+            return
         if not valve_a_ok or not valve_b_ok:
             missing = []
             if not valve_a_ok: missing.append("Valve A")
@@ -722,7 +787,8 @@ class RecipeTab(QWidget):
         try:
             self.recipe_runner = RecipeRunner(
                 self.ctrl_a, self.ctrl_b, recipe, self.status_queue, self.stop_event,
-                self.dv_ctrl, session_scr_path=session_scr,
+                self.dv_ctrl, pump_ctrl=self.pump_ctrl,
+                session_scr_path=session_scr,
                 session_tp_path=session_tp,
                 session_method_paths=session_method_paths,
                 session_measurements_dir=session_measurements_dir,
@@ -833,6 +899,10 @@ class RecipeTab(QWidget):
                     if data.get("port", 0) > 0:        parts.append(f"A:Port {data['port']}")
                     if data.get("valve_b_state", 0) > 0:
                         parts.append(f"B:{'Load' if data['valve_b_state']==1 else 'Inject'}")
+                    if data.get("pump_rpm") is not None:
+                        pump_rpm = float(data.get("pump_rpm", 0))
+                        pump_text = "Stop" if pump_rpm <= 0 else f"{pump_rpm:g} RPM"
+                        parts.append(f"Pump:{pump_text}")
                     li = data.get("loop_info", "")
                     st = f"{li}Step {data['step']}/{data['total_steps']}: {', '.join(parts) or 'No change'} - {rem:.1f} min remaining"
                     if data.get("description"): st += f" ({data['description']})"
