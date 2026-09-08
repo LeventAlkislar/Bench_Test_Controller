@@ -148,16 +148,28 @@ _SYSTEM_COLORS = {
     "resumed" : _C_PAUSED,
 }
 
+#_PORT_COLORS = {
+#    1: (255, 255, 255, 100),   # sabit
+#    2: (180, 220, 230, 100),   # açık cyan
+#    3: (180, 200, 215, 100),   # orta cyan
+#    4: (155, 135, 200, 100),   # yumuşak mor (cyan → mor geçiş)
+#    5: (210, 155, 135, 100),   # pastel kırmızımsı turuncu (mor → turuncu geçiş)
+#    6: (225, 175, 145, 100),   # açık turuncu
+#    7: (235, 200, 170, 100),   # çok açık turuncu
+#    8: (255, 255, 255, 100),   # sabit
+#}
+
 _PORT_COLORS = {
     1: (255, 255, 255, 100),   # sabit
-    2: (180, 220, 230, 100),   # açık cyan
-    3: (180, 200, 215, 100),   # orta cyan
-    4: (155, 135, 200, 100),   # yumuşak mor (cyan → mor geçiş)
-    5: (210, 155, 135, 100),   # pastel kırmızımsı turuncu (mor → turuncu geçiş)
-    6: (225, 175, 145, 100),   # açık turuncu
-    7: (235, 200, 170, 100),   # çok açık turuncu
+    2: (190, 238, 250, 150),   # 40 açık cyan
+    3: (203, 220, 254, 150),   # 65 orta cyan
+    4: (226, 197, 254, 150),   # 125 yumuşak mor (cyan → mor geçiş)
+    5: (225, 175, 145, 150),   # 215 pastel kırmızımsı turuncu (mor → turuncu geçiş)
+    6: (254, 197, 193, 150),   # 300 açık turuncu
+    7: (254, 220, 202, 150),   # 400 çok açık turuncu
     8: (255, 255, 255, 100),   # sabit
 }
+
 
 #Açık turuncu:	RGB: (240, 180, 120)
 #Orta turuncu:	RGB: (225, 150, 90)
@@ -340,6 +352,10 @@ class ViewerTab(QWidget):
 
         # ── Top GroupBox (panel) ─────────────────────────
         top_group = QGroupBox("Measurement Timeline")
+        top_group.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
+        )
         top_group_layout = QVBoxLayout(top_group)
         top_group_layout.setContentsMargins(10, 10, 10, 10)
 
@@ -389,7 +405,6 @@ class ViewerTab(QWidget):
             QSizePolicy.Policy.Expanding
         )
         self.plot_widget_top.setMinimumHeight(280)
-        self.plot_widget_top.setMaximumHeight(520)
 
         self.plot_widget_top.getViewBox().setMouseMode(
             pg.ViewBox.RectMode)   # sürükle = zoom rect; sağ tık = pan
@@ -401,10 +416,14 @@ class ViewerTab(QWidget):
 
         top_group_layout.addWidget(self.plot_widget_top)
         self.top_group = top_group
-        layout.addWidget(top_group)
+        layout.addWidget(top_group, stretch=1)
 
         # ── Bottom GroupBox (panel) ──────────────────────
         bottom_group = QGroupBox("Mean Measurement Timeline")
+        bottom_group.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
+        )
         bottom_group_layout = QVBoxLayout(bottom_group)
         bottom_group_layout.setContentsMargins(10, 10, 10, 10)
 
@@ -421,7 +440,6 @@ class ViewerTab(QWidget):
             QSizePolicy.Policy.Expanding
         )
         self.plot_widget_top.setMinimumHeight(280)
-        self.plot_widget_top.setMaximumHeight(520)
 
         self.plot_widget_bottom.getViewBox().setMouseMode(
             pg.ViewBox.RectMode
@@ -436,9 +454,7 @@ class ViewerTab(QWidget):
 
         bottom_group_layout.addWidget(self.plot_widget_bottom)
         self.bottom_group = bottom_group
-        layout.addWidget(bottom_group)
-
-        layout.addStretch(1)
+        layout.addWidget(bottom_group, stretch=1)
         return container
 
     # ── Tepki gecikmesi ───────────────────────────────────────────
@@ -1031,11 +1047,9 @@ class ViewerTab(QWidget):
         if mode == "cv":
             if self.bottom_group:
                 self.bottom_group.setVisible(False)
-            self.plot_widget_top.setMaximumHeight(16777215)
         else:
             if self.bottom_group:
                 self.bottom_group.setVisible(True)
-            self.plot_widget_top.setMaximumHeight(520)
 
     def _plot_data(self, reset_view: bool = False):
         if not self.plot_widget_top:
@@ -1267,54 +1281,6 @@ class ViewerTab(QWidget):
             self._apply_saved_top_view_range()
 
         self._rebuilding_top_view = False
-
-    def _plot_cv_bottom_pad_data(self):
-        if not self.plot_widget_bottom:
-            return
-
-        series_data = self._read_pad_plot_series(self._session)
-        if not series_data:
-            self._show_bottom_no_data_msg("PAD verisi bulunamadı.")
-            return
-
-        bottom_timestamps = []
-        bottom_currents = []
-        for series_item in series_data:
-            _label, series_timestamps, series_currents, mean_kind = self._normalize_pad_series_item(series_item)
-            mean_group_size = 21 if mean_kind == "continuous" else 5
-            centered_mean = mean_kind == "continuous"
-            mean_ts, mean_cur = self._build_mean_series(
-                series_timestamps,
-                series_currents,
-                group_size=mean_group_size,
-                centered=centered_mean,
-            )
-            bottom_timestamps.extend(mean_ts)
-            bottom_currents.extend(mean_cur)
-            self.plot_widget_bottom.plot(
-                mean_ts,
-                mean_cur,
-                pen=None,
-                symbol="o",
-                symbolSize=5,
-                symbolBrush=pg.mkBrush(_C_DATA_LINE),
-                symbolPen=pg.mkPen(color=_C_DATA_LINE, width=1),
-                name=None,
-            )
-
-        if bottom_timestamps:
-            pairs = sorted(
-                zip(bottom_timestamps, bottom_currents),
-                key=lambda item: item[0],
-            )
-            bottom_timestamps = [item[0] for item in pairs]
-            bottom_currents = [item[1] for item in pairs]
-
-        self._set_hover_data(
-            self.plot_widget_bottom,
-            bottom_timestamps,
-            bottom_currents,
-        )
 
     def _has_cv_measurements(self) -> bool:
         return bool(self._find_cv_measurement_files())
@@ -1799,19 +1765,21 @@ class ViewerTab(QWidget):
         line_top = pg.InfiniteLine(
             pos=x, angle=90, pen=pen, movable=False, label=label,
             labelOpts={
-                "position": 0.97,
+                "position": 0.88,
                 "color": color,
 #                "fill": _C_BG,
 #                "border": pg.mkPen(color=_C_BG, width=1),
                 "fill": (255, 255, 255, 0),
                 "border": pg.mkPen(None),
                 "movable": False,
-                "anchors": [(0, 0), (0, 0)],
+                "rotateAxis": (1, 0),
+                "anchors": [(0.5, 0), (0.5, 0)],
             })
 
         font = QFont()
         font.setPointSize(8)  # daha büyük
         font.setBold(True)  # bold
+        font.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 115)
         line_top.label.setFont(font)
 
         self.plot_widget_top.addItem(line_top, ignoreBounds=False)
@@ -1827,17 +1795,19 @@ class ViewerTab(QWidget):
             line_bottom = pg.InfiniteLine(
                 pos=x, angle=90, pen=pen, movable=False, label=label,
                 labelOpts={
-                    "position": 0.97,
+                    "position": 0.88,
                     "color": color,
                     "fill": (255, 255, 255, 0),
                     "border": pg.mkPen(None),
                     "movable": False,
-                    "anchors": [(0, 0), (0, 0)],
+                    "rotateAxis": (1, 0),
+                    "anchors": [(0.5, 0), (0.5, 0)],
                 })
 
             font = QFont()
             font.setPointSize(8)  # daha büyük
             font.setBold(True)  # bold
+            font.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 115)
             line_bottom.label.setFont(font)
 
             self.plot_widget_bottom.addItem(line_bottom, ignoreBounds=False)

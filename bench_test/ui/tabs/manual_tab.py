@@ -763,8 +763,7 @@ class ManualControlTab(QWidget):
         self.log_signal.emit(f"Pump connected to {port}")
         max_rpm = self.pump_max_rpm_spin.value()
         remember_value("pump_max_rpm", max_rpm)
-        for line in self.pump_ctrl.set_max_rpm(max_rpm):
-            self.log_signal.emit(f"Pump [MAXRPM]: {line}")
+        self._pump_command(lambda: self.pump_ctrl.set_max_rpm(max_rpm), "MAXRPM")
         self._update_summary()
         self._query_pump()
 
@@ -789,17 +788,33 @@ class ManualControlTab(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "Pump Error", str(e))
             self.log_signal.emit(f"Pump {label} failed: {e}")
+            self.pump_state_lbl.setText(f"Pump command failed: {label}")
+            return []
+        if not lines:
+            self.log_signal.emit(f"Pump [{label}]: No response from Arduino controller")
+            self.pump_state_lbl.setText(f"Pump command not confirmed: {label}")
             return []
         for line in lines:
             self.log_signal.emit(f"Pump [{label}]: {line}")
+        self._apply_pump_feedback(label, lines)
         self._log_pump_pending()
         return lines
+
+    def _apply_pump_feedback(self, label: str, lines: list[str]):
+        if any(line.startswith("ERR") for line in lines):
+            self.pump_state_lbl.setText(f"Pump command rejected: {label}")
+            return
+        if any(line.startswith("OK") for line in lines):
+            self.pump_state_lbl.setText(f"Arduino accepted: {label}")
+            return
+        if any(line.startswith("STATUS") for line in lines):
+            self.pump_state_lbl.setText(lines[-1])
 
     def _log_pump_pending(self):
         for line in self.pump_ctrl.read_available():
             self.log_signal.emit(f"Pump: {line}")
             if line == "OK STOP TIMEOUT":
-                self.pump_state_lbl.setText("Pump: STOPPED")
+                self.pump_state_lbl.setText("Arduino accepted: pulse timeout stop")
 
     def _query_pump(self):
         lines = self._pump_command(self.pump_ctrl.status, "STATUS")
@@ -823,18 +838,15 @@ class ManualControlTab(QWidget):
 
     def _run_pump(self, direction: str):
         self._pump_command(lambda: self.pump_ctrl.run(direction), f"RUN {direction}")
-        self.pump_state_lbl.setText(f"Pump: RUNNING {direction}")
 
     def _pulse_pump(self, direction: str):
         duration = self.pump_pulse_spin.value()
         remember_value("pump_pulse_ms", duration)
         self._pump_command(lambda: self.pump_ctrl.pulse(direction, duration), f"PULSE {direction}")
-        self.pump_state_lbl.setText(f"Pump: PULSE {direction} {duration} ms")
         QTimer.singleShot(duration + 300, self._log_pump_pending)
 
     def _stop_pump(self):
         self._pump_command(self.pump_ctrl.stop, "STOP")
-        self.pump_state_lbl.setText("Pump: STOPPED")
 
     # ──────────────────────────────────────────────────────────
     #  DropSens
