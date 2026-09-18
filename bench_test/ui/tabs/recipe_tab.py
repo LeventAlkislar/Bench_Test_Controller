@@ -5,6 +5,7 @@ import queue
 import threading
 
 from dataclasses import asdict
+from datetime import datetime
 from typing import List, Optional
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGridLayout,
@@ -58,7 +59,7 @@ _DV_IDX_TO_KEY = {
     7: "exit_dropview",
 }
 VALVE_B_LABELS   = {0: "-", 1: "Load", 2: "Inject"}
-COL_STEP, COL_VA, COL_VB, COL_PUMP, COL_DUR, COL_DESC, COL_DV, COL_SCR, COL_LOOP = range(9)
+COL_STEP, COL_VA, COL_VB, COL_PUMP, COL_DUR, COL_DESC, COL_DV, COL_SCR, COL_LOOP, COL_ENABLED = range(10)
 
 class StepLoopDialog(QDialog):
     def __init__(self, parent, total_steps, existing_loops, selected_steps=None):
@@ -148,6 +149,8 @@ class RecipeTab(QWidget):
         self._elapsed_time_text = "-"
         self._display_experiment_params = {}
         self._active_measurement_mode = ""
+        self._runtime_change_log_path = ""
+        self._runtime_logging_active = False
 
         self._build()
         self._restore_last_recipe()
@@ -212,15 +215,16 @@ class RecipeTab(QWidget):
         self.step_dv.addItems(_DV_COMBO_LABELS)
         fla.addWidget(self.step_dv)
 
-        fla.addWidget(_btn("Add Step", self._add_step, "#4CAF50"))
+        self.add_step_btn = _btn("Add Step", self._add_step, "#4CAF50")
+        fla.addWidget(self.add_step_btn)
         layout.addWidget(ga)
 
         # ── Steps table ───────────────────────────────────────
         gt = QGroupBox("Recipe Steps (Double-click to edit | Select rows for step loops)")
         gtl = QVBoxLayout(gt)
-        self.table = QTableWidget(0, 9)
+        self.table = QTableWidget(0, 10)
         self.table.setHorizontalHeaderLabels(
-            ["Step #", "Valve A", "Valve B", "Pump RPM", "Duration (min)", "Description", "DropView Action", "Script (.scr)", "Loop Info"])
+            ["Step #", "Valve A", "Valve B", "Pump RPM", "Duration (min)", "Description", "DropView Action", "Script (.scr)", "Loop Info", "Run"])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(COL_DESC, QHeaderView.ResizeMode.Stretch)
         self.table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
@@ -235,14 +239,21 @@ class RecipeTab(QWidget):
 
         # ── Step buttons ──────────────────────────────────────
         sb = QHBoxLayout()
-        sb.addWidget(_btn("Duplicate",       self._duplicate))
-        sb.addWidget(_btn("Move Up",         self._move_up))
-        sb.addWidget(_btn("Move Down",       self._move_down))
-        sb.addWidget(_btn("Remove Selected", self._remove_step))
-        sb.addWidget(_btn("Clear All",       self._clear_all))
+        self.duplicate_btn = _btn("Duplicate", self._duplicate)
+        self.move_up_btn = _btn("Move Up", self._move_up)
+        self.move_down_btn = _btn("Move Down", self._move_down)
+        self.remove_step_btn = _btn("Remove Selected", self._remove_step)
+        self.clear_all_btn = _btn("Clear All", self._clear_all)
+        sb.addWidget(self.duplicate_btn)
+        sb.addWidget(self.move_up_btn)
+        sb.addWidget(self.move_down_btn)
+        sb.addWidget(self.remove_step_btn)
+        sb.addWidget(self.clear_all_btn)
         sb.addStretch()
-        sb.addWidget(_btn("Set Step Loop",   self._set_loop))
-        sb.addWidget(_btn("Clear Loops",     self._clear_loops))
+        self.set_loop_btn = _btn("Set Step Loop", self._set_loop)
+        self.clear_loops_btn = _btn("Clear Loops", self._clear_loops)
+        sb.addWidget(self.set_loop_btn)
+        sb.addWidget(self.clear_loops_btn)
         layout.addLayout(sb)
 
         # ── Recipe Duration display ─────────────────────────────────────
@@ -260,7 +271,8 @@ class RecipeTab(QWidget):
 
         # ── File ops ───────────────────────────────────────────────────
         fb = QHBoxLayout()
-        fb.addWidget(_btn("Load Recipe", self._load_recipe, "#4CAF50"))
+        self.load_recipe_btn = _btn("Load Recipe", self._load_recipe, "#4CAF50")
+        fb.addWidget(self.load_recipe_btn)
         fb.addWidget(_btn("Save Recipe", self._save_recipe, "#FF9800"))
         fb.addStretch()
         layout.addLayout(fb)
@@ -307,6 +319,79 @@ class RecipeTab(QWidget):
         pr.addWidget(self.progress_lbl)
         gel.addLayout(pr)
         layout.addWidget(ge)
+
+    def _set_structure_editing_enabled(self, enabled: bool):
+        self.loop_spin.setEnabled(enabled)
+        for control in (
+            self.add_step_btn,
+            self.duplicate_btn,
+            self.move_up_btn,
+            self.move_down_btn,
+            self.remove_step_btn,
+            self.clear_all_btn,
+            self.set_loop_btn,
+            self.clear_loops_btn,
+            self.load_recipe_btn,
+        ):
+            control.setEnabled(enabled)
+
+    def _prepare_runtime_change_log(self, session):
+        self._runtime_change_log_path = ""
+        self._runtime_logging_active = False
+        if not session:
+            return
+        try:
+            os.makedirs(session.logs_dir, exist_ok=True)
+            path = os.path.join(session.logs_dir, "recipe_runtime_changes.jsonl")
+            with open(path, "a", encoding="utf-8"):
+                pass
+            session.register_file("recipe_runtime_changes", path)
+            session.save()
+            self._runtime_change_log_path = path
+            self._runtime_logging_active = True
+        except OSError as exc:
+            self.log_signal.emit(f"Runtime recipe change log could not be opened: {exc}")
+
+    def _finish_runtime_change_log(self):
+        self._runtime_logging_active = False
+
+    def _record_runtime_step_changes(self, row: int, before: dict, after: dict):
+        if not self._runtime_logging_active or not self._runtime_change_log_path:
+            return
+        runner = self.recipe_runner
+        context = {
+            "recipe_loop": getattr(runner, "current_loop_index", 0),
+            "recipe_loop_count": getattr(runner, "current_loop_count", 0),
+            "current_step": getattr(runner, "current_step_index", 0),
+            "sequence_index": getattr(runner, "current_sequence_index", 0),
+            "sequence_total": getattr(runner, "current_sequence_total", 0),
+        }
+        applies_to = (
+            runner.next_arrival_context(row + 1)
+            if runner and hasattr(runner, "next_arrival_context")
+            else None
+        )
+        try:
+            with open(self._runtime_change_log_path, "a", encoding="utf-8") as log_file:
+                for field_name, old_value in before.items():
+                    new_value = after.get(field_name)
+                    if old_value == new_value:
+                        continue
+                    event = {
+                        "timestamp": datetime.now().astimezone().isoformat(timespec="seconds"),
+                        "event": "step_changed",
+                        "step": row + 1,
+                        "field": field_name,
+                        "old_value": old_value,
+                        "new_value": new_value,
+                        "effective": "next_arrival",
+                        "applies_to": applies_to,
+                        "execution_context": context,
+                    }
+                    log_file.write(json.dumps(event, ensure_ascii=False) + "\n")
+        except OSError as exc:
+            self._runtime_logging_active = False
+            self.log_signal.emit(f"Runtime recipe change could not be logged: {exc}")
 
 
     # ── Step management ───────────────────────────────────────
@@ -421,6 +506,16 @@ class RecipeTab(QWidget):
                 if j == COL_DUR and step.dropview_action == "run_cv":
                     item.setToolTip("Run CV duration is controlled by the .tc method.")
                 self.table.setItem(i, j, item)
+            enabled_item = QTableWidgetItem()
+            enabled_item.setFlags(
+                (enabled_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                & ~Qt.ItemFlag.ItemIsEditable
+            )
+            enabled_item.setCheckState(
+                Qt.CheckState.Checked if step.enabled else Qt.CheckState.Unchecked
+            )
+            enabled_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.table.setItem(i, COL_ENABLED, enabled_item)
         self._ignoring_changes = False
 
     def _on_item_changed(self, item: QTableWidgetItem):
@@ -428,6 +523,7 @@ class RecipeTab(QWidget):
         row = item.row(); col = item.column()
         if row >= len(self.recipe_steps): return
         step = self.recipe_steps[row]
+        before = asdict(step)
         val  = item.text().strip()
         try:
             if col == COL_VA:
@@ -475,8 +571,11 @@ class RecipeTab(QWidget):
                 self._normalize_step_for_action(step)
             elif col == COL_SCR:
                 pass
+            elif col == COL_ENABLED:
+                step.enabled = item.checkState() == Qt.CheckState.Checked
         except (ValueError, TypeError):
             pass
+        self._record_runtime_step_changes(row, before, asdict(step))
         self._refresh_table(); self._update_total_time()
 
     def _on_cell_double_clicked(self, row: int, col: int):
@@ -518,6 +617,7 @@ class RecipeTab(QWidget):
                 valve_b_state=s.valve_b_state,
                 pump_rpm=s.pump_rpm,
                 dropview_action="none",
+                enabled=s.enabled,
             )
             self.recipe_steps.insert(r+1, ns)
             self._refresh_table(); self._update_total_time()
@@ -664,20 +764,10 @@ class RecipeTab(QWidget):
     def render_session(self, session) -> None:
         """
         MainWindow.switch_display() tarafindan cagrilir.
-        Session snapshot'indaki recipe.json'dan recipe'yi yukler.
-        Aktif recipe runner'a dokunmaz.
+        Aktif runner varsa onun canli recipe nesnelerini korur; aksi halde
+        session snapshot'indaki recipe.json'dan recipe'yi yukler.
         """
         self._display_experiment_params = getattr(session, "experiment_params", {}) or {}
-        recipe_path = session.get_file_path("recipe")
-        if not recipe_path:
-            candidate = os.path.join(
-                session.session_dir, "measurement_parameters", "recipe.json"
-            )
-            recipe_path = candidate if os.path.isfile(candidate) else None
-
-        if recipe_path and os.path.isfile(recipe_path):
-            self._load_recipe_from_path(recipe_path, persist=False)
-
         current_session = self.package_tab.get_session() if self.package_tab else None
         is_active = session.status == SessionStatus.IN_PROGRESS
         if (
@@ -687,9 +777,29 @@ class RecipeTab(QWidget):
             and self.package_tab.sm.state == "running"
         ):
             is_active = True
+
+        recipe_path = session.get_file_path("recipe")
+        if not recipe_path:
+            candidate = os.path.join(
+                session.session_dir, "measurement_parameters", "recipe.json"
+            )
+            recipe_path = candidate if os.path.isfile(candidate) else None
+
+        runner_is_live = self.recipe_runner is not None and self.recipe_runner.is_alive()
+        if is_active and runner_is_live:
+            self.recipe_steps = self.recipe_runner.recipe.steps
+            self.step_loops = self.recipe_runner.recipe.step_loops
+            self.name_edit.setText(self.recipe_runner.recipe.name)
+            self.loop_spin.setValue(self.recipe_runner.recipe.loop_count)
+            self._refresh_table()
+            self._update_loops_display()
+            self._update_total_time()
+        elif recipe_path and os.path.isfile(recipe_path):
+            self._load_recipe_from_path(recipe_path, persist=False)
         self.start_btn.setEnabled(True)
         self.pause_btn.setEnabled(is_active)
         self.stop_btn.setEnabled(is_active)
+        self._set_structure_editing_enabled(not is_active)
         if not is_active:
             self.pause_btn.setText("Pause")
         if not is_active:
@@ -770,6 +880,7 @@ class RecipeTab(QWidget):
         session_measurements_dir = ""
         part_number = ""
         measurement_mode = ""
+        session = None
         if self.package_tab:
             session = self.package_tab.get_session()
             if session:
@@ -801,10 +912,12 @@ class RecipeTab(QWidget):
                 measurement_mode=measurement_mode,
                 simulation_mode=self._simulation_mode)
             self._reset_run_metrics()
+            self._prepare_runtime_change_log(session)
             self.recipe_runner.start()
             if self.package_tab:
                 self.package_tab.sm.start()
         except Exception as exc:
+            self._finish_runtime_change_log()
             self._simulation_mode = False
             if self._main_window:
                 self._main_window.set_simulation_mode(False)
@@ -819,6 +932,7 @@ class RecipeTab(QWidget):
         self.start_btn.setEnabled(False)
         self.pause_btn.setEnabled(True)
         self.stop_btn.setEnabled(True)
+        self._set_structure_editing_enabled(False)
         if continuous_pad:
             self.pause_btn.setToolTip(
                 "Continuous PAD pause stops and saves the active segment; resume starts a new segment."
@@ -917,17 +1031,22 @@ class RecipeTab(QWidget):
                     self.status_lbl.setText(str(data))
                 elif msg_type in ("running", "log"):
                     self.status_lbl.setText(str(data)); self.log_signal.emit(str(data))
+                elif msg_type == "skipped":
+                    self.status_lbl.setText(str(data)); self.log_signal.emit(str(data))
                 elif msg_type == "completed":
+                    self._finish_runtime_change_log()
                     self._reset_run_metrics()
                     self.status_lbl.setText(f"COMPLETED: {data}")
                     self.progress.setValue(100); self.progress_lbl.setText("100%")
                     self.start_btn.setEnabled(True); self.pause_btn.setEnabled(False)
                     self.stop_btn.setEnabled(False)
+                    self._set_structure_editing_enabled(True)
                     if self.package_tab:                      # ← YENİ
                         self.package_tab.on_recipe_completed()  # ← YENİ
                     QMessageBox.information(self, "Recipe Complete", str(data))
                     self.log_signal.emit(str(data))
                 elif msg_type == "finished":
+                    self._finish_runtime_change_log()
                     self._reset_run_metrics()
                     self.status_lbl.setText(f"TAMAMLANDI: {data}")
                     self.progress.setValue(100)
@@ -935,6 +1054,7 @@ class RecipeTab(QWidget):
                     self.start_btn.setEnabled(True)
                     self.pause_btn.setEnabled(False)
                     self.stop_btn.setEnabled(False)
+                    self._set_structure_editing_enabled(True)
                     self._simulation_mode = False
                     if self._main_window:
                         self._main_window.set_simulation_mode(False)
@@ -943,12 +1063,14 @@ class RecipeTab(QWidget):
                     QMessageBox.information(self, "Recipe Complete", str(data))
                     self.log_signal.emit(str(data))
                 elif msg_type == "stopped":
+                    self._finish_runtime_change_log()
                     self._reset_run_metrics()
                     self.status_lbl.setText(f"Aborted: {data}"); self.log_signal.emit(str(data))
                     self.start_btn.setEnabled(True)
                     self.pause_btn.setEnabled(False)
                     self.pause_btn.setText("Pause")
                     self.stop_btn.setEnabled(False)
+                    self._set_structure_editing_enabled(True)
                     self.progress.setValue(0)
                     self.progress_lbl.setText("0%")
                     self._simulation_mode = False
@@ -965,10 +1087,12 @@ class RecipeTab(QWidget):
                     QMessageBox.critical(self, "Recipe Stop Failed", str(data))
                     self.log_signal.emit(f"Recipe stop failed: {data}")
                 elif msg_type == "error":
+                    self._finish_runtime_change_log()
                     self._reset_run_metrics()
                     self.status_lbl.setText(f"ERROR: {data}")
                     self.start_btn.setEnabled(True); self.pause_btn.setEnabled(False)
                     self.stop_btn.setEnabled(False)
+                    self._set_structure_editing_enabled(True)
                     if self.package_tab:                      # ← YENİ
                         self.package_tab.on_recipe_aborted()  # ← YENİ
                     self._simulation_mode = False
@@ -992,6 +1116,7 @@ class RecipeTab(QWidget):
         self._current_recipe_path = ""
         self._ignoring_changes = False
         self._display_experiment_params = {}
+        self._finish_runtime_change_log()
 
         self.name_edit.setText("New Recipe")
         self.loop_spin.setValue(1)
@@ -1005,3 +1130,4 @@ class RecipeTab(QWidget):
         self.pause_btn.setEnabled(False)
         self.pause_btn.setText("Pause")
         self.stop_btn.setEnabled(False)
+        self._set_structure_editing_enabled(True)

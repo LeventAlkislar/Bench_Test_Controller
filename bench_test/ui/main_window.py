@@ -187,7 +187,12 @@ class MainWindow(QMainWindow):
         session_dir = getattr(session, "session_dir", None)
         history_count = len(history_sessions or [])
         self._ctx.switch(session, mode)
-        self._clear_all_tabs()
+        preserve_live_recipe = (
+            mode == "active"
+            and self.recipe_tab.recipe_runner is not None
+            and self.recipe_tab.recipe_runner.is_alive()
+        )
+        self._clear_all_tabs(preserve_live_recipe=preserve_live_recipe)
 
         if mode == "history":
             sessions = history_sessions or []
@@ -212,10 +217,11 @@ class MainWindow(QMainWindow):
 
         self.set_part_banner("")
 
-    def _clear_all_tabs(self):
+    def _clear_all_tabs(self, preserve_live_recipe: bool = False):
         self.viewer_tab.clear()
         self.log_tab.clear()
-        self.recipe_tab.clear(stop_runner=False)
+        if not preserve_live_recipe:
+            self.recipe_tab.clear(stop_runner=False)
         self.setup_tab.package_panel.clear_display()
         self.setup_tab.method_panel.clear()
         self.setup_tab.script_panel.clear()

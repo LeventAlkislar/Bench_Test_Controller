@@ -1,4 +1,5 @@
 # bench_test/recipe/runner.py
+import copy
 import json
 import queue
 import threading
@@ -88,6 +89,10 @@ class RecipeRunner(threading.Thread):
         self.recipe_start_t   = None
         self.current_loop_index = 0
         self.current_loop_count = 0
+        self.current_step_index = 0
+        self.current_sequence_index = 0
+        self.current_sequence_total = 0
+        self.current_expanded_indices = []
         self.measurement_running = False
         self.active_measurement_kind = ""
         self._continuous_pause_requested = False
@@ -169,6 +174,27 @@ class RecipeRunner(threading.Thread):
 
     def _debug_log(self, msg):
         debug_log(msg)
+
+    def next_arrival_context(self, step_index: int):
+        target_index = step_index - 1
+        expanded = self.current_expanded_indices
+        start_at = self.current_sequence_index
+        for position in range(start_at, len(expanded)):
+            if expanded[position] == target_index:
+                return {
+                    "recipe_loop": self.current_loop_index,
+                    "sequence_index": position + 1,
+                    "sequence_total": len(expanded),
+                }
+        if self.current_loop_index < self.current_loop_count:
+            for position, index in enumerate(expanded):
+                if index == target_index:
+                    return {
+                        "recipe_loop": self.current_loop_index + 1,
+                        "sequence_index": position + 1,
+                        "sequence_total": len(expanded),
+                    }
+        return None
 
     def _start_continuous_pad_segment(self, log_prefix: str = "", log_fn=None) -> bool:
         if self.dropview_ctrl is None:
@@ -528,13 +554,25 @@ class RecipeRunner(threading.Thread):
                     i += 1
 
             total = len(expanded)
+            self.current_expanded_indices = expanded
             for step_num, idx in enumerate(expanded, 1):
                 if self.stop_event.is_set():
                     self._safe_stop_pump("RECIPE STOP")
                     if self._stop_measurement_for_recipe_stop():
                         self.status_queue.put(("stopped", "Recipe stopped."))
                     return
-                step = steps[idx]
+                self.current_step_index = idx + 1
+                self.current_sequence_index = step_num
+                self.current_sequence_total = total
+                step = copy.copy(steps[idx])
+                if not step.enabled:
+                    description = f" ({step.description})" if step.description else ""
+                    self.status_queue.put((
+                        "skipped",
+                        f"{loop_info}Step {idx + 1} skipped{description} "
+                        f"(sequence {step_num}/{total}).",
+                    ))
+                    continue
                 ok = self._execute_step(step, step_num, total, loop_info)
                 if not ok:
                     self._safe_stop_pump("RECIPE STOP")

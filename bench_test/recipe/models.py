@@ -18,6 +18,7 @@ class RecipeStep:
     valve_b_state:    int  = 0       # 0=yok, 1=Load, 2=Inject
     pump_rpm:         Optional[float] = None  # None="-", 0=stop, >0=run FWD at RPM
     dropview_action:  str  = "none"  # "none" | "start_dropview" | "start_measure" | "stop_measure" | "exit_dropview"
+    enabled:          bool = True
 
 
 @dataclass
