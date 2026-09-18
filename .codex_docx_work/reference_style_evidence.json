@@ -1,0 +1,25 @@
+{
+  "input": "C:\\Users\\LEVENT ALKISLAR\\OneDrive\\Desktop\\Bilkent \u00dcniversitesi UNAM.docx",
+  "fonts_by_char_count": {},
+  "direct_run_formatting_runs": 2,
+  "direct_paragraph_formatting_paragraphs": 0,
+  "heading_like_paragraphs_not_heading_style": [],
+  "examples": {
+    "direct_run_formatting": [
+      {
+        "para_index": 3,
+        "run_text": "Lorem",
+        "style": "Heading 1"
+      },
+      {
+        "para_index": 4,
+        "run_text": "\u0130psum",
+        "style": "Heading 2"
+      }
+    ]
+  },
+  "notes": [
+    "Direct formatting is not always wrong, but it often causes inconsistent output when templates change.",
+    "Heading-like paragraphs not using Heading styles can break TOC and accessibility."
+  ]
+}

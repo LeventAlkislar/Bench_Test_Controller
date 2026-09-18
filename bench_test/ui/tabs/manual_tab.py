@@ -14,7 +14,11 @@ from PyQt6.QtGui import QFont
 
 from bench_test.valve.multiport import ValveController, SV01Protocol
 from bench_test.valve.injector import InjectorValveController
-from bench_test.pump import ArduinoPumpController
+from bench_test.pump import (
+    PUMP_TYPE_ARDUINO,
+    PUMP_TYPE_FLEXICON,
+    PumpController,
+)
 from bench_test.dropview.controller import DropViewController
 from bench_test.utils.paths import get_value, remember_value
 from bench_test.ui.widgets import _btn, _lbl, _status_lbl
@@ -25,12 +29,12 @@ class ManualControlTab(QWidget):
 
     def __init__(self, ctrl_a: ValveController, ctrl_b: InjectorValveController,
                  dv_ctrl: DropViewController,
-                 pump_ctrl: ArduinoPumpController = None):
+                 pump_ctrl: PumpController = None):
         super().__init__()
         self.ctrl_a = ctrl_a
         self.ctrl_b = ctrl_b
         self.dv_ctrl = dv_ctrl
-        self.pump_ctrl = pump_ctrl or ArduinoPumpController()
+        self.pump_ctrl = pump_ctrl or PumpController()
         self._build()
         self._restore_saved()
         self._refresh_ports()
@@ -288,15 +292,39 @@ class ManualControlTab(QWidget):
     # ── Peristaltic Pump ─────────────────────────────────────
 
     def _build_pump(self):
-        gp = QGroupBox("Peristaltic Pump - Arduino Nano + MCP4725")
+        gp = QGroupBox("Peristaltic Pump")
         flp = QVBoxLayout(gp)
 
         row_conn = QHBoxLayout()
+        row_conn.addWidget(QLabel("Pump Type:"))
+        self.pump_type_combo = QComboBox()
+        self.pump_type_combo.addItem("Arduino Nano", PUMP_TYPE_ARDUINO)
+        self.pump_type_combo.addItem("Flexicon 520Di", PUMP_TYPE_FLEXICON)
+        saved_type = get_value("pump_type", PUMP_TYPE_ARDUINO)
+        idx = self.pump_type_combo.findData(saved_type)
+        self.pump_type_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self.pump_type_combo.currentIndexChanged.connect(self._on_pump_type_changed)
+        row_conn.addWidget(self.pump_type_combo)
+
         row_conn.addWidget(QLabel("COM Port:"))
         self.port_pump = QComboBox()
         self.port_pump.setMinimumWidth(100)
         row_conn.addWidget(self.port_pump)
-        row_conn.addWidget(QLabel("Baud: 115200"))
+
+        self.pump_baud_lbl = QLabel("Baud: 115200")
+        row_conn.addWidget(self.pump_baud_lbl)
+
+        self.pump_id_lbl = QLabel("Pump ID:")
+        self.pump_id_spin = QSpinBox()
+        self.pump_id_spin.setRange(1, 64)
+        try:
+            self.pump_id_spin.setValue(int(get_value("flexicon_pump_id", 1)))
+        except (TypeError, ValueError):
+            self.pump_id_spin.setValue(1)
+        self.pump_id_spin.setFixedWidth(60)
+        row_conn.addWidget(self.pump_id_lbl)
+        row_conn.addWidget(self.pump_id_spin)
+
         self.conn_pump_btn = _btn("Connect Pump", self._connect_pump, "#4CAF50")
         self.disc_pump_btn = _btn("Disconnect Pump", self._disconnect_pump, "#F44336")
         self.test_pump_btn = _btn("Status", self._query_pump, "#607D8B")
@@ -311,7 +339,8 @@ class ManualControlTab(QWidget):
         flp.addLayout(row_conn)
 
         row_speed = QHBoxLayout()
-        row_speed.addWidget(QLabel("Speed mV (0-5000):"))
+        self.pump_mv_lbl = QLabel("Speed mV (0-5000):")
+        row_speed.addWidget(self.pump_mv_lbl)
         self.pump_mv_spin = QSpinBox()
         self.pump_mv_spin.setRange(0, 5000)
         self.pump_mv_spin.setSingleStep(100)
@@ -321,7 +350,8 @@ class ManualControlTab(QWidget):
         self.set_pump_mv_btn = _btn("Set mV", self._set_pump_mv, "#FF9800")
         row_speed.addWidget(self.set_pump_mv_btn)
 
-        row_speed.addWidget(QLabel("Max RPM:"))
+        self.pump_max_rpm_lbl = QLabel("Max RPM:")
+        row_speed.addWidget(self.pump_max_rpm_lbl)
         self.pump_max_rpm_spin = QDoubleSpinBox()
         self.pump_max_rpm_spin.setRange(0.1, 5000.0)
         self.pump_max_rpm_spin.setDecimals(1)
@@ -344,7 +374,8 @@ class ManualControlTab(QWidget):
         flp.addLayout(row_speed)
 
         row_run = QHBoxLayout()
-        row_run.addWidget(QLabel("Pulse (ms):"))
+        self.pump_pulse_lbl = QLabel("Pulse (ms):")
+        row_run.addWidget(self.pump_pulse_lbl)
         self.pump_pulse_spin = QSpinBox()
         self.pump_pulse_spin.setRange(1, 600000)
         self.pump_pulse_spin.setSingleStep(100)
@@ -367,10 +398,12 @@ class ManualControlTab(QWidget):
         self.pump_state_lbl = QLabel("Pump: Not connected")
         self.pump_state_lbl.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
         flp.addWidget(self.pump_state_lbl)
-        flp.addWidget(_lbl(
+        self.pump_note_lbl = _lbl(
             "Pump speed is controlled by MCP4725 VOUT -> Pump Pin 9. Stop/Direction use Nano D8/D7.",
-            color="#888"))
+            color="#888")
+        flp.addWidget(self.pump_note_lbl)
         self._set_pump_controls(False)
+        self._sync_pump_type_ui()
         return gp
 
     # ── DropSens ──────────────────────────────────────────────
@@ -382,6 +415,7 @@ class ManualControlTab(QWidget):
         row_dv = QHBoxLayout()
         row_dv.addWidget(QLabel("COM Port:"))
         self.port_dv = QComboBox(); self.port_dv.setMinimumWidth(100)
+        self.port_dv.currentTextChanged.connect(self._remember_dropsens_com)
         row_dv.addWidget(self.port_dv)
         row_dv.addStretch()
         fld.addLayout(row_dv)
@@ -438,6 +472,7 @@ class ManualControlTab(QWidget):
         saved_b  = get_value("valve_b_port", "")
         saved_dv = get_value("dropsens_com", "")
         saved_pump = get_value("pump_com", "")
+        self._select_saved_pump_type()
         if saved_a:  self.port_a.setCurrentText(saved_a)
         if saved_b:  self.port_b.setCurrentText(saved_b)
         if saved_dv and self.port_dv.findText(saved_dv) >= 0:
@@ -741,16 +776,83 @@ class ManualControlTab(QWidget):
             self.pump_run_fwd_btn, self.pump_run_rev_btn, self.stop_pump_btn,
         ]:
             b.setEnabled(enabled)
+        self._sync_pump_type_ui()
+
+    def _select_saved_pump_type(self):
+        pump_type = get_value("pump_type", PUMP_TYPE_ARDUINO)
+        idx = self.pump_type_combo.findData(pump_type)
+        self.pump_type_combo.setCurrentIndex(idx if idx >= 0 else 0)
+
+    def _current_pump_type(self) -> str:
+        return self.pump_type_combo.currentData() or PUMP_TYPE_ARDUINO
+
+    def _on_pump_type_changed(self):
+        pump_type = self._current_pump_type()
+        self.pump_ctrl.select_type(pump_type)
+        remember_value("pump_type", pump_type)
+        if not self.pump_ctrl.is_connected():
+            self.status_pump.setText("● Disconnected")
+            self.status_pump.setStyleSheet("color:#F44336;")
+            self.conn_pump_btn.setEnabled(True)
+            self.disc_pump_btn.setEnabled(False)
+            self.port_pump.setEnabled(True)
+            self.pump_type_combo.setEnabled(True)
+            self._set_pump_controls(False)
+            self.pump_state_lbl.setText("Pump: Not connected")
+        self._sync_pump_type_ui()
+        self._update_summary()
+
+    def _sync_pump_type_ui(self):
+        if not hasattr(self, "pump_type_combo"):
+            return
+        is_flexicon = self._current_pump_type() == PUMP_TYPE_FLEXICON
+        for widget in [self.pump_id_lbl, self.pump_id_spin]:
+            widget.setVisible(is_flexicon)
+        self.pump_baud_lbl.setText("Baud: 9600, 8N2" if is_flexicon else "Baud: 115200")
+
+        for widget in [
+            self.pump_mv_lbl,
+            self.pump_mv_spin,
+            self.set_pump_mv_btn,
+            self.pump_max_rpm_lbl,
+            self.pump_max_rpm_spin,
+            self.set_pump_max_btn,
+        ]:
+            widget.setVisible(not is_flexicon)
+        for widget in [
+            self.pump_pulse_lbl,
+            self.pump_pulse_spin,
+            self.pump_pulse_fwd_btn,
+            self.pump_pulse_rev_btn,
+            self.pump_run_rev_btn,
+        ]:
+            widget.setVisible(not is_flexicon)
+
+        self.pump_run_fwd_btn.setText("Run Forward" if is_flexicon else "Run FWD")
+        self.pump_note_lbl.setText(
+            "Flexicon must be in Network mode. Forward is sent as clockwise (RR)."
+            if is_flexicon
+            else "Pump speed is controlled by MCP4725 VOUT -> Pump Pin 9. Stop/Direction use Nano D8/D7."
+        )
 
     def _connect_pump(self):
         port = self.port_pump.currentText()
         if not port:
             QMessageBox.warning(self, "Warning", "Select a pump COM port")
             return
-        self.log_signal.emit(f"Pump: Connecting to {port} @ 115200...")
+        pump_type = self._current_pump_type()
+        self.pump_ctrl.select_type(pump_type)
+        remember_value("pump_type", pump_type)
+        if pump_type == PUMP_TYPE_FLEXICON:
+            pump_id = self.pump_id_spin.value()
+            remember_value("flexicon_pump_id", pump_id)
+            self.pump_ctrl.configure_flexicon(pump_id, 9600)
+            self.log_signal.emit(f"Pump: Connecting Flexicon ID {pump_id} to {port} @ 9600 8N2...")
+        else:
+            self.log_signal.emit(f"Pump: Connecting Arduino Nano to {port} @ 115200...")
         ok = self.pump_ctrl.connect(port)
         if not ok:
-            QMessageBox.critical(self, "Pump Connection Error", "Pump controller identity check failed.")
+            QMessageBox.critical(self, "Pump Connection Error", "Pump controller identity/status check failed.")
             self.log_signal.emit("Pump connection failed")
             return
         self.status_pump.setText("● Connected")
@@ -758,12 +860,15 @@ class ManualControlTab(QWidget):
         self.conn_pump_btn.setEnabled(False)
         self.disc_pump_btn.setEnabled(True)
         self.port_pump.setEnabled(False)
+        self.pump_type_combo.setEnabled(False)
+        self.pump_id_spin.setEnabled(False)
         self._set_pump_controls(True)
         remember_value("pump_com", port)
-        self.log_signal.emit(f"Pump connected to {port}")
+        self.log_signal.emit(f"Pump connected to {port} ({self.pump_ctrl.model_name})")
         max_rpm = self.pump_max_rpm_spin.value()
         remember_value("pump_max_rpm", max_rpm)
-        self._pump_command(lambda: self.pump_ctrl.set_max_rpm(max_rpm), "MAXRPM")
+        if pump_type == PUMP_TYPE_ARDUINO:
+            self._pump_command(lambda: self.pump_ctrl.set_max_rpm(max_rpm), "MAXRPM")
         self._update_summary()
         self._query_pump()
 
@@ -774,6 +879,8 @@ class ManualControlTab(QWidget):
         self.conn_pump_btn.setEnabled(True)
         self.disc_pump_btn.setEnabled(False)
         self.port_pump.setEnabled(True)
+        self.pump_type_combo.setEnabled(True)
+        self.pump_id_spin.setEnabled(True)
         self._set_pump_controls(False)
         self.pump_state_lbl.setText("Pump: Not connected")
         self.log_signal.emit("Pump disconnected")
@@ -791,7 +898,7 @@ class ManualControlTab(QWidget):
             self.pump_state_lbl.setText(f"Pump command failed: {label}")
             return []
         if not lines:
-            self.log_signal.emit(f"Pump [{label}]: No response from Arduino controller")
+            self.log_signal.emit(f"Pump [{label}]: No response from pump controller")
             self.pump_state_lbl.setText(f"Pump command not confirmed: {label}")
             return []
         for line in lines:
@@ -805,7 +912,7 @@ class ManualControlTab(QWidget):
             self.pump_state_lbl.setText(f"Pump command rejected: {label}")
             return
         if any(line.startswith("OK") for line in lines):
-            self.pump_state_lbl.setText(f"Arduino accepted: {label}")
+            self.pump_state_lbl.setText(f"{self.pump_ctrl.model_name} accepted: {label}")
             return
         if any(line.startswith("STATUS") for line in lines):
             self.pump_state_lbl.setText(lines[-1])
@@ -869,6 +976,11 @@ class ManualControlTab(QWidget):
             log_fn=lambda msg: self.log_signal.emit(msg)
         )
 
+    def _remember_dropsens_com(self, value):
+        value = value.strip()
+        if value:
+            remember_value("dropsens_com", value)
+
     def _dv_disconnect(self):
         self.dv_status.setText("● Disconnecting...")
         self.dv_status.setStyleSheet("color:#FF9800;")
@@ -907,7 +1019,7 @@ class ManualControlTab(QWidget):
             f"{'Connected - ' + self.port_a.currentText() if self.ctrl_a.is_connected() else 'Not connected'}",
             f"Valve B (SY-07B)  : "
             f"{'Connected - ' + self.port_b.currentText() if self.ctrl_b.is_connected() else 'Not connected'}",
-            f"Pump (Nano)       : "
+            f"Pump ({self.pump_ctrl.model_name}) : "
             f"{'Connected - ' + self.port_pump.currentText() if self.pump_ctrl.is_connected() else 'Not connected'}",
             f"DropSens          : "
             f"{'Connected (DropView 8400M)' if self.dv_ctrl._is_connected() else 'Not connected'}",
@@ -923,7 +1035,10 @@ class ManualControlTab(QWidget):
         if self.ctrl_b.is_connected(): self.ctrl_b.stop()
         if self.pump_ctrl.is_connected():
             self.pump_ctrl.stop()
-            self.pump_ctrl.set_speed_mv(0)
+            if self.pump_ctrl.active_type == PUMP_TYPE_ARDUINO:
+                self.pump_ctrl.set_speed_mv(0)
+            else:
+                self.pump_ctrl.set_speed_rpm(0)
         self.status_a_lbl.setText("STOPPED")
         self.status_b_lbl.setText("STOPPED")
         self.pump_state_lbl.setText("Pump: STOPPED")

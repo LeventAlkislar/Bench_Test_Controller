@@ -19,7 +19,7 @@ from PyQt6.QtGui import QColor, QFont
 
 from bench_test.valve.multiport import ValveController
 from bench_test.valve.injector import InjectorValveController
-from bench_test.pump import ArduinoPumpController
+from bench_test.pump import PumpController
 from bench_test.dropview.controller import DropViewController
 from bench_test.measurement.session import (
     MEASUREMENT_MODE_CONTINUOUS_PAD,
@@ -126,7 +126,7 @@ class RecipeTab(QWidget):
 
     def __init__(self, ctrl_a: ValveController, ctrl_b: InjectorValveController,
                  dv_ctrl: DropViewController,
-                 pump_ctrl: ArduinoPumpController = None,
+                 pump_ctrl: PumpController = None,
                  package_tab=None):
         super().__init__()
         self.ctrl_a = ctrl_a; self.ctrl_b = ctrl_b
@@ -783,6 +783,11 @@ class RecipeTab(QWidget):
                 session_measurements_dir = session.measurements_dir
                 part_number = session.part_number
                 measurement_mode = getattr(session, "measurement_mode", "")
+
+        if self._main_window:
+            selected_port = self._main_window.manual_tab.port_dv.currentText().strip()
+            if selected_port:
+                remember_value("dropsens_com", selected_port)
 
         try:
             self.recipe_runner = RecipeRunner(

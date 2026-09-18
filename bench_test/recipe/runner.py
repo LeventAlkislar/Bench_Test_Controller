@@ -7,7 +7,7 @@ from typing import Optional
 
 from bench_test.recipe.models import Recipe, RecipeStep
 from bench_test.dropview.controller import DropViewController
-from bench_test.pump import ArduinoPumpController
+from bench_test.pump import PumpController
 from bench_test.valve.multiport import ValveController
 from bench_test.valve.injector import InjectorValveController
 from bench_test.measurement.session import (
@@ -60,7 +60,7 @@ class RecipeRunner(threading.Thread):
     def __init__(self, controller_a, controller_b, recipe: Recipe,
                  status_queue: queue.Queue, stop_event: threading.Event,
                   dropview_ctrl: Optional[DropViewController] = None,
-                  pump_ctrl: Optional[ArduinoPumpController] = None,
+                  pump_ctrl: Optional[PumpController] = None,
                   session_scr_path: str = "",
                   session_tp_path: str = "",
                   session_method_paths: dict = None,

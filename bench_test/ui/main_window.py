@@ -17,7 +17,7 @@ from PyQt6.QtWidgets import (
 from bench_test.dropview.controller import DropViewController
 from bench_test.measurement.session import MeasurementSession
 from bench_test.measurement.session_context import SessionContext
-from bench_test.pump import ArduinoPumpController
+from bench_test.pump import PumpController
 from bench_test.ui.tabs.log_tab import LogTab
 from bench_test.ui.tabs.manual_tab import ManualControlTab
 from bench_test.ui.tabs.measurement_setup_tab import MeasurementSetupTab
@@ -104,7 +104,7 @@ class MainWindow(QMainWindow):
 
         self.ctrl_a = ValveController()
         self.ctrl_b = InjectorValveController()
-        self.pump_ctrl = ArduinoPumpController()
+        self.pump_ctrl = PumpController()
         self.dv_ctrl = DropViewController(self)
         self._ctx = SessionContext()
 
