@@ -26,7 +26,7 @@ from bench_test.config import (
     MSG_NO_DEVICE, MSG_POTENTIOSTAT_NOT_FOUND,
 )
 from bench_test.dropview.vision import (
-    find_on_screen, match_score_on_screen,
+    find_on_screen, match_score_on_screen, match_cropped_image_score_on_window,
     wait_for_image, wait_for_image_gone,
     _grab_region, _images_equal,
 )
@@ -71,6 +71,8 @@ _IMG = {k: os.path.join(_IMG_DIR, v) for k, v in {
     "autosave_as_menu_item":        "autosave_as_menu_item.png",
     "select_nodes_unchecked":       "select_nodes_to_apply_dialog.png",
     "select_nodes_checked":         "select_nodes_to_apply_checked_dialog.png",
+    "cv_select_nodes_unchecked":    "Node 1 (CV) Unchecked.png",
+    "cv_select_nodes_checked":      "Node 1 (CV) Checked.png",
     "accept_btn":                   "accept_btn.png",
     "save_as_node_dialog":          "save_as_node_dialog.png",
     "save_btn":                     "save_btn.png",
@@ -689,20 +691,72 @@ def _is_checkbox_checked(hwnd, text: str) -> bool | None:
         return None
 
 
-def _image_score(hwnd, image_key: str) -> float:
-    return match_score_on_screen(
-        _require_image(image_key),
-        hwnd=hwnd,
-        use_foreground_fallback=False,
+_NODE_CHECKBOX_CHECKED_DARK_RATIO = 0.08
+_NODE_CHECKBOX_UNCHECKED_DARK_RATIO = 0.03
+_CV_NODE_CHECKBOX_CROP = (0, 27, 18, 49)
+_CV_NODE_CHECKBOX_MATCH_THRESHOLD = 0.75
+_CV_NODE_CHECKBOX_MATCH_MARGIN = 0.10
+
+
+def _node_checked_by_pixels(hwnd) -> bool | None:
+    try:
+        child = _find_child_by_text(hwnd, "Node 1")
+        if not child:
+            return None
+        left, top, right, bottom = win32gui.GetWindowRect(child)
+        width = right - left
+        height = bottom - top
+        checkbox_width = min(width, height, 20)
+        if checkbox_width < 8 or height < 8:
+            return None
+
+        checkbox = _grab_region(left, top, checkbox_width, height).convert("L")
+        margin = max(2, min(checkbox.size) // 5)
+        inner = checkbox.crop(
+            (margin, margin, checkbox.width - margin, checkbox.height - margin)
+        )
+        histogram = inner.histogram()
+        dark_pixels = sum(histogram[:110])
+        pixel_count = inner.width * inner.height
+        dark_ratio = dark_pixels / pixel_count if pixel_count else 0.0
+        debug_log(
+            f"Node 1 checkbox dark pixel ratio: {dark_ratio:.3f} "
+            f"(control_rect={left},{top},{right},{bottom})"
+        )
+
+        if dark_ratio >= _NODE_CHECKBOX_CHECKED_DARK_RATIO:
+            return True
+        if dark_ratio <= _NODE_CHECKBOX_UNCHECKED_DARK_RATIO:
+            return False
+    except Exception as exc:
+        debug_log(f"Node 1 checkbox pixel check failed: {exc}", level="warning")
+    return None
+
+
+def _cv_node_checked_by_template(hwnd) -> bool | None:
+    checked_score = match_cropped_image_score_on_window(
+        _require_image("cv_select_nodes_checked"),
+        _CV_NODE_CHECKBOX_CROP,
+        hwnd,
     )
-
-
-def _node_checked_by_image(hwnd) -> bool | None:
-    checked_score = _image_score(hwnd, "select_nodes_checked")
-    unchecked_score = _image_score(hwnd, "select_nodes_unchecked")
-    if checked_score >= THRESHOLD_MID and checked_score > unchecked_score + 0.03:
+    unchecked_score = match_cropped_image_score_on_window(
+        _require_image("cv_select_nodes_unchecked"),
+        _CV_NODE_CHECKBOX_CROP,
+        hwnd,
+    )
+    debug_log(
+        "CV Node 1 checkbox template scores: "
+        f"checked={checked_score:.3f}, unchecked={unchecked_score:.3f}"
+    )
+    if (
+        checked_score >= _CV_NODE_CHECKBOX_MATCH_THRESHOLD
+        and checked_score >= unchecked_score + _CV_NODE_CHECKBOX_MATCH_MARGIN
+    ):
         return True
-    if unchecked_score >= THRESHOLD_MID and unchecked_score > checked_score + 0.03:
+    if (
+        unchecked_score >= _CV_NODE_CHECKBOX_MATCH_THRESHOLD
+        and unchecked_score >= checked_score + _CV_NODE_CHECKBOX_MATCH_MARGIN
+    ):
         return False
     return None
 
@@ -729,21 +783,31 @@ def _click_node_checkbox_area(hwnd, log_fn=None):
     )
 
 
-def _ensure_node_checked(hwnd, log_fn=None):
-    checked = _is_checkbox_checked(hwnd, "Node 1")
-    if checked is True:
+def _ensure_node_checked(
+    hwnd,
+    log_fn=None,
+    context: str = "DropView",
+    visual_state_fn=None,
+):
+    checked_by_control = _is_checkbox_checked(hwnd, "Node 1")
+    if checked_by_control is True:
         return
-    if checked is None:
-        checked = _node_checked_by_image(hwnd)
-    if checked is True:
+    visual_state_fn = visual_state_fn or _node_checked_by_pixels
+    checked_by_pixels = visual_state_fn(hwnd)
+    if checked_by_pixels is True:
+        if checked_by_control is False:
+            debug_log(f"{context}: Node 1 is visually checked; skipping checkbox click.")
         return
+
     _click_node_checkbox_area(hwnd, log_fn=log_fn)
-    checked = _is_checkbox_checked(hwnd, "Node 1")
-    if checked is True:
+    checked_by_control = _is_checkbox_checked(hwnd, "Node 1")
+    if checked_by_control is True:
         return
-    checked = _node_checked_by_image(hwnd)
-    if checked is False:
-        raise RuntimeError("Continuous PAD: Node 1 checkbox could not be selected.")
+    checked_by_pixels = visual_state_fn(hwnd)
+    if checked_by_pixels is True:
+        return
+    if checked_by_control is False or checked_by_pixels is False:
+        raise RuntimeError(f"{context}: Node 1 checkbox could not be selected.")
 
 
 def _click_button(hwnd, text: str, image_key: str, log_fn=None, post_delay=SLEEP_AFTER_CLICK):
@@ -1680,8 +1744,11 @@ def step_load_continuous_pad_method(config: dict, log_fn=None):
         owner_hwnd=dv_hwnd,
         image_key="method_select_nodes_unchecked",
     )
-    if not _click_child_text(nodes_hwnd, "Select all", log_fn=log_fn, exact=False):
-        _click_image(nodes_hwnd, "select_all_btn", log_fn=log_fn)
+    _ensure_node_checked(
+        nodes_hwnd,
+        log_fn=log_fn,
+        context="Continuous PAD method load",
+    )
     _click_button(
         nodes_hwnd,
         "Accept",
@@ -1798,7 +1865,12 @@ def step_configure_cv_autosave(config: dict, log_fn=None):
         owner_hwnd=dv_hwnd,
         image_key="select_nodes_unchecked",
     )
-    _ensure_node_checked(nodes_hwnd, log_fn=log_fn)
+    _ensure_node_checked(
+        nodes_hwnd,
+        log_fn=log_fn,
+        context="CV AutoSave",
+        visual_state_fn=_cv_node_checked_by_template,
+    )
     _click_button(nodes_hwnd, "Accept", "accept_btn", log_fn=log_fn, post_delay=SLEEP_AFTER_COMMAND)
 
     save_hwnd = _find_dialog_by_title(
@@ -1872,8 +1944,11 @@ def step_load_cv_method(config: dict, log_fn=None):
         owner_hwnd=dv_hwnd,
         image_key="method_select_nodes_unchecked",
     )
-    if not _click_child_text(nodes_hwnd, "Select all", log_fn=log_fn, exact=False):
-        _click_image(nodes_hwnd, "select_all_btn", log_fn=log_fn)
+    _ensure_node_checked(
+        nodes_hwnd,
+        log_fn=log_fn,
+        context="CV method load",
+    )
     _click_button(
         nodes_hwnd,
         "Accept",

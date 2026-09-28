@@ -111,6 +111,30 @@ def match_score_on_screen(image_path, hwnd=None, use_foreground_fallback=True) -
         return 0.0
 
 
+def match_cropped_image_score_on_window(image_path, crop_box, hwnd) -> float:
+    """Return the best score for a cropped template inside the target window."""
+    try:
+        needle_pil = Image.open(image_path).convert("RGB").crop(crop_box)
+        needle = cv2.cvtColor(np.array(needle_pil), cv2.COLOR_RGB2BGR)
+        screen, offset_x, offset_y = _grab_screen(
+            hwnd=hwnd,
+            use_foreground_fallback=False,
+        )
+        left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+        x1 = max(0, left - offset_x)
+        y1 = max(0, top - offset_y)
+        x2 = min(screen.shape[1], right - offset_x)
+        y2 = min(screen.shape[0], bottom - offset_y)
+        window = screen[y1:y2, x1:x2]
+        if window.shape[0] < needle.shape[0] or window.shape[1] < needle.shape[1]:
+            return 0.0
+        result = cv2.matchTemplate(window, needle, cv2.TM_CCOEFF_NORMED)
+        _, max_val, _, _ = cv2.minMaxLoc(result)
+        return float(max_val)
+    except Exception:
+        return 0.0
+
+
 def wait_for_image(
     image_path,
     timeout=60,

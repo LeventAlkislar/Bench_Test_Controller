@@ -1,5 +1,5 @@
 ﻿APP_NAME = "Bench Test Controller"
-APP_VERSION = "17.1.0"
+APP_VERSION = "17.2.2"
 
 
 def window_title(suffix: str = "") -> str:

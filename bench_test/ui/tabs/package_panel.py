@@ -76,6 +76,20 @@ class PackagePanel(QWidget):
             except Exception as e:
                 self._log(f"⚠ Failed to close LogWriter: {e}")
 
+    def prepare_session_delete(self, session_dir: str):
+        """Silinecek aktif session'a ait acik dosya handle'larini kapat."""
+        if self._session is None:
+            return
+
+        current_dir = os.path.normcase(os.path.abspath(self._session.session_dir))
+        target_dir = os.path.normcase(os.path.abspath(session_dir))
+        if current_dir != target_dir:
+            return
+        if self.sm.state == "running":
+            raise RuntimeError("Calisan session silinemez. Once recipe'yi durdurun.")
+
+        self._close_log_writer()
+
     # ── UI ────────────────────────────────────────────────────────
 
     def _build_ui(self):

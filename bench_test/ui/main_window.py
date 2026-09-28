@@ -170,6 +170,7 @@ class MainWindow(QMainWindow):
         self.setup_tab.sm.state_changed.connect(self._on_sm_state_changed)
         self.setup_tab.sm.state_changed.connect(self.viewer_tab._on_session_state_changed)
         self.viewer_tab.session_loaded.connect(self._on_browse_session_loaded)
+        self.viewer_tab.session_deleted.connect(self._on_session_deleted)
         self.setup_tab.package_panel.clear_session_requested.connect(
             self._on_clear_session
         )
@@ -274,6 +275,24 @@ class MainWindow(QMainWindow):
         except Exception:
             return
         self.switch_display(session, "archived")
+
+    def _on_session_deleted(self, session_dir: str):
+        """Silinen session referanslarini kapat ve gorunumu bosalt."""
+        target_dir = os.path.normcase(os.path.abspath(session_dir))
+        package_panel = self.setup_tab.package_panel
+        package_session = package_panel.get_session()
+        if package_session is not None:
+            package_dir = os.path.normcase(os.path.abspath(package_session.session_dir))
+            if package_dir == target_dir:
+                package_panel.clear()
+
+        active_session = self._ctx.active_session
+        if active_session is not None:
+            active_dir = os.path.normcase(os.path.abspath(active_session.session_dir))
+            if active_dir == target_dir:
+                self._ctx.clear_active()
+
+        self.switch_display(None, "empty")
 
     def _on_clear_session(self):
         """Oturumu Temizle -> display'i bosalt, aktif pipeline etkilenmez."""

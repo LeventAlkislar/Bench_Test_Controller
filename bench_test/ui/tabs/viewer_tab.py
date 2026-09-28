@@ -18,6 +18,7 @@ ViewerTab
 
 import os
 import shutil
+import stat
 import math
 from bisect import bisect_left
 from datetime import datetime, timedelta
@@ -192,6 +193,7 @@ POLL_INTERVAL_MS = 10_000   # 10 saniye
 class ViewerTab(QWidget):
     log_signal     = pyqtSignal(str)
     session_loaded = pyqtSignal(str)
+    session_deleted = pyqtSignal(str)
     delay_changed  = pyqtSignal(int, int)   # (minutes, seconds)
 
     def __init__(self, package_tab=None):
@@ -2003,7 +2005,10 @@ class ViewerTab(QWidget):
             return
 
         try:
-            shutil.rmtree(session_dir)
+            self._poll_timer.stop()
+            if self.package_tab is not None:
+                self.package_tab.prepare_session_delete(session_dir)
+            shutil.rmtree(session_dir, onerror=self._handle_remove_error)
             self.log_signal.emit(f"Session silindi: {session_dir}")
         except Exception as e:
             import traceback
@@ -2013,31 +2018,21 @@ class ViewerTab(QWidget):
             QMessageBox.critical(self, "Hata", f"Dizin silinemedi:\n{err}")
             return
 
-        # UI temizle
-        self._session = None
-        self._history_sessions = []
-        self._parse_result = None
-        self._viewer_mode = "pad"
-        self._viewer_mode_user_selected = False
-        self._sync_view_mode_controls(has_pad=False, has_cv=False)
-        self._apply_graph_layout_for_mode("pad")
+        self.session_deleted.emit(session_dir)
+        self.clear()
         self.session_lbl.setText("Oturum silindi")
-        self.meta_lbl.setText("—")
-        self.notes_edit.clear()
-        self.sys_edit.clear()
-        self.delete_btn.setEnabled(False)
-        self._set_plot_titles("")
-        if self.plot_widget_top:
-            self.plot_widget_top.clear()
-            if getattr(self, "legend", None):
-                self.legend.clear()
-        if self.plot_widget_bottom:
-            self.plot_widget_bottom.clear()
-        self._apply_empty_time_axis()
-        self._clear_hover_data()
         mw = self._get_main_window()
         if mw and hasattr(mw, "set_part_banner"):
             mw.set_part_banner("")
+
+    @staticmethod
+    def _handle_remove_error(func, path, exc_info):
+        """Windows salt-okunur dosyalarinda izni duzeltip silmeyi bir kez yinele."""
+        error = exc_info[1]
+        if not isinstance(error, PermissionError):
+            raise error
+        os.chmod(path, stat.S_IWRITE)
+        func(path)
 
     def _show_no_data_msg(self):
         """Veri yoksa grafik alanına mesaj yazar."""
