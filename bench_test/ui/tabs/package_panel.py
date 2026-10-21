@@ -554,6 +554,26 @@ class PackagePanel(QWidget):
         if self._log_writer and self._log_writer.is_open:
             self._log_writer.write(msg)
 
+    def adopt_recovery_session(self, session):
+        """Attach an already reconstructed package without normal startup preparation."""
+        if self.sm.state in ("running", AGGREGATING):
+            raise RuntimeError("The current session must finish before recovery.")
+        self._close_log_writer()
+        self.sm.reset()
+        self._session = session
+        self._log_writer = LogWriter(session)
+        self._log_writer.open()
+        self.part_number_edit.setText(session.part_number)
+        self.package_root_edit.setText(os.path.dirname(os.path.dirname(session.session_dir)))
+        self.session_id_edit.setText(os.path.basename(session.session_dir))
+        self.session_dir_lbl.setText(session.session_dir)
+        self.set_tp_ref(session.get_file_path("tp") or "")
+        self.set_scr_ref(session.get_file_path("script") or "")
+        self.set_recipe_ref(session.get_file_path("recipe") or "")
+        self.aggregate_btn.setEnabled(True)
+        self._set_status(f"Recovery: {session.part_number}", _COLOR_RUNNING)
+        self.sm.build(session)
+
     def on_recipe_completed(self):
         if self._session:
             self._set_status(f"Completed: {self._session.part_number}", _COLOR_DONE)
@@ -609,15 +629,18 @@ class PackagePanel(QWidget):
         part_number = self._session.part_number
         status      = self._session.status.value
 
-        reply = QMessageBox.question(
-            self, "Archive Session",
-            f"Session: {part_number}  [{status}]\n"
-            f"{session_dir}\n\n"
-            f"Keep this session?\n"
-            f"Selecting 'No' will delete all files.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.Yes,
-        )
+        if "recovery_origin" in self._session.files:
+            reply = QMessageBox.StandardButton.Yes
+        else:
+            reply = QMessageBox.question(
+                self, "Archive Session",
+                f"Session: {part_number}  [{status}]\n"
+                f"{session_dir}\n\n"
+                f"Keep this session?\n"
+                f"Selecting 'No' will delete all files.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
 
         if reply == QMessageBox.StandardButton.No:
             self._close_log_writer()

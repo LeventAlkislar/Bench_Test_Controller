@@ -1,6 +1,7 @@
 # bench_test/recipe/runner.py
 import copy
 import json
+import os
 import queue
 import threading
 import time
@@ -9,7 +10,12 @@ from dataclasses import asdict
 from typing import Optional
 
 from bench_test.recipe.models import Recipe, RecipeStep
-from bench_test.recipe.recovery import expanded_step_indices
+from bench_test.recipe.recovery import (
+    RecoveryJournal, expanded_step_indices, plan_recovery, recipe_from_snapshot,
+)
+from bench_test.recipe.recovery_executor import (
+    RecipeExecutionLock, reconnect_recovery_pump, verify_recovery_valves,
+)
 from bench_test.dropview.controller import DropViewController
 from bench_test.pump import PumpController
 from bench_test.valve.multiport import ValveController
@@ -72,7 +78,9 @@ class RecipeRunner(threading.Thread):
                  part_number: str = "",
                  measurement_mode: str = MEASUREMENT_MODE_SCRIPT_PAD,
                  simulation_mode: bool = False,
-                 recovery_journal=None):
+                 recovery_journal=None,
+                 recovery_record=None,
+                 recovery_source_path=""):
         super().__init__(daemon=True)
         self.controller_a     = controller_a
         self.controller_b     = controller_b
@@ -109,6 +117,18 @@ class RecipeRunner(threading.Thread):
         self._journal_failed = False
         self._last_checkpoint_t = 0.0
         self._checkpoint_lock = threading.RLock()
+        self.recovery_record = copy.deepcopy(recovery_record)
+        self.recovery_source_path = recovery_source_path
+        self._recovery_plan = plan_recovery(recovery_record) if recovery_record else None
+        self._recovery_source_journal = None
+        self._recovery_prepared = False
+        self._recovery_observed_valves = {}
+        if recovery_record:
+            if asdict(recipe) != asdict(recipe_from_snapshot(recovery_record["recipe"])):
+                raise ValueError("Recovery recipe differs from its saved snapshot.")
+            if recovery_journal is None or not recovery_source_path:
+                raise ValueError("Recovery requires both source and destination records.")
+            self._requested_settings.update(recovery_record.get("requested_settings", {}))
 
     def checkpoint(self, phase=None, **changes):
         """Record execution boundaries without sending any additional device commands."""
@@ -372,18 +392,25 @@ class RecipeRunner(threading.Thread):
         ))
         return False
 
-    def _execute_step(self, step: RecipeStep, step_num, total_steps, loop_info=""):
+    def _execute_step(self, step: RecipeStep, step_num, total_steps, loop_info="", recovery_options=None):
         if self.stop_event.is_set():
             return False
 
         action = step.dropview_action
         dv     = self.dropview_ctrl
+        options = recovery_options or {}
+        if self.recovery_record:
+            if step.port > 0 and not (self.controller_a and self.controller_a.is_connected()):
+                raise RuntimeError("Recovery cannot skip a disconnected Valve A.")
+            if step.valve_b_state > 0 and not (self.controller_b and self.controller_b.is_connected()):
+                raise RuntimeError("Recovery cannot skip a disconnected Valve B.")
 
         # ── Valf A ────────────────────────────────────────────
         if self.stop_event.is_set():
             return False
 
-        if step.port > 0 and self.controller_a and self.controller_a.is_connected():
+        if (step.port > 0 and not options.get("skip_valve_a")
+                and self.controller_a and self.controller_a.is_connected()):
             self._requested_settings["valve_a"] = step.port
             self.checkpoint("valve_a")
             self.status_queue.put(("switching", f"{loop_info}Valve A -> Port {step.port}"))
@@ -394,13 +421,20 @@ class RecipeRunner(threading.Thread):
                     self.status_queue.put(("error", f"Valve A port switch failed: {err}"))
                     return False
             time.sleep(0.3)
-            self.controller_a.wait_for_completion(timeout=20.0)
+            completed = self.controller_a.wait_for_completion(timeout=20.0)
+            if recovery_options and not completed:
+                raise RuntimeError("Recovery Valve A movement did not complete.")
+            if self.recovery_record:
+                actual = self.controller_a.get_current_port()
+                if not actual.get("success") or actual.get("status") != 0 or actual.get("param1") != step.port:
+                    raise RuntimeError(f"Recovery Valve A target was not verified: {actual}")
             self._log(f"{loop_info}Valve A: At port {step.port}")
         elif step.port > 0 and self.simulation_mode:
             self._log(f"SIMULATED: Valve A -> Port {step.port} (not connected, skipped)")
 
         # ── Valf B ────────────────────────────────────────────
-        if step.valve_b_state > 0 and self.controller_b and self.controller_b.is_connected():
+        if (step.valve_b_state > 0 and not options.get("skip_valve_b")
+                and self.controller_b and self.controller_b.is_connected()):
             self._requested_settings["valve_b"] = step.valve_b_state
             self.checkpoint("valve_b")
             state_name = InjectorValveController.STATE_NAMES.get(step.valve_b_state, "")
@@ -412,23 +446,29 @@ class RecipeRunner(threading.Thread):
                     self.status_queue.put(("error", f"Valve B switch failed: {err}"))
                     return False
             time.sleep(0.3)
-            self.controller_b.wait_for_completion(timeout=20.0)
+            completed = self.controller_b.wait_for_completion(timeout=20.0)
+            if recovery_options and not completed:
+                raise RuntimeError("Recovery Valve B movement did not complete.")
+            if self.recovery_record:
+                actual = self.controller_b.get_current_state()
+                if not actual.get("success") or actual.get("status") != 0 or actual.get("param1") != step.valve_b_state:
+                    raise RuntimeError(f"Recovery Valve B target was not verified: {actual}")
             self._log(f"{loop_info}Valve B: {state_name} position")
         elif step.valve_b_state > 0 and self.simulation_mode:
             state_name = InjectorValveController.STATE_NAMES.get(step.valve_b_state, "")
             self._log(f"SIMULATED: Valve B -> {state_name} (not connected, skipped)")
 
         # ── Pompa ─────────────────────────────────────────────
-        if step.pump_rpm is not None:
+        if step.pump_rpm is not None and not options.get("skip_pump"):
             self._requested_settings["pump_rpm"] = step.pump_rpm
             self.checkpoint("pump")
-        if not self._apply_pump_rpm(step, step_num, loop_info):
+        if not options.get("skip_pump") and not self._apply_pump_rpm(step, step_num, loop_info):
             return False
 
         if self.stop_event.is_set():
             return False
 
-        if action == "start_dropview" and dv:
+        if action == "start_dropview" and dv and not options.get("skip_start"):
             self.checkpoint("dropview_start")
             self._debug_log("Launching DropView and connecting DropSens...")
             ok = dv.do_start_dropview(log_fn=self._log)
@@ -442,7 +482,7 @@ class RecipeRunner(threading.Thread):
             "start_discrete_pad",
             "start_continuous_pad",
             "run_cv",
-        ) and dv:
+        ) and dv and not options.get("skip_start"):
             self.checkpoint("measurement_start")
             if not self._check_dropview_connected():
                 self.status_queue.put(("error",
@@ -494,7 +534,7 @@ class RecipeRunner(threading.Thread):
             action == "start_measure"
             and self.measurement_mode == MEASUREMENT_MODE_CV
         )
-        if step.duration_minutes > 0 and not cv_run_action:
+        if step.duration_minutes > 0 and not cv_run_action and not options.get("skip_wait"):
             parts = []
             if step.port > 0:
                 parts.append(f"A:Port {step.port}")
@@ -513,7 +553,7 @@ class RecipeRunner(threading.Thread):
                 running_msg += f"  |  {step.description}"
             self.status_queue.put(("running", running_msg))
     
-            duration_sec = step.duration_minutes * 60
+            duration_sec = options.get("remaining_seconds", step.duration_minutes * 60)
             self.checkpoint("waiting", remaining_seconds=duration_sec)
             start_t = time.time()
             while time.time() - start_t < duration_sec:
@@ -587,11 +627,110 @@ class RecipeRunner(threading.Thread):
 
     def run(self):
         try:
-            self._run_recipe()
+            with RecipeExecutionLock():
+                self._run_recipe()
         except Exception as exc:
-            self.checkpoint(status="interrupted", error=str(exc))
+            status = "interrupted" if not self.recovery_record or self._recovery_prepared else "recovery_blocked"
+            self.checkpoint(status="user_stopped" if self.stop_event.is_set() else status, error=str(exc))
+            if self._recovery_source_journal is not None:
+                try:
+                    source = RecoveryJournal.read(self.recovery_source_path)
+                    if source.get("status") == "recovering":
+                        self._recovery_source_journal.update(
+                            status="user_stopped" if self.stop_event.is_set() else "interrupted",
+                            stop_requested=self.stop_event.is_set(), recovery_error=str(exc))
+                except (OSError, ValueError) as record_error:
+                    self._log(f"Could not update recovery source: {record_error}")
             debug_log("Recipe runner failed:\n" + traceback.format_exc(), level="error")
             self.status_queue.put(("error", f"Recipe runner failed: {exc}"))
+
+    def _prepare_recovery(self):
+        current = RecoveryJournal.read(self.recovery_source_path)
+        if current.get("revision") != self.recovery_record.get("revision"):
+            raise RuntimeError("The source record changed; reload it before recovery.")
+        plan_recovery(current)
+        self._recovery_source_journal = RecoveryJournal(self.recovery_source_path, current)
+        self._recovery_source_journal.update(
+            status="recovering", recovery_attempts=current.get("recovery_attempts", 0) + 1,
+            recovery_session=os.path.dirname(self.session_measurements_dir))
+        self.checkpoint("reconciling", status="recovering")
+        if self._journal_failed:
+            raise RuntimeError("The new recovery record is not writable.")
+        self._recovery_observed_valves = verify_recovery_valves(
+            current, self.controller_a, self.controller_b)
+        reconnect_recovery_pump(current, self.recipe, self.pump_ctrl)
+        if self.stop_event.is_set():
+            raise RuntimeError("Recovery cancelled by user.")
+        if self.dropview_ctrl is None:
+            raise RuntimeError("Recovery requires the DropView controller.")
+        may_be_running = (
+            (current.get("measurement_running", False) or current["phase"] == "measurement_start")
+            and not current.get("recovery_previous_stopped", False)
+        )
+        if not self.dropview_ctrl.do_reconcile_discrete_recovery(may_be_running, log_fn=self._log):
+            raise RuntimeError("The previous Discrete PAD measurement could not be reconciled.")
+        self._recovery_source_journal.update(recovery_previous_stopped=True)
+        if self.stop_event.is_set():
+            raise RuntimeError("Recovery cancelled by user.")
+        plan = self._recovery_plan
+        if not plan.finished:
+            target = self.recipe.steps[plan.step_index - 1]
+            same_step = (plan.recipe_loop == current["recipe_loop"]
+                         and plan.sequence_index == current["sequence_index"])
+            if same_step:
+                target = RecipeStep(**current["active_step"])
+            needs_measurement = current.get("measurement_running", False) and (
+                target.dropview_action in ("none", "start_dropview")
+                or (same_step and current["phase"] == "waiting"
+                    and target.dropview_action in ("stop_measure", "stop_discrete_pad", "exit_dropview")))
+            if (needs_measurement or target.dropview_action in ("none", "start_measure", "start_discrete_pad")
+                    or (same_step and current["phase"] == "waiting" and target.dropview_action == "start_dropview")):
+                if not self.dropview_ctrl.do_start_dropview(log_fn=self._log):
+                    raise RuntimeError("DropView could not be restored.")
+            if self.stop_event.is_set():
+                raise RuntimeError("Recovery cancelled by user.")
+            if needs_measurement:
+                self._recovery_source_journal.update(recovery_previous_stopped=False)
+                if not self.dropview_ctrl.do_start_measure(self.session_scr_path, log_fn=self._log):
+                    raise RuntimeError("Discrete PAD could not restart in the new package.")
+                self.measurement_running = True
+                self.active_measurement_kind = "discrete_pad"
+        if self.stop_event.is_set():
+            raise RuntimeError("Recovery cancelled by user.")
+        if not plan.finished:
+            with self._checkpoint_lock:
+                self.current_loop_index = plan.recipe_loop
+                self.current_sequence_index = plan.sequence_index
+                self.current_step_index = plan.step_index
+                self.current_sequence_total = len(expanded_step_indices(self.recipe))
+                self._active_step = copy.copy(target)
+                self.checkpoint(
+                    current["phase"] if same_step else "step_pending", status="running",
+                    remaining_seconds=current.get("remaining_seconds") if same_step else None)
+            if self._journal_failed:
+                raise RuntimeError("The recovery cursor could not be saved.")
+        self._recovery_source_journal.update(status="superseded")
+        self._recovery_prepared = True
+        self._log(f"Recovery: loop {plan.recipe_loop}, sequence {plan.sequence_index}, step {plan.step_index}.")
+
+    def _recovery_options(self, step):
+        phase = self.recovery_record["phase"]
+        rank = {"step_pending": 0, "valve_a": 1, "valve_b": 2, "pump": 3,
+                "dropview_start": 4, "measurement_start": 4, "waiting": 5,
+                "measurement_stop": 6, "dropview_exit": 6}[phase]
+        options = {
+            "skip_valve_a": rank > 1 or self._recovery_observed_valves.get("valve_a") == step.port,
+            "skip_valve_b": rank > 2 or self._recovery_observed_valves.get("valve_b") == step.valve_b_state,
+            "skip_pump": rank > 3,
+            "skip_start": rank >= 5,
+            "skip_wait": rank >= 6,
+        }
+        if phase == "waiting":
+            remaining = self.recovery_record.get("remaining_seconds")
+            if not isinstance(remaining, (int, float)) or not 0 <= remaining <= step.duration_minutes * 60:
+                raise ValueError("The saved remaining duration is invalid.")
+            options["remaining_seconds"] = remaining
+        return options
 
     def _run_recipe(self):
         recipe     = self.recipe
@@ -601,10 +740,18 @@ class RecipeRunner(threading.Thread):
         self.recipe_start_t = time.time()
         self.current_loop_count = loop_count
         self.status_queue.put(("started", f"Recipe '{recipe.name}' started."))
-        self.checkpoint(status="running")
-        self._safe_stop_pump("RECIPE START")
+        if self.recovery_record:
+            self._prepare_recovery()
+            if self._recovery_plan.finished:
+                self.checkpoint(status="completed_after_interruption")
+                self.status_queue.put(("finished", "Recipe ended after interruption of its final measurement."))
+                return
+        else:
+            self.checkpoint(status="running")
+            self._safe_stop_pump("RECIPE START")
 
-        for loop_i in range(loop_count):
+        first_loop = self._recovery_plan.recipe_loop - 1 if self.recovery_record else 0
+        for loop_i in range(first_loop, loop_count):
             loop_info = f"[Loop {loop_i+1}/{loop_count}] " if loop_count > 1 else ""
 
             expanded = expanded_step_indices(recipe)
@@ -612,6 +759,9 @@ class RecipeRunner(threading.Thread):
             total = len(expanded)
             self.current_expanded_indices = expanded
             for step_num, idx in enumerate(expanded, 1):
+                if (self.recovery_record and loop_i == first_loop
+                        and step_num < self._recovery_plan.sequence_index):
+                    continue
                 if self.stop_event.is_set():
                     self.checkpoint(status="user_stopped")
                     self._safe_stop_pump("RECIPE STOP")
@@ -624,8 +774,18 @@ class RecipeRunner(threading.Thread):
                     self.current_sequence_index = step_num
                     self.current_sequence_total = total
                     step = copy.copy(steps[idx])
+                    same_interrupted_step = (
+                        self.recovery_record is not None
+                        and loop_i + 1 == self.recovery_record["recipe_loop"]
+                        and step_num == self.recovery_record["sequence_index"]
+                    )
+                    if same_interrupted_step:
+                        step = RecipeStep(**self.recovery_record["active_step"])
                     self._active_step = step
-                    self.checkpoint("step_pending", remaining_seconds=None)
+                    self.checkpoint(
+                        self.recovery_record["phase"] if same_interrupted_step else "step_pending",
+                        status="running", remaining_seconds=(
+                            self.recovery_record.get("remaining_seconds") if same_interrupted_step else None))
                 if not step.enabled:
                     self.checkpoint("step_skipped")
                     description = f" ({step.description})" if step.description else ""
@@ -635,10 +795,14 @@ class RecipeRunner(threading.Thread):
                         f"(sequence {step_num}/{total}).",
                     ))
                     continue
-                ok = self._execute_step(step, step_num, total, loop_info)
+                if same_interrupted_step:
+                    ok = self._execute_step(step, step_num, total, loop_info, self._recovery_options(step))
+                else:
+                    ok = self._execute_step(step, step_num, total, loop_info)
                 if not ok:
                     self.checkpoint(status="user_stopped" if self.stop_event.is_set() else "interrupted")
-                    self._safe_stop_pump("RECIPE STOP")
+                    if self.stop_event.is_set() or self.recovery_journal is None:
+                        self._safe_stop_pump("RECIPE STOP")
                     if self.stop_event.is_set():
                         if self._stop_measurement_for_recipe_stop():
                             self.status_queue.put(("stopped", "Recipe stopped."))

@@ -133,6 +133,26 @@ class DropViewController(QObject):
             if log_fn: log_fn(f"Stop Measure error: {e}")
             return False
 
+    def do_reconcile_discrete_recovery(self, measurement_may_be_running: bool, log_fn=None) -> bool:
+        """Do not interpret an absent editor as a verified stopped measurement."""
+        try:
+            editor_open = automator.window_exists(automator.MULTISCRIPT_WINDOW)
+            if editor_open:
+                if not self.do_stop_measure(log_fn=log_fn):
+                    return False
+                if automator.window_exists(automator.MULTISCRIPT_WINDOW):
+                    raise RuntimeError("The old Multiscript Editor is still open after Stop.")
+            elif measurement_may_be_running:
+                raise RuntimeError(
+                    "The previous measurement may still be active, but its Multiscript Editor "
+                    "is unavailable. A stopped device cannot be verified automatically."
+                )
+            return True
+        except Exception as exc:
+            if log_fn:
+                log_fn(f"Discrete PAD recovery blocked: {exc}")
+            return False
+
     def do_start_continuous_pad(
         self,
         tp_path: str,

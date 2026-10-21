@@ -5,6 +5,7 @@ plan must be reconciled with the real devices before a future executor uses it.
 """
 import copy
 import json
+import math
 import os
 import tempfile
 import threading
@@ -19,9 +20,21 @@ RECORD_FILENAME = "recipe_recovery.json"
 
 
 def is_discrete_pad_recipe(recipe: Recipe) -> bool:
-    return not any(step.dropview_action in (
-        "run_cv", "start_continuous_pad", "stop_continuous_pad"
+    return all(step.dropview_action in (
+        "none", "start_dropview", "start_measure", "start_discrete_pad",
+        "stop_measure", "stop_discrete_pad", "exit_dropview",
     ) for step in recipe.steps)
+
+
+def validate_recovery_step(step: RecipeStep):
+    if (type(step.port) is not int or not 0 <= step.port <= 8
+            or type(step.valve_b_state) is not int or not 0 <= step.valve_b_state <= 2
+            or type(step.enabled) is not bool
+            or type(step.duration_minutes) not in (int, float)
+            or not math.isfinite(step.duration_minutes) or step.duration_minutes < 0
+            or (step.pump_rpm is not None and (type(step.pump_rpm) not in (int, float)
+                or not math.isfinite(step.pump_rpm) or step.pump_rpm < 0))):
+        raise ValueError("Invalid device settings or duration in the recovery step.")
 
 
 def expanded_step_indices(recipe: Recipe) -> list[int]:
@@ -50,6 +63,8 @@ def recipe_from_snapshot(data: dict) -> Recipe:
     )
     if type(recipe.loop_count) is not int or recipe.loop_count < 1 or not recipe.steps:
         raise ValueError("Invalid recipe loop count or empty recipe in recovery record.")
+    for step in recipe.steps:
+        validate_recovery_step(step)
     previous_end = 0
     for loop in sorted(recipe.step_loops, key=lambda item: item.start_step):
         if (any(type(value) is not int for value in
@@ -138,11 +153,15 @@ def plan_recovery(record: dict) -> RecoveryPlan:
         raise ValueError("Recovery is currently limited to Discrete PAD.")
     if record.get("status") not in ("running", "interrupted"):
         raise ValueError("This run is not eligible for recovery.")
+    if any(type(record.get(key)) is not bool for key in ("measurement_running", "paused", "stop_requested")):
+        raise ValueError("Invalid measurement or user-intent flags in recovery record.")
+    if record.get("active_measurement_kind") not in ("", "discrete_pad"):
+        raise ValueError("The recorded measurement is not Discrete PAD.")
     if record.get("stop_requested") or record.get("paused") or record.get("closed_by_user"):
         raise ValueError("A user stop or pause must not trigger automatic recovery.")
     recipe = recipe_from_snapshot(record["recipe"])
     if not is_discrete_pad_recipe(recipe):
-        raise ValueError("Recovery is not enabled for recipes containing Continuous PAD or CV.")
+        raise ValueError("Recovery is not enabled for recipes containing unsupported measurement actions.")
     expanded = expanded_step_indices(recipe)
     loop = record["recipe_loop"]
     sequence = record["sequence_index"]
@@ -160,12 +179,20 @@ def plan_recovery(record: dict) -> RecoveryPlan:
         raise ValueError("Recovery needs a known, recorded step phase.")
     # active_step is the copy being executed. Live edits apply at next arrival.
     active_step = RecipeStep(**record["active_step"])
+    validate_recovery_step(active_step)
+    if not is_discrete_pad_recipe(Recipe("active", [active_step])):
+        raise ValueError("The interrupted step is not a Discrete PAD step.")
     skip_wait = (
         phase == "waiting"
         and record.get("measurement_running") is True
         and record.get("active_measurement_kind") == "discrete_pad"
         and active_step.dropview_action in ("none", "start_measure", "start_discrete_pad")
     )
+    if phase == "waiting" and not skip_wait:
+        remaining = record.get("remaining_seconds")
+        if (type(remaining) not in (int, float) or not math.isfinite(remaining)
+                or not 0 <= remaining <= active_step.duration_minutes * 60):
+            raise ValueError("Invalid remaining duration for the interrupted control/wait step.")
     if phase in ("step_completed", "step_skipped") or skip_wait:
         sequence += 1
         if sequence > len(expanded):

@@ -29,6 +29,7 @@ from bench_test.measurement.session import (
 )
 from bench_test.recipe.models import Recipe, RecipeStep, StepLoop
 from bench_test.recipe.recovery import RecoveryJournal, is_discrete_pad_recipe
+from bench_test.recipe.recovery_executor import RecipeExecutionLock, create_recovery_package
 from bench_test.recipe.runner import RecipeRunner, DROPVIEW_ACTIONS, DROPVIEW_LABELS, DROPVIEW_ZERO_DURATION_OK
 from bench_test.utils.paths import (
     get_value,
@@ -151,6 +152,7 @@ class RecipeTab(QWidget):
         self._elapsed_time_text = "-"
         self._display_experiment_params = {}
         self._active_measurement_mode = ""
+        self._recovery_run = False
         self._runtime_change_log_path = ""
         self._runtime_logging_active = False
 
@@ -275,6 +277,8 @@ class RecipeTab(QWidget):
         fb = QHBoxLayout()
         self.load_recipe_btn = _btn("Load Recipe", self._load_recipe, "#4CAF50")
         fb.addWidget(self.load_recipe_btn)
+        self.recover_btn = _btn("Recover Discrete PAD", self._recover_discrete_pad, "#1565C0")
+        fb.addWidget(self.recover_btn)
         fb.addWidget(_btn("Save Recipe", self._save_recipe, "#FF9800"))
         fb.addStretch()
         layout.addLayout(fb)
@@ -334,6 +338,7 @@ class RecipeTab(QWidget):
             self.set_loop_btn,
             self.clear_loops_btn,
             self.load_recipe_btn,
+            self.recover_btn,
         ):
             control.setEnabled(enabled)
 
@@ -820,6 +825,9 @@ class RecipeTab(QWidget):
             pass
 
     def _start_recipe(self):
+        if self.recipe_runner and self.recipe_runner.is_alive():
+            QMessageBox.warning(self, "Recipe Busy", "A recipe or recovery is still running.")
+            return
         if not self.recipe_steps:
             QMessageBox.warning(self, "Warning", "No recipe steps")
             return
@@ -905,6 +913,7 @@ class RecipeTab(QWidget):
                 remember_value("dropsens_com", selected_port)
 
         try:
+            self._recovery_run = False
             recovery_journal = None
             if (session and measurement_mode == MEASUREMENT_MODE_SCRIPT_PAD
                     and not self._simulation_mode
@@ -967,6 +976,63 @@ class RecipeTab(QWidget):
         else:
             self.pause_btn.setToolTip("")
         self.log_signal.emit(f"Recipe started: {recipe.name}")
+
+    def _recover_discrete_pad(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select interrupted recipe recovery record", get_last("package_root"),
+            "Recovery record (recipe_recovery.json)",
+        )
+        if not path:
+            return
+        try:
+            self.recover_from_record(path)
+        except Exception as exc:
+            self.log_signal.emit(f"Recovery could not start: {exc}")
+            QMessageBox.critical(self, "Recovery Error", str(exc))
+
+    def recover_from_record(self, path: str):
+        """Programmatic entry point for a future watchdog; no confirmation dialogs."""
+        if self.recipe_runner and self.recipe_runner.is_alive():
+            raise RuntimeError("A recipe is still running.")
+        if not self.package_tab or self.package_tab.sm.state in ("running", "aggregating"):
+            raise RuntimeError("Session finalization must complete before recovery.")
+        with RecipeExecutionLock():
+            record = RecoveryJournal.read(path)
+            session, recipe, journal, _plan = create_recovery_package(record, path)
+        self.package_tab.package_panel.adopt_recovery_session(session)
+        self.recipe_steps = recipe.steps
+        self.step_loops = recipe.step_loops
+        self.name_edit.setText(recipe.name)
+        self.loop_spin.setValue(recipe.loop_count)
+        self._simulation_mode = False
+        self._recovery_run = True
+        self._active_measurement_mode = MEASUREMENT_MODE_SCRIPT_PAD
+        self.stop_event.clear()
+        self.recipe_runner = RecipeRunner(
+            self.ctrl_a, self.ctrl_b, recipe, self.status_queue, self.stop_event,
+            self.dv_ctrl, pump_ctrl=self.pump_ctrl,
+            session_scr_path=session.get_file_path("script") or "",
+            session_tp_path=session.get_file_path("tp") or "",
+            session_measurements_dir=session.measurements_dir,
+            part_number=session.part_number, measurement_mode=MEASUREMENT_MODE_SCRIPT_PAD,
+            recovery_journal=journal, recovery_record=record, recovery_source_path=path,
+        )
+        self._reset_run_metrics()
+        self._prepare_runtime_change_log(session)
+        try:
+            self.recipe_runner.start()
+        except Exception:
+            self._finish_runtime_change_log()
+            self.package_tab.discard_unstarted_session()
+            raise
+        self.package_tab.sm.start()
+        self.start_btn.setEnabled(False)
+        self.pause_btn.setEnabled(True)
+        self.stop_btn.setEnabled(True)
+        self._set_structure_editing_enabled(False)
+        self._refresh_table()
+        self.log_signal.emit(f"Recovery package created: {session.session_dir}")
+        return session
 
     def _pause_recipe(self):
         if self.recipe_runner:
@@ -1071,7 +1137,8 @@ class RecipeTab(QWidget):
                     self._set_structure_editing_enabled(True)
                     if self.package_tab:                      # ← YENİ
                         self.package_tab.on_recipe_completed()  # ← YENİ
-                    QMessageBox.information(self, "Recipe Complete", str(data))
+                    if not self._recovery_run:
+                        QMessageBox.information(self, "Recipe Complete", str(data))
                     self.log_signal.emit(str(data))
                 elif msg_type == "finished":
                     self._finish_runtime_change_log()
@@ -1088,7 +1155,8 @@ class RecipeTab(QWidget):
                         self._main_window.set_simulation_mode(False)
                     if self.package_tab:                      # ← YENİ
                         self.package_tab.on_recipe_completed()  # ← YENİ
-                    QMessageBox.information(self, "Recipe Complete", str(data))
+                    if not self._recovery_run:
+                        QMessageBox.information(self, "Recipe Complete", str(data))
                     self.log_signal.emit(str(data))
                 elif msg_type == "stopped":
                     self._finish_runtime_change_log()
@@ -1126,7 +1194,8 @@ class RecipeTab(QWidget):
                     self._simulation_mode = False
                     if self._main_window:
                         self._main_window.set_simulation_mode(False)
-                    QMessageBox.critical(self, "Recipe Error", str(data))
+                    if not self._recovery_run:
+                        QMessageBox.critical(self, "Recipe Error", str(data))
                     self.log_signal.emit(f"Recipe error: {data}")
                 elif msg_type == "warning":
                     self.log_signal.emit(f"Warning: {data}")

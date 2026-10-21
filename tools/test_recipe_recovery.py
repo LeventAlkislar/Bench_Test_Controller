@@ -132,6 +132,19 @@ class RecoveryPlanTests(unittest.TestCase):
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 plan_recovery(record)
 
+    def test_invalid_device_values_and_control_duration_are_rejected(self):
+        for changes in ({"port": 9}, {"valve_b_state": 3}, {"pump_rpm": float("nan")},
+                        {"duration_minutes": -1}, {"enabled": "yes"}, {"dropview_action": "unknown"}):
+            record = sample_record()
+            record["active_step"].update(changes)
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                plan_recovery(record)
+        record = sample_record()
+        record["active_step"]["dropview_action"] = "stop_discrete_pad"
+        record["remaining_seconds"] = float("inf")
+        with self.assertRaises(ValueError):
+            plan_recovery(record)
+
     def test_invalid_inner_loops_are_rejected_before_expansion(self):
         for loops in ([StepLoop(1, 11, 2)], [StepLoop(1, 3, 2), StepLoop(3, 5, 2)],
                       [StepLoop(1, 3, 0)]):
@@ -332,6 +345,7 @@ class StartupRecordingTests(unittest.TestCase):
                 session.measurement_mode = mode
                 tab = Mock()
                 tab.recipe_steps = [RecipeStep(0, 1, dropview_action=action)]
+                tab.recipe_runner = None
                 tab.step_loops = []
                 tab._simulation_mode = simulation
                 tab._current_recipe_path = ""

@@ -39,8 +39,8 @@ The active step is stored separately from the mutable recipe because live
 changes take effect at its next arrival. A mid-step live edit must not redefine
 the operation already in progress.
 
-**No automatic restart, new recovery package, Windows Update setting change,
-COM fallback change or firmware change is enabled by phase 1.** Normal recipe
+**No automatic restart, Windows Update setting change, COM fallback change or
+firmware change is enabled yet.** Phase 2 adds an explicit recovery entry below. Normal recipe
 startup still has its original pump stop; it must not be reused as a recovery
 startup path. If a recording warning occurs, an old snapshot must not be treated
 as proof of current device state.
@@ -51,17 +51,52 @@ Validation (no hardware/UI operation):
 .\.venv\Scripts\python.exe -B -m unittest discover -s tools -p test_*.py
 ```
 
-## Phase 2 — recovery executor (pending)
+## Phase 2 — recovery executor (implemented; hardware validation pending)
 
-Create a new linked session/package from saved method files and the live recipe,
-repoint script output paths, reconnect without homing/resetting devices, read
-actual valve positions, reconcile the old measurement, and continue from the
-planned cursor without invoking normal startup preparation or zeroing the pump.
-An inherited running measurement must be explicitly reconciled even when the
-next step has `dropview_action=none`.
+Recipe Control has a **Recover Discrete PAD** button. Select the interrupted
+session's `logs/recipe_recovery.json`. `RecipeTab.recover_from_record(path)` is
+also callable by a future supervisor without confirmation dialogs.
 
-Also retain stop intent when an operation is blocked or finalization fails.
-Prevent a second recipe/executor from controlling the same devices concurrently.
+The executor creates a uniquely named session beside the old one, copies the
+saved edited method byte-for-byte, retains the script's repeat/wait settings,
+repoints LOADMETHOD and every EXPORTCURVES path, and writes the live recipe.
+`logs/recovery_origin.json` links both packages and records the recovery cursor.
+The old method, script and measurements are not overwritten. The old recovery
+record is marked `recovering`, then `superseded` only after successful setup.
+Failures during setup leave that source eligible for a new explicit attempt;
+the record retains whether the old measurement stop was already verified.
+
+Valve reconnection uses saved serial settings and position queries, never reset
+or home. A different position blocks recovery unless that exact movement was
+interrupted and still needs its target applied. A target already reached is not
+commanded again. Settings applied before an interrupted operation are not
+replayed. A control step's wait retains its recorded remaining duration; a
+running measurement wait advances according to the phase 1 rule.
+
+An inherited measurement is stopped and verified before a fresh measurement is
+started in the new package, including when the next step has action `none`.
+**If a potentially active measurement has no accessible Multiscript Editor,
+recovery blocks.** The existing stop function returning because there is no
+editor is not proof of a stopped device. A further confirmed device feedback
+path is needed to cover all DropView crashes automatically.
+
+Recovery does not invoke the normal recipe-start pump STOP/SPEED sequence.
+Flexicon reconnect uses its existing status-only connection path; Arduino
+serial reopen is blocked because it resets the Nano. No firmware changes are
+made. Normal completion and an explicit user stop retain their existing pump
+stop behavior. A Discrete PAD operation failure with a recovery journal now
+preserves pump output, rather than stopping it before recovery can run.
+
+`QLockFile` guards recipe execution per installation, including recovery, with
+stale PID handling and no timeout-based lock stealing. A source revision check
+rejects a changed/superseded record before any device commands. Recovery
+packages are kept automatically; completion/errors are logged without blocking
+archive or result dialogs. Normal sessions retain their existing dialogs.
+
+Tests include the generated application script format, fake device readback and
+failure paths, lock exclusion, and an offscreen Qt recovery-entry integration.
+No test opens a serial port or operates DropView. Real-device validation is still
+required before unattended use.
 
 ## Phase 3 — independent supervision and Windows policy (pending)
 
