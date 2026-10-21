@@ -10,3 +10,4 @@ v7.9/
 bench_test/utils/last_paths*.json
 *.log
 bench_test_debug.log
+dropview_diagnostics/

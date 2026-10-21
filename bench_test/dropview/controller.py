@@ -4,11 +4,6 @@ import threading
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 
 from bench_test.dropview import automator
-from bench_test.dropview.vision import match_score_on_screen
-from bench_test.config import (
-    THRESHOLD_LOW,
-    DROPVIEW_WINDOW_NAME,
-)
 from bench_test.utils.debug_log import debug_log
 
 
@@ -38,27 +33,23 @@ class DropViewController(QObject):
         def _check():
             try:
                 scores = automator.get_dropview_connection_scores()
-                dv_open = scores["dv_open"]
-                conn_sc = scores["connected_score"]
-                disc_sc = scores["disconnected_score"]
-
-                if not dv_open:
-                    connected = False
-                elif conn_sc < THRESHOLD_LOW and disc_sc < THRESHOLD_LOW:
-                    connected = False
-                else:
-                    connected = conn_sc > disc_sc
+                if scores["state"] == "unknown":
+                    return
+                connected = scores["state"] == "connected"
 
                 if connected != self._last_connected:
                     self._last_connected = connected
                     self.status_changed.emit(connected)
-            except Exception:
-                pass
+            except Exception as exc:
+                debug_log(f"DropView connection polling failed: {exc}", level="warning")
         threading.Thread(target=_check, daemon=True).start()
 
     def force_poll(self):
         def _check():
-            connected = self._is_connected()
+            scores = automator.get_dropview_connection_scores()
+            if scores["state"] == "unknown":
+                return
+            connected = scores["state"] == "connected"
             self._last_connected = connected
             self.status_changed.emit(connected)
         threading.Thread(target=_check, daemon=True).start()

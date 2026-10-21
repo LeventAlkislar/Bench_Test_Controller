@@ -27,6 +27,7 @@ from bench_test.config import (
 )
 from bench_test.dropview.vision import (
     find_on_screen, match_score_on_screen, match_cropped_image_score_on_window,
+    connection_scores_on_window,
     wait_for_image, wait_for_image_gone,
     _grab_region, _images_equal,
 )
@@ -40,7 +41,7 @@ from bench_test.dropview.window_actions import (
     safe_wait_for_image_gone,
 )
 from bench_test.utils.paths import BASE_DIR, ASSETS_DIR, get_last, remember, get_value, remember_value
-from bench_test.utils.debug_log import debug_log
+from bench_test.utils.debug_log import debug_log, _debug_log_path
 
 # pyautogui ayarları
 pyautogui.FAILSAFE = PYAUTOGUI_FAILSAFE
@@ -1271,50 +1272,116 @@ def _connect_manual(dv_hwnd, target_com: str, log_fn=None) -> str:
 
 # ── Bağlantı durumu ────────────────────────────────────────────
 
+_CONNECTION_MIN_DELTA = 0.08
+_CONNECTION_VERIFY_TIMEOUT = 5.0
+
+
+def _connection_snapshot() -> dict:
+    started = time.monotonic()
+    result = {"dv_open": False, "connected_score": 0.0,
+              "disconnected_score": 0.0, "state": "unknown",
+              "image": None, "region": None, "error": ""}
+    try:
+        result["dv_open"] = window_exists(DROPVIEW_WINDOW_NAME)
+        if not result["dv_open"]:
+            result["state"] = "disconnected"
+            result["error"] = "DropView window is not open."
+        else:
+            hwnd = find_window(DROPVIEW_WINDOW_NAME, timeout=0.2, poll_interval=0.05)
+            result.update(connection_scores_on_window(hwnd, {
+                "connected": _IMG["connected"],
+                "disconnected": _IMG["disconnected"],
+            }))
+            conn = result["connected_score"]
+            disc = result["disconnected_score"]
+            if not result["error"]:
+                if conn >= THRESHOLD_LOW and conn - disc >= _CONNECTION_MIN_DELTA:
+                    result["state"] = "connected"
+                elif disc >= THRESHOLD_LOW and disc - conn >= _CONNECTION_MIN_DELTA:
+                    result["state"] = "disconnected"
+    except Exception as exc:
+        result["error"] = str(exc)
+    result["elapsed_s"] = time.monotonic() - started
+    debug_log(
+        "DropView connection: "
+        f"state={result['state']}, connected={result['connected_score']:.3f}, "
+        f"disconnected={result['disconnected_score']:.3f}, "
+        f"elapsed={result['elapsed_s']:.3f}s, region={result['region']}, "
+        f"error={result['error'] or 'none'}"
+    )
+    return result
+
+
+def _save_connection_failure(snapshot: dict):
+    image = snapshot.get("image")
+    if image is None:
+        debug_log("DropView failure image unavailable: " + snapshot.get("error", ""),
+                  level="warning")
+        return
+    try:
+        directory = os.path.join(os.path.dirname(_debug_log_path()), "dropview_diagnostics")
+        os.makedirs(directory, exist_ok=True)
+        filename = f"connection_failure_{time.time_ns()}.png"
+        path = os.path.join(directory, filename)
+        image.save(path)
+        debug_log(f"DropView connection failure image: {path}", level="warning")
+    except Exception as exc:
+        debug_log(f"Could not save DropView failure image: {exc}", level="warning")
+
+
+def _verify_dropview_connection():
+    started = time.monotonic()
+    deadline = started + _CONNECTION_VERIFY_TIMEOUT
+    stable_hits = 0
+    snapshot = {}
+    while time.monotonic() < deadline:
+        snapshot = _connection_snapshot()
+        connecting = window_exists(CONNECTING_DIALOG)
+        stable_hits = stable_hits + 1 if snapshot["state"] == "connected" and not connecting else 0
+        debug_log(f"DropView final verification: stable_hits={stable_hits}, "
+                  f"connecting={connecting}, elapsed={time.monotonic() - started:.3f}s")
+        if stable_hits >= 2 and time.monotonic() <= deadline:
+            return
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(0.2, remaining))
+    _save_connection_failure(snapshot)
+    raise RuntimeError(
+        "DropSens connection signal was received, but final verification failed "
+        f"within {_CONNECTION_VERIFY_TIMEOUT:.1f}s "
+        f"(state={snapshot.get('state', 'unknown')}, "
+        f"connected={snapshot.get('connected_score', 0.0):.3f}, "
+        f"disconnected={snapshot.get('disconnected_score', 0.0):.3f}). "
+        "See bench_test_debug.log for details."
+    )
+
+
 def wait_until_connected(timeout=30, poll_interval=1.0):
-    start = time.time()
-    while time.time() - start < timeout:
-        dv_hwnd = find_window(DROPVIEW_WINDOW_NAME, timeout=0.2, poll_interval=0.05) if window_exists(DROPVIEW_WINDOW_NAME) else None
-        conn_sc = match_score_on_screen(_IMG["connected"], hwnd=dv_hwnd, use_foreground_fallback=False)
-        disc_sc = match_score_on_screen(_IMG["disconnected"], hwnd=dv_hwnd, use_foreground_fallback=False)
-        if (conn_sc > THRESHOLD_LOW or disc_sc > THRESHOLD_LOW) and conn_sc > disc_sc:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if _connection_snapshot()["state"] == "connected":
             return
         time.sleep(poll_interval)
     raise TimeoutError("DropSens connection timed out.")
 
 
 def wait_until_disconnected(timeout=10, poll_interval=1.0):
-    start = time.time()
-    while time.time() - start < timeout:
-        dv_hwnd = find_window(DROPVIEW_WINDOW_NAME, timeout=0.2, poll_interval=0.05) if window_exists(DROPVIEW_WINDOW_NAME) else None
-        conn_sc = match_score_on_screen(_IMG["connected"], hwnd=dv_hwnd, use_foreground_fallback=False)
-        disc_sc = match_score_on_screen(_IMG["disconnected"], hwnd=dv_hwnd, use_foreground_fallback=False)
-        if (conn_sc > THRESHOLD_LOW or disc_sc > THRESHOLD_LOW) and disc_sc > conn_sc:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if _connection_snapshot()["state"] == "disconnected":
             return
         time.sleep(poll_interval)
+    raise TimeoutError("DropSens disconnection could not be verified.")
 
 
 def _is_dropview_connected() -> bool:
-    if not window_exists(DROPVIEW_WINDOW_NAME):
-        return False
-    dv_hwnd = find_window(DROPVIEW_WINDOW_NAME, timeout=0.2, poll_interval=0.05)
-    conn_sc = match_score_on_screen(_IMG["connected"], hwnd=dv_hwnd, use_foreground_fallback=False)
-    disc_sc = match_score_on_screen(_IMG["disconnected"], hwnd=dv_hwnd, use_foreground_fallback=False)
-    if conn_sc < THRESHOLD_LOW and disc_sc < THRESHOLD_LOW:
-        return False
-    return conn_sc > disc_sc
+    return _connection_snapshot()["state"] == "connected"
 
 
 def get_dropview_connection_scores() -> dict:
-    dv_open = window_exists(DROPVIEW_WINDOW_NAME)
-    if not dv_open:
-        return {"dv_open": False, "connected_score": 0.0, "disconnected_score": 0.0}
-    dv_hwnd = find_window(DROPVIEW_WINDOW_NAME, timeout=0.2, poll_interval=0.05)
-    return {
-        "dv_open": True,
-        "connected_score":    match_score_on_screen(_IMG["connected"], hwnd=dv_hwnd, use_foreground_fallback=False),
-        "disconnected_score": match_score_on_screen(_IMG["disconnected"], hwnd=dv_hwnd, use_foreground_fallback=False),
-    }
+    result = _connection_snapshot()
+    result.pop("image", None)
+    return result
 
 
 # ── DropView exe ───────────────────────────────────────────────
@@ -2238,28 +2305,8 @@ def step_start_dropview(config: dict, log_fn=None):
             "Make sure the device is connected."
         )
 
-    # Final doğrulama: render/race gecikmelerine karşı kısa polling + stabilite kontrolü.
-    time.sleep(SLEEP_AFTER_FOCUS + 0.5)
-    deadline = time.time() + 3.0
-    stable_hits = 0
-    while time.time() < deadline:
-        if window_exists(CONNECTING_DIALOG):
-            stable_hits = 0
-            time.sleep(0.2)
-            continue
-        if _is_dropview_connected():
-            stable_hits += 1
-            if stable_hits >= 2:
-                break
-        else:
-            stable_hits = 0
-        time.sleep(0.2)
+    _verify_dropview_connection()
 
-    if stable_hits < 2:
-        raise RuntimeError(
-            "DropSens connection signal was received, but final verification failed. "
-            "Please try again."
-        )
 
 def step_start_measure(config: dict, log_fn=None):
     ensure_dialog_watchdog(log_fn=log_fn)

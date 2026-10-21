@@ -1,4 +1,5 @@
 # bench_test/dropview/vision.py
+import ctypes
 import os
 import time
 
@@ -109,6 +110,56 @@ def match_score_on_screen(image_path, hwnd=None, use_foreground_fallback=True) -
         return float(max_val)
     except Exception:
         return 0.0
+
+
+def connection_scores_on_window(hwnd, templates: dict) -> dict:
+    """Compare both status templates against one bottom-left client capture."""
+    result = {"connected_score": 0.0, "disconnected_score": 0.0,
+              "image": None, "region": None, "error": ""}
+    try:
+        if not win32gui.IsWindowVisible(hwnd) or win32gui.IsIconic(hwnd):
+            raise RuntimeError("DropView is hidden or minimized.")
+        left, top, right, bottom = win32gui.GetClientRect(hwnd)
+        left, top = win32gui.ClientToScreen(hwnd, (left, top))
+        right, bottom = win32gui.ClientToScreen(hwnd, (right, bottom))
+        try:
+            scale = (ctypes.windll.user32.GetDpiForWindow(hwnd) or 96) / 96.0
+        except AttributeError:
+            scale = 1.0
+        width = min(right - left, round(400 * scale))
+        height = min(bottom - top, round(80 * scale))
+        if width < 3 or height < 3:
+            raise RuntimeError("DropView status region is empty.")
+        top = bottom - height
+        result["region"] = (left, top, width, height)
+        with mss.mss() as sct:
+            desktop = sct.monitors[0]
+            if (left < desktop["left"] or top < desktop["top"]
+                    or left + width > desktop["left"] + desktop["width"]
+                    or bottom > desktop["top"] + desktop["height"]):
+                raise RuntimeError("DropView status region is outside the desktop.")
+            raw = sct.grab({"left": left, "top": top,
+                            "width": width, "height": height})
+            result["image"] = Image.frombytes("RGB", raw.size, raw.bgra, "raw", "BGRX")
+
+        # Reject covered regions rather than matching another application's pixels.
+        for x, y in ((left + 1, top + 1), (left + width - 2, top + 1),
+                     (left + 1, bottom - 2), (left + width - 2, bottom - 2),
+                     (left + width // 2, top + height // 2)):
+            hit = win32gui.WindowFromPoint((x, y))
+            if win32gui.GetAncestor(hit, win32con.GA_ROOT) != hwnd:
+                raise RuntimeError("DropView status region is covered by another window.")
+        screen = cv2.cvtColor(np.array(result["image"]), cv2.COLOR_RGB2BGR)
+        for name, path in templates.items():
+            with Image.open(path) as template:
+                needle = cv2.cvtColor(np.array(template.convert("RGB")), cv2.COLOR_RGB2BGR)
+            if needle.shape[0] > height or needle.shape[1] > width:
+                raise RuntimeError("Connection template is larger than the status region.")
+            scores = cv2.matchTemplate(screen, needle, cv2.TM_CCOEFF_NORMED)
+            result[f"{name}_score"] = float(cv2.minMaxLoc(scores)[1])
+    except Exception as exc:
+        result["error"] = str(exc)
+    return result
 
 
 def match_cropped_image_score_on_window(image_path, crop_box, hwnd) -> float:
