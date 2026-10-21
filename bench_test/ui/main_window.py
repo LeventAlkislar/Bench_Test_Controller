@@ -327,7 +327,9 @@ class MainWindow(QMainWindow):
             if reply != QMessageBox.StandardButton.Yes:
                 event.ignore()
                 return
-            self.recipe_tab.stop_event.set()
+            self.recipe_tab.recipe_runner.request_stop()
+        elif self.recipe_tab.recipe_runner:
+            self.recipe_tab.recipe_runner.checkpoint(closed_by_user=True)
         self.dv_ctrl.stop_polling()
         self.ctrl_a.disconnect()
         self.ctrl_b.disconnect()

@@ -24,9 +24,11 @@ from bench_test.pump import PumpController
 from bench_test.dropview.controller import DropViewController
 from bench_test.measurement.session import (
     MEASUREMENT_MODE_CONTINUOUS_PAD,
+    MEASUREMENT_MODE_SCRIPT_PAD,
     SessionStatus,
 )
 from bench_test.recipe.models import Recipe, RecipeStep, StepLoop
+from bench_test.recipe.recovery import RecoveryJournal, is_discrete_pad_recipe
 from bench_test.recipe.runner import RecipeRunner, DROPVIEW_ACTIONS, DROPVIEW_LABELS, DROPVIEW_ZERO_DURATION_OK
 from bench_test.utils.paths import (
     get_value,
@@ -576,6 +578,8 @@ class RecipeTab(QWidget):
         except (ValueError, TypeError):
             pass
         self._record_runtime_step_changes(row, before, asdict(step))
+        if self.recipe_runner and self.recipe_runner.is_alive():
+            self.recipe_runner.checkpoint()
         self._refresh_table(); self._update_total_time()
 
     def _on_cell_double_clicked(self, row: int, col: int):
@@ -901,6 +905,28 @@ class RecipeTab(QWidget):
                 remember_value("dropsens_com", selected_port)
 
         try:
+            recovery_journal = None
+            if (session and measurement_mode == MEASUREMENT_MODE_SCRIPT_PAD
+                    and not self._simulation_mode
+                    and is_discrete_pad_recipe(recipe)):
+                connections = {}
+                for name, controller in (("valve_a", self.ctrl_a), ("valve_b", self.ctrl_b)):
+                    serial_port = controller.serial_port
+                    connections[name] = {
+                        "port": serial_port.port if serial_port else None,
+                        "baudrate": serial_port.baudrate if serial_port else None,
+                        "address": controller.address,
+                    }
+                connections["dropsens_com"] = get_value("dropsens_com", "")
+                connections["pump"] = {
+                    key: get_value(key) for key in (
+                        "pump_type", "pump_com", "flexicon_pump_id", "flexicon_baudrate",
+                        "pump_max_rpm", "pump_speed_rpm", "pump_speed_mv",
+                    )
+                }
+                recovery_journal = RecoveryJournal.create(session, recipe, connections)
+                session.register_file("recipe_recovery", recovery_journal.path)
+                session.save()
             self.recipe_runner = RecipeRunner(
                 self.ctrl_a, self.ctrl_b, recipe, self.status_queue, self.stop_event,
                 self.dv_ctrl, pump_ctrl=self.pump_ctrl,
@@ -910,7 +936,8 @@ class RecipeTab(QWidget):
                 session_measurements_dir=session_measurements_dir,
                 part_number=part_number,
                 measurement_mode=measurement_mode,
-                simulation_mode=self._simulation_mode)
+                simulation_mode=self._simulation_mode,
+                recovery_journal=recovery_journal)
             self._reset_run_metrics()
             self._prepare_runtime_change_log(session)
             self.recipe_runner.start()
@@ -955,10 +982,11 @@ class RecipeTab(QWidget):
                     self.log_signal.emit("Recipe resumed")
 
     def _stop_recipe(self):
+        if self.recipe_runner:
+            self.recipe_runner.request_stop()
         if not (self.recipe_runner and self.recipe_runner.is_alive()):
             self._retry_stop_measurement()
             return
-        self.stop_event.set()
         if self.recipe_runner:
             self.recipe_runner.resume()
         self.start_btn.setEnabled(False)
@@ -1109,7 +1137,7 @@ class RecipeTab(QWidget):
         """RecipeTab'ı açılış haline getirir."""
         # Çalışan recipe varsa durdur
         if stop_runner and self.recipe_runner and self.recipe_runner.is_alive():
-            self.stop_event.set()
+            self.recipe_runner.request_stop()
 
         self.recipe_steps.clear()
         self.step_loops.clear()

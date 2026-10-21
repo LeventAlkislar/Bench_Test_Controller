@@ -4,9 +4,12 @@ import json
 import queue
 import threading
 import time
+import traceback
+from dataclasses import asdict
 from typing import Optional
 
 from bench_test.recipe.models import Recipe, RecipeStep
+from bench_test.recipe.recovery import expanded_step_indices
 from bench_test.dropview.controller import DropViewController
 from bench_test.pump import PumpController
 from bench_test.valve.multiport import ValveController
@@ -68,7 +71,8 @@ class RecipeRunner(threading.Thread):
                   session_measurements_dir: str = "",
                  part_number: str = "",
                  measurement_mode: str = MEASUREMENT_MODE_SCRIPT_PAD,
-                 simulation_mode: bool = False):
+                 simulation_mode: bool = False,
+                 recovery_journal=None):
         super().__init__(daemon=True)
         self.controller_a     = controller_a
         self.controller_b     = controller_b
@@ -98,6 +102,49 @@ class RecipeRunner(threading.Thread):
         self._continuous_pause_requested = False
         self._continuous_resume_requested = False
         self._continuous_stopped_for_pause = False
+        self.recovery_journal = recovery_journal
+        self._recovery_phase = "prepared"
+        self._active_step = None
+        self._requested_settings = {"valve_a": None, "valve_b": None, "pump_rpm": None}
+        self._journal_failed = False
+        self._last_checkpoint_t = 0.0
+        self._checkpoint_lock = threading.RLock()
+
+    def checkpoint(self, phase=None, **changes):
+        """Record execution boundaries without sending any additional device commands."""
+        with self._checkpoint_lock:
+            self._write_checkpoint(phase, **changes)
+
+    def _write_checkpoint(self, phase=None, **changes):
+        if self.recovery_journal is None or self._journal_failed:
+            return
+        if phase is not None:
+            self._recovery_phase = phase
+        try:
+            self.recovery_journal.update(
+                phase=self._recovery_phase,
+                recipe=asdict(self.recipe),
+                recipe_loop=self.current_loop_index,
+                sequence_index=self.current_sequence_index,
+                sequence_total=self.current_sequence_total,
+                step_index=self.current_step_index,
+                active_step=asdict(self._active_step) if self._active_step else None,
+                requested_settings=self._requested_settings,
+                measurement_running=self.measurement_running,
+                active_measurement_kind=self.active_measurement_kind,
+                paused=not self.pause_event.is_set(),
+                stop_requested=self.stop_event.is_set(),
+                **changes,
+            )
+            self._last_checkpoint_t = time.monotonic()
+        except (OSError, ValueError, TypeError) as exc:
+            self._journal_failed = True
+            self.status_queue.put(("warning", f"Recovery recording failed; automatic recovery is unavailable: {exc}"))
+            debug_log(f"Recovery recording failed: {exc}", level="error")
+
+    def request_stop(self):
+        self.stop_event.set()
+        self.checkpoint(status="user_stopped")
 
     def _pump_connected(self) -> bool:
         return self.pump_ctrl is not None and self.pump_ctrl.is_connected()
@@ -112,6 +159,8 @@ class RecipeRunner(threading.Thread):
         try:
             self._log_pump_lines(label, self.pump_ctrl.stop())
             self._log_pump_lines("SPEED", self.pump_ctrl.set_speed_rpm(0))
+            self._requested_settings["pump_rpm"] = 0.0
+            self.checkpoint()
         except Exception as e:
             self.status_queue.put(("warning", f"Pump stop failed: {e}"))
 
@@ -144,6 +193,7 @@ class RecipeRunner(threading.Thread):
         if self.active_measurement_kind == "continuous_pad":
             self._continuous_pause_requested = True
         self.pause_event.clear()
+        self.checkpoint()
 
     def resume(self):
         if (
@@ -152,6 +202,7 @@ class RecipeRunner(threading.Thread):
         ):
             self._continuous_resume_requested = True
         self.pause_event.set()
+        self.checkpoint()
 
     def _cleanup_dropview(self, step_num: int):
         """Best-effort cleanup after a failed DropView step."""
@@ -333,6 +384,8 @@ class RecipeRunner(threading.Thread):
             return False
 
         if step.port > 0 and self.controller_a and self.controller_a.is_connected():
+            self._requested_settings["valve_a"] = step.port
+            self.checkpoint("valve_a")
             self.status_queue.put(("switching", f"{loop_info}Valve A -> Port {step.port}"))
             r = self.controller_a.switch_port(step.port)
             if not r.get("success"):
@@ -348,6 +401,8 @@ class RecipeRunner(threading.Thread):
 
         # ── Valf B ────────────────────────────────────────────
         if step.valve_b_state > 0 and self.controller_b and self.controller_b.is_connected():
+            self._requested_settings["valve_b"] = step.valve_b_state
+            self.checkpoint("valve_b")
             state_name = InjectorValveController.STATE_NAMES.get(step.valve_b_state, "")
             self.status_queue.put(("switching", f"{loop_info}Valve B -> {state_name}"))
             r = self.controller_b.switch_state(step.valve_b_state)
@@ -364,6 +419,9 @@ class RecipeRunner(threading.Thread):
             self._log(f"SIMULATED: Valve B -> {state_name} (not connected, skipped)")
 
         # ── Pompa ─────────────────────────────────────────────
+        if step.pump_rpm is not None:
+            self._requested_settings["pump_rpm"] = step.pump_rpm
+            self.checkpoint("pump")
         if not self._apply_pump_rpm(step, step_num, loop_info):
             return False
 
@@ -371,6 +429,7 @@ class RecipeRunner(threading.Thread):
             return False
 
         if action == "start_dropview" and dv:
+            self.checkpoint("dropview_start")
             self._debug_log("Launching DropView and connecting DropSens...")
             ok = dv.do_start_dropview(log_fn=self._log)
             if not ok:
@@ -384,6 +443,7 @@ class RecipeRunner(threading.Thread):
             "start_continuous_pad",
             "run_cv",
         ) and dv:
+            self.checkpoint("measurement_start")
             if not self._check_dropview_connected():
                 self.status_queue.put(("error",
                     f"Step {step_num}: DropView is not connected - measurement could not be started. "
@@ -454,6 +514,7 @@ class RecipeRunner(threading.Thread):
             self.status_queue.put(("running", running_msg))
     
             duration_sec = step.duration_minutes * 60
+            self.checkpoint("waiting", remaining_seconds=duration_sec)
             start_t = time.time()
             while time.time() - start_t < duration_sec:
                 if self.stop_event.is_set():
@@ -473,6 +534,8 @@ class RecipeRunner(threading.Thread):
                         self.recipe_start_t += paused_sec
                 elapsed   = time.time() - start_t
                 remaining = (duration_sec - elapsed) / 60
+                if time.monotonic() - self._last_checkpoint_t >= 5.0:
+                    self.checkpoint(remaining_seconds=max(0.0, remaining * 60))
                 self.status_queue.put(("progress", {
                     "step": step_num,
                     "total_steps": total_steps,
@@ -496,6 +559,7 @@ class RecipeRunner(threading.Thread):
             return False
 
         if action in ("stop_measure", "stop_discrete_pad", "stop_continuous_pad") and dv:
+            self.checkpoint("measurement_stop")
             self._debug_log("Stopping measurement...")
             if action == "stop_continuous_pad" or (
                 action == "stop_measure"
@@ -511,6 +575,7 @@ class RecipeRunner(threading.Thread):
             self.active_measurement_kind = ""
 
         elif action == "exit_dropview" and dv:
+            self.checkpoint("dropview_exit")
             self._debug_log("Closing DropView...")
             ok = dv.do_exit_dropview(log_fn=self._log)
             if not ok:
@@ -521,51 +586,48 @@ class RecipeRunner(threading.Thread):
         return True
 
     def run(self):
+        try:
+            self._run_recipe()
+        except Exception as exc:
+            self.checkpoint(status="interrupted", error=str(exc))
+            debug_log("Recipe runner failed:\n" + traceback.format_exc(), level="error")
+            self.status_queue.put(("error", f"Recipe runner failed: {exc}"))
+
+    def _run_recipe(self):
         recipe     = self.recipe
         steps      = recipe.steps
         loop_count = recipe.loop_count
-        step_loops = recipe.step_loops
 
         self.recipe_start_t = time.time()
         self.current_loop_count = loop_count
         self.status_queue.put(("started", f"Recipe '{recipe.name}' started."))
+        self.checkpoint(status="running")
         self._safe_stop_pump("RECIPE START")
 
         for loop_i in range(loop_count):
-            self.current_loop_index = loop_i + 1
             loop_info = f"[Loop {loop_i+1}/{loop_count}] " if loop_count > 1 else ""
 
-            step_indices = list(range(len(steps)))
-
-            # step_loops genişletme
-            expanded = []
-            i = 0
-            while i < len(step_indices):
-                matched = False
-                for sl in step_loops:
-                    if sl.start_step - 1 == i:
-                        for _ in range(sl.loop_count):
-                            expanded.extend(step_indices[sl.start_step-1:sl.end_step])
-                        i = sl.end_step
-                        matched = True
-                        break
-                if not matched:
-                    expanded.append(step_indices[i])
-                    i += 1
+            expanded = expanded_step_indices(recipe)
 
             total = len(expanded)
             self.current_expanded_indices = expanded
             for step_num, idx in enumerate(expanded, 1):
                 if self.stop_event.is_set():
+                    self.checkpoint(status="user_stopped")
                     self._safe_stop_pump("RECIPE STOP")
                     if self._stop_measurement_for_recipe_stop():
                         self.status_queue.put(("stopped", "Recipe stopped."))
                     return
-                self.current_step_index = idx + 1
-                self.current_sequence_index = step_num
-                self.current_sequence_total = total
-                step = copy.copy(steps[idx])
+                with self._checkpoint_lock:
+                    self.current_loop_index = loop_i + 1
+                    self.current_step_index = idx + 1
+                    self.current_sequence_index = step_num
+                    self.current_sequence_total = total
+                    step = copy.copy(steps[idx])
+                    self._active_step = step
+                    self.checkpoint("step_pending", remaining_seconds=None)
                 if not step.enabled:
+                    self.checkpoint("step_skipped")
                     description = f" ({step.description})" if step.description else ""
                     self.status_queue.put((
                         "skipped",
@@ -575,6 +637,7 @@ class RecipeRunner(threading.Thread):
                     continue
                 ok = self._execute_step(step, step_num, total, loop_info)
                 if not ok:
+                    self.checkpoint(status="user_stopped" if self.stop_event.is_set() else "interrupted")
                     self._safe_stop_pump("RECIPE STOP")
                     if self.stop_event.is_set():
                         if self._stop_measurement_for_recipe_stop():
@@ -582,6 +645,8 @@ class RecipeRunner(threading.Thread):
                         return
                     self.status_queue.put(("stopped", "Recipe stopped."))
                     return
+                self.checkpoint("step_completed", remaining_seconds=0.0)
 
         self._safe_stop_pump("RECIPE FINISH")
+        self.checkpoint(status="completed")
         self.status_queue.put(("finished", f"Recipe '{recipe.name}' completed."))
