@@ -30,11 +30,29 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import pyqtSignal
 
-from bench_test.measurement.session import SessionStatus
+from bench_test.measurement.session import (
+    MEASUREMENT_MODE_CONTINUOUS_PAD,
+    MEASUREMENT_MODE_CV,
+    MEASUREMENT_MODE_SCRIPT_PAD,
+    SessionStatus,
+)
 from bench_test.ui.tabs.package_panel       import PackagePanel
 from bench_test.ui.tabs.method_editor_panel import MethodEditorPanel
 from bench_test.ui.tabs.script_params_panel import ScriptParamsPanel
 from bench_test.utils.paths import remember_value
+
+
+_METHOD_FILE_KEY_BY_MODE = {
+    MEASUREMENT_MODE_SCRIPT_PAD: "method_discrete_pad",
+    MEASUREMENT_MODE_CONTINUOUS_PAD: "method_continuous_pad",
+    MEASUREMENT_MODE_CV: "method_cv",
+}
+
+_RECIPE_MODE_BY_ACTION = {
+    "start_discrete_pad": MEASUREMENT_MODE_SCRIPT_PAD,
+    "start_continuous_pad": MEASUREMENT_MODE_CONTINUOUS_PAD,
+    "run_cv": MEASUREMENT_MODE_CV,
+}
 
 
 def _divider() -> QFrame:
@@ -51,6 +69,7 @@ class MeasurementSetupTab(QWidget):
     def __init__(self, recipe_tab=None, parent=None):
         super().__init__(parent)
         self.recipe_tab = recipe_tab
+        self._rendering_session = False
 
         # ── Panel örnekleri ───────────────────────────────────────
         self.package_panel = PackagePanel()
@@ -114,7 +133,7 @@ class MeasurementSetupTab(QWidget):
             self._on_script_experiment_params_changed
         )
         self.script_panel.measurement_mode_changed.connect(
-            self.method_panel.set_measurement_mode
+            self._on_measurement_mode_changed
         )
 
         # recipe_tab referansı varsa recipe dosyasını izle
@@ -157,8 +176,16 @@ class MeasurementSetupTab(QWidget):
                 self.recipe_tab, "_current_recipe_path", ""
             ) or ""
 
+        recipe_mode = self._single_recipe_measurement_mode(recipe_steps)
+        if recipe_mode:
+            self.script_panel.set_measurement_mode(recipe_mode)
+
+        measurement_mode = self.script_panel.get_measurement_mode()
         tp_path    = self.method_panel.get_current_path()
         method_paths = self.method_panel.get_method_paths_by_mode()
+        method_values_by_mode = {}
+        if tp_path:
+            method_values_by_mode[measurement_mode] = self.method_panel.get_tp_data()
         scr_params = self.script_panel.get_scr_params()
         experiment_params = self.get_experiment_params()
 
@@ -174,8 +201,19 @@ class MeasurementSetupTab(QWidget):
             experiment_params=experiment_params,
             measurement_mode=scr_params.get("measurement_mode"),
             method_paths=method_paths,
+            method_values_by_mode=method_values_by_mode,
             recipe_steps=recipe_steps,
         )
+
+    @staticmethod
+    def _single_recipe_measurement_mode(recipe_steps: list = None) -> str:
+        modes = {
+            _RECIPE_MODE_BY_ACTION.get(getattr(step, "dropview_action", ""))
+            for step in (recipe_steps or [])
+            if getattr(step, "enabled", True)
+        }
+        modes.discard(None)
+        return next(iter(modes)) if len(modes) == 1 else ""
 
     def write_to_log(self, msg: str):
         self.package_panel.write_to_log(msg)
@@ -207,6 +245,53 @@ class MeasurementSetupTab(QWidget):
 
     def _on_script_experiment_params_changed(self, _params: dict):
         self._persist_experiment_params(self.get_experiment_params())
+
+    def _on_measurement_mode_changed(self, mode: str):
+        self.method_panel.set_measurement_mode(mode)
+        if self._rendering_session:
+            return
+
+        session = self._displayed_session()
+        if session is None:
+            return
+        if self.package_panel.sm.state == "running":
+            self.log_signal.emit(
+                "Measurement mode was not saved because the recipe is running."
+            )
+            return
+
+        method_path = self._session_method_path(session, mode)
+        if not method_path:
+            self.log_signal.emit(
+                "Measurement mode was not saved because this session has no "
+                "matching method file."
+            )
+            return
+
+        self.method_panel.load_from_path(method_path, persist=False)
+        session.measurement_mode = mode
+        session.register_file("tp", method_path)
+        try:
+            session.save()
+        except Exception as e:
+            self.log_signal.emit(f"Measurement mode could not be saved: {e}")
+            return
+        self.package_panel.set_tp_ref(method_path)
+
+    def _displayed_session(self):
+        mw = self._get_main_window()
+        ctx = getattr(mw, "_ctx", None) if mw is not None else None
+        display_mode = (
+            getattr(ctx, "display_mode", "empty") if ctx is not None else "empty"
+        )
+        if ctx is not None and display_mode in ("active", "archived"):
+            return ctx.displayed_session
+        return self.package_panel.get_session()
+
+    @staticmethod
+    def _session_method_path(session, mode: str) -> str:
+        key = _METHOD_FILE_KEY_BY_MODE.get(mode, "")
+        return (session.get_file_path(key) if key else None) or ""
 
     def on_response_delay_changed(self, minutes: int, seconds: int):
         """Viewer delay degisince label'i gunceller ve session/global kaydi yapar."""
@@ -295,9 +380,13 @@ class MeasurementSetupTab(QWidget):
 
         files = data.get("files", {})
         measurement_mode = data.get("measurement_mode", "")
-        if measurement_mode:
-            self.script_panel.set_measurement_mode(measurement_mode)
-            self.method_panel.set_measurement_mode(measurement_mode)
+        self._rendering_session = True
+        try:
+            if measurement_mode:
+                self.script_panel.set_measurement_mode(measurement_mode)
+                self.method_panel.set_measurement_mode(measurement_mode)
+        finally:
+            self._rendering_session = False
 
         # Part Number → PackagePanel
         part_number = data.get("part_number", "")
@@ -308,8 +397,9 @@ class MeasurementSetupTab(QWidget):
         if session_id:
             self.package_panel.session_id_edit.setText(session_id)
 
-        # .tp → MethodEditorPanel
-        tp_rel = files.get("tp", "")
+        # Mode'a özel method dosyasını yükle; eski session'larda tp'ye geri düş.
+        method_key = _METHOD_FILE_KEY_BY_MODE.get(measurement_mode, "")
+        tp_rel = files.get(method_key, "") or files.get("tp", "")
         if tp_rel:
             tp_abs = path / tp_rel
             if tp_abs.is_file():
@@ -347,11 +437,17 @@ class MeasurementSetupTab(QWidget):
         )
         self.package_panel.session_dir_lbl.setText(session.session_dir)
         measurement_mode = getattr(session, "measurement_mode", "") or ""
-        if measurement_mode:
-            self.script_panel.set_measurement_mode(measurement_mode)
-            self.method_panel.set_measurement_mode(measurement_mode)
+        self._rendering_session = True
+        try:
+            if measurement_mode:
+                self.script_panel.set_measurement_mode(measurement_mode)
+                self.method_panel.set_measurement_mode(measurement_mode)
+        finally:
+            self._rendering_session = False
 
-        tp_path = session.get_file_path("tp")
+        tp_path = self._session_method_path(session, measurement_mode)
+        if not tp_path:
+            tp_path = session.get_file_path("tp")
         if not tp_path:
             candidate = os.path.join(
                 session.session_dir, "measurement_parameters", "method.tp"

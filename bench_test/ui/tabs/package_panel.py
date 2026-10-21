@@ -268,6 +268,7 @@ class PackagePanel(QWidget):
         experiment_params: dict = None,
         measurement_mode: str = MEASUREMENT_MODE_SCRIPT_PAD,
         method_paths: dict = None,
+        method_values_by_mode: dict = None,
         recipe_steps: list = None,
     ) -> bool:
         """
@@ -331,6 +332,7 @@ class PackagePanel(QWidget):
             legacy_start and measurement_mode == MEASUREMENT_MODE_CV
         )
         method_paths = dict(method_paths or {})
+        method_values_by_mode = dict(method_values_by_mode or {})
         if tp_path:
             method_paths.setdefault(measurement_mode, tp_path)
         if not method_paths.get(MEASUREMENT_MODE_CONTINUOUS_PAD):
@@ -383,13 +385,18 @@ class PackagePanel(QWidget):
             packager = Packager(self._session)
 
             default_method_ref = ""
+            discrete_ref = ""
             if needs_discrete:
                 discrete_path = method_paths.get(MEASUREMENT_MODE_SCRIPT_PAD, "")
-                default_method_ref = packager.pack_tp(
+                discrete_ref = packager.pack_tp(
                     discrete_path,
                     file_key="method_discrete_pad",
                     dest_stem=f"{part_number}_discrete_pad",
+                    parameter_values=method_values_by_mode.get(
+                        MEASUREMENT_MODE_SCRIPT_PAD
+                    ),
                 )
+                default_method_ref = discrete_ref
                 self._log(f"Discrete PAD method copied: {os.path.basename(discrete_path)}")
             if needs_continuous:
                 continuous_path = method_paths.get(MEASUREMENT_MODE_CONTINUOUS_PAD, "")
@@ -398,6 +405,9 @@ class PackagePanel(QWidget):
                     duration_s=85000.0,
                     file_key="method_continuous_pad",
                     dest_stem=f"{part_number}_continuous_pad",
+                    parameter_values=method_values_by_mode.get(
+                        MEASUREMENT_MODE_CONTINUOUS_PAD
+                    ),
                 )
                 default_method_ref = default_method_ref or continuous_ref
                 self._log(f"Continuous PAD method copied: {os.path.basename(continuous_path)}")
@@ -407,6 +417,9 @@ class PackagePanel(QWidget):
                     cv_path,
                     file_key="method_cv",
                     dest_stem=f"{part_number}_cv",
+                    parameter_values=method_values_by_mode.get(
+                        MEASUREMENT_MODE_CV
+                    ),
                 )
                 default_method_ref = default_method_ref or cv_ref
                 self._log(f"CV method copied: {os.path.basename(cv_path)}")
@@ -422,7 +435,7 @@ class PackagePanel(QWidget):
                     tmp_path = tmp.name
                 try:
                     generate_dropview_script(
-                        method_file=method_paths[MEASUREMENT_MODE_SCRIPT_PAD],
+                        method_file=discrete_ref,
                         output_csv=scr_params["output_csv"],
                         repeat_times=scr_params["repeat_times"],
                         wait_ms=scr_params["wait_ms"],

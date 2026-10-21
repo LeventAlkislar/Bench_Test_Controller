@@ -404,10 +404,22 @@ class MethodEditorPanel(QWidget):
         self._show_empty_for_mode(mode)
 
     def get_tp_data(self) -> dict:
+        if self._current_tech_id == "CV":
+            measurement_ids = {"Estep", "Srate", "nscans"}
+            channel = {
+                pid: spin.value() for pid, spin in self._cv_channel.items()
+            }
+        else:
+            measurement_ids = set(self._meas) - {"Estep", "Srate", "nscans"}
+            channel = {"Ei": self.multi_ei_spin.value()}
+
         return {
             "sensor": self.sensor_edit.text().strip(),
             "sample": self.sample_edit.text().strip(),
-            "measurement": {pid: spin.value() for pid, spin in self._meas.items()},
+            "measurement": {
+                pid: self._meas[pid].value() for pid in measurement_ids
+            },
+            "channel": channel,
             "source_path": self._current_path,
         }
 

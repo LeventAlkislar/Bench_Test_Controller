@@ -81,6 +81,7 @@ class Packager:
         duration_s: float = None,
         file_key: str = "tp",
         dest_stem: str = None,
+        parameter_values: dict = None,
     ) -> str:
         """
         .tp dosyasını measurement_parameters/ altına kopyalar.
@@ -96,11 +97,45 @@ class Packager:
         stem = dest_stem or self.session.part_number
         dest_name = f"{stem}{source_ext}"
         dest = self._copy_to_params(tp_path, dest_name)
+        if parameter_values:
+            self._patch_tp_values(dest, parameter_values)
         if duration_s is not None:
             self._patch_tp_duration(dest, duration_s)
         self.session.register_file(file_key, dest)
         self.session.save()
         return dest
+
+    @staticmethod
+    def _patch_tp_values(tp_path: str, values: dict):
+        """Apply editable setup fields to the packaged method copy."""
+        try:
+            tree = ET.parse(tp_path)
+            technic = tree.getroot().find("technic")
+            if technic is None:
+                raise PackagerError("<technic> not found in method file.")
+
+            for field in ("sensor", "sample"):
+                element = technic.find(field)
+                if element is not None and field in values:
+                    element.text = str(values.get(field, ""))
+
+            for param_id, value in (values.get("measurement") or {}).items():
+                param = technic.find(
+                    f"commonUserParameters/parameter[@id='{param_id}']"
+                )
+                if param is not None:
+                    param.text = str(value)
+
+            channel = technic.find("channelUserParameters/channel[@id='0']")
+            if channel is not None:
+                for param_id, value in (values.get("channel") or {}).items():
+                    param = channel.find(f"parameter[@id='{param_id}']")
+                    if param is not None:
+                        param.text = str(value)
+
+            tree.write(tp_path, encoding="UTF-8", xml_declaration=True)
+        except ET.ParseError as e:
+            raise PackagerError(f"Failed to parse method file: {e}")
 
     def _patch_tp_duration(self, tp_path: str, duration_s: float):
         """Update PAD method duration in the packaged .tp copy."""
