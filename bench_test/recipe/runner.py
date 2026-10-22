@@ -116,6 +116,12 @@ class RecipeRunner(threading.Thread):
         self._requested_settings = {"valve_a": None, "valve_b": None, "pump_rpm": None}
         self._journal_failed = False
         self._last_checkpoint_t = 0.0
+        self.worker_heartbeat = time.monotonic()
+        self.outcome = "prepared"
+        self.measurement_epoch = 0
+        self._last_measurement_running = False
+        self._watchdog_interrupt = threading.Event()
+        self._watchdog_reason = ""
         self._checkpoint_lock = threading.RLock()
         self.recovery_record = copy.deepcopy(recovery_record)
         self.recovery_source_path = recovery_source_path
@@ -136,6 +142,13 @@ class RecipeRunner(threading.Thread):
             self._write_checkpoint(phase, **changes)
 
     def _write_checkpoint(self, phase=None, **changes):
+        if self.measurement_running and not self._last_measurement_running:
+            self.measurement_epoch = time.monotonic()
+        self._last_measurement_running = self.measurement_running
+        if threading.current_thread() is self:
+            self.worker_heartbeat = time.monotonic()
+        if "status" in changes:
+            self.outcome = changes["status"]
         if self.recovery_journal is None or self._journal_failed:
             return
         if phase is not None:
@@ -165,6 +178,14 @@ class RecipeRunner(threading.Thread):
     def request_stop(self):
         self.stop_event.set()
         self.checkpoint(status="user_stopped")
+
+    def request_recovery(self, reason):
+        """Cooperative interrupt, deliberately distinct from the user's Stop."""
+        self._watchdog_reason = str(reason)
+        self._watchdog_interrupt.set()
+
+    def _interrupted(self):
+        return self.stop_event.is_set() or self._watchdog_interrupt.is_set()
 
     def _pump_connected(self) -> bool:
         return self.pump_ctrl is not None and self.pump_ctrl.is_connected()
@@ -393,7 +414,7 @@ class RecipeRunner(threading.Thread):
         return False
 
     def _execute_step(self, step: RecipeStep, step_num, total_steps, loop_info="", recovery_options=None):
-        if self.stop_event.is_set():
+        if self._interrupted():
             return False
 
         action = step.dropview_action
@@ -406,7 +427,7 @@ class RecipeRunner(threading.Thread):
                 raise RuntimeError("Recovery cannot skip a disconnected Valve B.")
 
         # ── Valf A ────────────────────────────────────────────
-        if self.stop_event.is_set():
+        if self._interrupted():
             return False
 
         if (step.port > 0 and not options.get("skip_valve_a")
@@ -465,7 +486,7 @@ class RecipeRunner(threading.Thread):
         if not options.get("skip_pump") and not self._apply_pump_rpm(step, step_num, loop_info):
             return False
 
-        if self.stop_event.is_set():
+        if self._interrupted():
             return False
 
         if action == "start_dropview" and dv and not options.get("skip_start"):
@@ -526,7 +547,7 @@ class RecipeRunner(threading.Thread):
                 self.measurement_running = True
                 self.active_measurement_kind = "discrete_pad"
 
-        if self.stop_event.is_set():
+        if self._interrupted():
             return False
 
         # ── Süre bekleme döngüsü ──────────────────────────────
@@ -557,14 +578,14 @@ class RecipeRunner(threading.Thread):
             self.checkpoint("waiting", remaining_seconds=duration_sec)
             start_t = time.time()
             while time.time() - start_t < duration_sec:
-                if self.stop_event.is_set():
+                if self._interrupted():
                     return False
                 pause_t = time.time()
                 if not self._handle_continuous_pause_request():
                     return False
                 if not self.pause_event.is_set():
                     self.pause_event.wait()
-                    if self.stop_event.is_set():
+                    if self._interrupted():
                         return False
                     if not self._handle_continuous_resume_request():
                         return False
@@ -595,7 +616,7 @@ class RecipeRunner(threading.Thread):
                 }))
                 time.sleep(1.0)
 
-        if self.stop_event.is_set():
+        if self._interrupted():
             return False
 
         if action in ("stop_measure", "stop_discrete_pad", "stop_continuous_pad") and dv:
@@ -659,8 +680,8 @@ class RecipeRunner(threading.Thread):
         self._recovery_observed_valves = verify_recovery_valves(
             current, self.controller_a, self.controller_b)
         reconnect_recovery_pump(current, self.recipe, self.pump_ctrl)
-        if self.stop_event.is_set():
-            raise RuntimeError("Recovery cancelled by user.")
+        if self._interrupted():
+            raise RuntimeError("Recovery interrupted.")
         if self.dropview_ctrl is None:
             raise RuntimeError("Recovery requires the DropView controller.")
         may_be_running = (
@@ -670,8 +691,8 @@ class RecipeRunner(threading.Thread):
         if not self.dropview_ctrl.do_reconcile_discrete_recovery(may_be_running, log_fn=self._log):
             raise RuntimeError("The previous Discrete PAD measurement could not be reconciled.")
         self._recovery_source_journal.update(recovery_previous_stopped=True)
-        if self.stop_event.is_set():
-            raise RuntimeError("Recovery cancelled by user.")
+        if self._interrupted():
+            raise RuntimeError("Recovery interrupted.")
         plan = self._recovery_plan
         if not plan.finished:
             target = self.recipe.steps[plan.step_index - 1]
@@ -687,16 +708,16 @@ class RecipeRunner(threading.Thread):
                     or (same_step and current["phase"] == "waiting" and target.dropview_action == "start_dropview")):
                 if not self.dropview_ctrl.do_start_dropview(log_fn=self._log):
                     raise RuntimeError("DropView could not be restored.")
-            if self.stop_event.is_set():
-                raise RuntimeError("Recovery cancelled by user.")
+            if self._interrupted():
+                raise RuntimeError("Recovery interrupted.")
             if needs_measurement:
                 self._recovery_source_journal.update(recovery_previous_stopped=False)
                 if not self.dropview_ctrl.do_start_measure(self.session_scr_path, log_fn=self._log):
                     raise RuntimeError("Discrete PAD could not restart in the new package.")
                 self.measurement_running = True
                 self.active_measurement_kind = "discrete_pad"
-        if self.stop_event.is_set():
-            raise RuntimeError("Recovery cancelled by user.")
+        if self._interrupted():
+            raise RuntimeError("Recovery interrupted.")
         if not plan.finished:
             with self._checkpoint_lock:
                 self.current_loop_index = plan.recipe_loop
@@ -762,6 +783,10 @@ class RecipeRunner(threading.Thread):
                 if (self.recovery_record and loop_i == first_loop
                         and step_num < self._recovery_plan.sequence_index):
                     continue
+                if self._watchdog_interrupt.is_set() and not self.stop_event.is_set():
+                    self.checkpoint(status="interrupted", error=self._watchdog_reason)
+                    self.status_queue.put(("watchdog_interrupted", self._watchdog_reason))
+                    return
                 if self.stop_event.is_set():
                     self.checkpoint(status="user_stopped")
                     self._safe_stop_pump("RECIPE STOP")
@@ -801,6 +826,9 @@ class RecipeRunner(threading.Thread):
                     ok = self._execute_step(step, step_num, total, loop_info)
                 if not ok:
                     self.checkpoint(status="user_stopped" if self.stop_event.is_set() else "interrupted")
+                    if self._watchdog_interrupt.is_set() and not self.stop_event.is_set():
+                        self.status_queue.put(("watchdog_interrupted", self._watchdog_reason))
+                        return
                     if self.stop_event.is_set() or self.recovery_journal is None:
                         self._safe_stop_pump("RECIPE STOP")
                     if self.stop_event.is_set():

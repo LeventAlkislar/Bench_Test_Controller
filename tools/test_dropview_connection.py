@@ -150,6 +150,25 @@ class ConnectionTests(unittest.TestCase):
         saved = Path(image.save.call_args.args[0])
         self.assertEqual(saved, Path("logs/dropview_diagnostics/connection_failure_123.png"))
 
+    def test_missing_windows_ports_are_skipped(self):
+        with patch.object(automator.list_ports, "comports", return_value=[SimpleNamespace(device="COM4")]), \
+                patch.object(automator, "get_value", return_value="COM10"):
+            self.assertEqual(automator._resolve_target_dropsens_ports("COM3"), ["COM4"])
+
+    def test_disappeared_manual_port_never_opens_a_dialog(self):
+        with patch.object(automator.list_ports, "comports", return_value=[]), \
+                patch.object(automator, "safe_sequence") as sequence:
+            self.assertEqual(automator._connect_manual(42, "COM3"), "port_unavailable")
+            sequence.assert_not_called()
+
+    def test_saved_automatic_route_requires_final_verification(self):
+        with patch.object(automator, "get_value", return_value={"kind": "usb_auto"}), \
+                patch.object(automator, "safe_sequence"), \
+                patch.object(automator, "_wait_for_connection_result", return_value="connected"), \
+                patch.object(automator, "_verify_dropview_connection", side_effect=RuntimeError("unverified")):
+            with self.assertRaisesRegex(RuntimeError, "unverified"):
+                automator._try_preferred_automatic_connection(42)
+
     def test_polling_does_not_report_unknown_as_disconnected(self):
         controller = Mock()
         controller._last_connected = True

@@ -4,9 +4,11 @@ import sys
 import time
 import threading
 import subprocess
+import ctypes
 import xml.etree.ElementTree as ET
 
 import psutil
+from serial.tools import list_ports
 import pyautogui
 import win32api
 import win32clipboard
@@ -1180,11 +1182,33 @@ def _resolve_target_dropsens_ports(preferred_port=None) -> list[str]:
     """
     seen = set()
     ports = []
+    available = {port.device.upper() for port in list_ports.comports()}
     for p in [preferred_port, get_value("dropsens_com", "")] + DROPSENS_COM_PORTS:
-        if p and p not in seen:
+        if p and p in DROPSENS_COM_PORTS and p.upper() in available and p not in seen:
             seen.add(p)
             ports.append(p)
     return ports
+
+
+def dropview_responding(hwnd):
+    from ctypes import wintypes
+    function = ctypes.windll.user32.SendMessageTimeoutW
+    function.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM,
+                         wintypes.UINT, wintypes.UINT, ctypes.POINTER(ctypes.c_size_t)]
+    function.restype = wintypes.LPARAM
+    result = ctypes.c_size_t()
+    return bool(function(hwnd, 0, 0, 0, 2, 500, ctypes.byref(result)))
+
+
+def _try_preferred_automatic_connection(hwnd, preferred_port=None):
+    route = get_value("dropsens_connection_route", {})
+    if preferred_port or not isinstance(route, dict) or route.get("kind") != "usb_auto":
+        return False
+    safe_sequence(hwnd, [{"type": "hotkey", "keys": ("ctrl", "c"), "post_delay": SLEEP_AFTER_COMMAND}])
+    if _wait_for_connection_result(timeout=TIMEOUT_CONNECT) != "connected":
+        return False
+    _verify_dropview_connection()
+    return True
 
 
 def _connect_manual(dv_hwnd, target_com: str, log_fn=None) -> str:
@@ -1200,6 +1224,9 @@ def _connect_manual(dv_hwnd, target_com: str, log_fn=None) -> str:
     if target_com not in DROPSENS_COM_PORTS:
         _log(f"│  WARNING: Unsupported COM port: {target_com}")
         return "timeout"
+    if target_com.upper() not in {port.device.upper() for port in list_ports.comports()}:
+        _log(f"Manual connection skipped: {target_com} is not present in Windows.")
+        return "port_unavailable"
 
     safe_sequence(
         dv_hwnd,
@@ -1478,6 +1505,8 @@ def step_connect_dropsens(target_com: str = None, log_fn=None):
     dv_hwnd = find_window(DROPVIEW_WINDOW_NAME, timeout=10)
     _focus_window(dv_hwnd)
 
+    if _try_preferred_automatic_connection(dv_hwnd, target_com):
+        return
     manual_attempts = []
     result = "timeout"
     for com in _resolve_target_dropsens_ports(preferred_port=target_com):
@@ -1486,7 +1515,9 @@ def step_connect_dropsens(target_com: str = None, log_fn=None):
         manual_attempts.append((com, result))
         if result == "connected":
             _log(f"│  DropSens connected (manual: {com}).")
+            _verify_dropview_connection()
             remember_value("dropsens_com", com)
+            remember_value("dropsens_connection_route", {"kind": "manual", "port": com})
             return
         _log(f"│  Manual connection failed ({com}: {result}).")
 
@@ -1518,6 +1549,7 @@ def step_connect_dropsens(target_com: str = None, log_fn=None):
         raise RuntimeError(
             "DropSens connection signal was received, but final verification failed."
         )
+    remember_value("dropsens_connection_route", {"kind": "usb_auto", "port": None})
 
 
 def step_disconnect_dropsens():
@@ -2273,6 +2305,8 @@ def step_start_dropview(config: dict, log_fn=None):
     dv_hwnd = find_window(DROPVIEW_WINDOW_NAME, timeout=10)
     _focus_window(dv_hwnd)
 
+    if _try_preferred_automatic_connection(dv_hwnd):
+        return
     manual_attempts = []
     result = "timeout"
     for target_com in _resolve_target_dropsens_ports():
@@ -2287,7 +2321,7 @@ def step_start_dropview(config: dict, log_fn=None):
 
     if result == "connected":
         pass
-    elif result in ("no_device_connected", "potentiostat_not_found", "unknown_error", "timeout"):
+    elif result in ("no_device_connected", "potentiostat_not_found", "unknown_error", "timeout", "port_unavailable"):
         attempts_str = ", ".join(f"{port}={status}" for port, status in manual_attempts)
         _log(f"│  Manual connections failed ({attempts_str}); retrying with Ctrl+C...")
         safe_sequence(dv_hwnd, [{"type": "hotkey", "keys": ("ctrl", "c"), "post_delay": SLEEP_AFTER_COMMAND}], log_fn=log_fn)
@@ -2306,6 +2340,10 @@ def step_start_dropview(config: dict, log_fn=None):
         )
 
     _verify_dropview_connection()
+    if result == "connected":
+        remember_value("dropsens_connection_route", {"kind": "manual", "port": target_com})
+    else:
+        remember_value("dropsens_connection_route", {"kind": "usb_auto", "port": None})
 
 
 def step_start_measure(config: dict, log_fn=None):

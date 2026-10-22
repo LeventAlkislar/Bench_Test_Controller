@@ -629,7 +629,7 @@ class PackagePanel(QWidget):
         part_number = self._session.part_number
         status      = self._session.status.value
 
-        if "recovery_origin" in self._session.files:
+        if "recovery_origin" in self._session.files or "recipe_recovery" in self._session.files:
             reply = QMessageBox.StandardButton.Yes
         else:
             reply = QMessageBox.question(

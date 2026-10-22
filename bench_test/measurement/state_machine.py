@@ -63,6 +63,7 @@ class SessionStateMachine(QObject):
     state_changed  = pyqtSignal(str)   # yeni state adı
     aggregate_done = pyqtSignal(str)   # xlsx tam yolu
     log_signal     = pyqtSignal(str)   # log mesajı
+    aggregate_activity = pyqtSignal(bool)
 
     def __init__(self, parent: QObject = None):
         super().__init__(parent)
@@ -176,6 +177,7 @@ class SessionStateMachine(QObject):
             return
 
         self._aggregate_running = True
+        self.aggregate_activity.emit(True)
         try:
             if getattr(self._session, "measurement_mode", "") == MEASUREMENT_MODE_CONTINUOUS_PAD:
                 if not periodic:
@@ -198,6 +200,7 @@ class SessionStateMachine(QObject):
                     self._log(f"✗ Aggregate error: {e}")
         finally:
             self._aggregate_running = False
+            self.aggregate_activity.emit(False)
             if self._state == AGGREGATING:
                 self._on_agg_done()
 

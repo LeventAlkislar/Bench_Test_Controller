@@ -1,5 +1,6 @@
 # bench_test/dropview/controller.py
 import threading
+import time
 
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 
@@ -22,6 +23,8 @@ class DropViewController(QObject):
         self._poll_timer.setInterval(3000)
         self._poll_timer.timeout.connect(self._poll_connection)
         self._last_connected = None
+        self.last_health = {}
+        self._poll_lock = threading.Lock()
 
     def start_polling(self):
         self._poll_timer.start()
@@ -30,9 +33,21 @@ class DropViewController(QObject):
         self._poll_timer.stop()
 
     def _poll_connection(self):
+        if not self._poll_lock.acquire(blocking=False):
+            return
         def _check():
             try:
                 scores = automator.get_dropview_connection_scores()
+                health = {key: value for key, value in scores.items() if key != "image"}
+                health["sampled_at"] = time.monotonic()
+                health["responding"] = None
+                if scores.get("dv_open"):
+                    try:
+                        hwnd = automator.find_window(automator.DROPVIEW_WINDOW_NAME, timeout=0.2, poll_interval=0.05)
+                        health["responding"] = automator.dropview_responding(hwnd)
+                    except Exception:
+                        health["responding"] = False
+                self.last_health = health
                 if scores["state"] == "unknown":
                     return
                 connected = scores["state"] == "connected"
@@ -42,6 +57,8 @@ class DropViewController(QObject):
                     self.status_changed.emit(connected)
             except Exception as exc:
                 debug_log(f"DropView connection polling failed: {exc}", level="warning")
+            finally:
+                self._poll_lock.release()
         threading.Thread(target=_check, daemon=True).start()
 
     def force_poll(self):

@@ -276,6 +276,28 @@ class RunnerRecordingTests(unittest.TestCase):
         self.assertTrue(saved["stop_requested"])
         self.assertEqual(saved["status"], "user_stopped")
 
+    def test_watchdog_interrupt_preserves_pump_and_measurement_cursor(self):
+        def step(*args):
+            self.runner.measurement_running = True
+            self.runner.active_measurement_kind = "discrete_pad"
+            self.runner.checkpoint("waiting", remaining_seconds=99)
+            self.runner.request_recovery("connection lost")
+            return False
+        self.runner._execute_step = step
+        self.runner._safe_stop_pump = Mock()
+        self.runner.run()
+        self.runner._safe_stop_pump.assert_called_once_with("RECIPE START")
+        saved = self.read()
+        self.assertEqual(saved["status"], "interrupted")
+        self.assertFalse(saved["stop_requested"])
+        self.assertEqual(plan_recovery(saved).sequence_index, 2)
+        self.assertIn(("watchdog_interrupted", "connection lost"), list(self.runner.status_queue.queue))
+
+    def test_gui_checkpoint_does_not_make_a_hung_worker_look_alive(self):
+        original = self.runner.worker_heartbeat
+        self.runner.checkpoint()
+        self.assertEqual(self.runner.worker_heartbeat, original)
+
     def test_pause_and_resume_are_recorded(self):
         self.runner.pause()
         self.assertTrue(self.read()["paused"])

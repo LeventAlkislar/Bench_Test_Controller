@@ -26,6 +26,7 @@ from bench_test.ui.tabs.viewer_tab import ViewerTab
 from bench_test.valve.injector import InjectorValveController
 from bench_test.valve.multiport import ValveController
 from bench_test.version import window_title
+from bench_test.watchdog.client import WatchdogClient
 
 
 class RightAlignedTabBar(QTabBar):
@@ -179,6 +180,11 @@ class MainWindow(QMainWindow):
         )
 
         self.dv_ctrl.start_polling()
+        self.watchdog = WatchdogClient(self.recipe_tab, self.dv_ctrl, self)
+        self.recipe_tab.watchdog = self.watchdog
+        self.watchdog.status_changed.connect(self.statusBar().showMessage)
+        self.watchdog.log_message.connect(self.log_tab.append)
+        self.setup_tab.sm.aggregate_activity.connect(self.watchdog.set_finalizing)
 
     def switch_display(self, session, mode: str, history_sessions=None):
         """
@@ -327,9 +333,12 @@ class MainWindow(QMainWindow):
             if reply != QMessageBox.StandardButton.Yes:
                 event.ignore()
                 return
+            self.watchdog.close()
             self.recipe_tab.recipe_runner.request_stop()
-        elif self.recipe_tab.recipe_runner:
-            self.recipe_tab.recipe_runner.checkpoint(closed_by_user=True)
+        else:
+            self.watchdog.close()
+            if self.recipe_tab.recipe_runner:
+                self.recipe_tab.recipe_runner.checkpoint(closed_by_user=True)
         self.dv_ctrl.stop_polling()
         self.ctrl_a.disconnect()
         self.ctrl_b.disconnect()
