@@ -270,6 +270,8 @@ class PackagePanel(QWidget):
         method_paths: dict = None,
         method_values_by_mode: dict = None,
         recipe_steps: list = None,
+        *,
+        simulation_mode=False,
     ) -> bool:
         """
         Recipe başlamadan önce paketi oluşturur.
@@ -293,6 +295,10 @@ class PackagePanel(QWidget):
                 SessionStatus.PENDING,
                 SessionStatus.IN_PROGRESS,
             ):
+                existing_root = os.path.dirname(os.path.dirname(self._session.session_dir))
+                if simulation_mode != (os.path.basename(existing_root) == "_watchdog_simulation"):
+                    QMessageBox.warning(self, "Session Busy", "Finish the current session before changing simulation mode.")
+                    return False
                 self._log("⚠ Active session already exists — reusing current session.")
                 return True
 
@@ -378,6 +384,8 @@ class PackagePanel(QWidget):
             return False
 
         try:
+            if simulation_mode:
+                package_root = os.path.join(package_root, "_watchdog_simulation")
             self._session = MeasurementSession.create(package_root, part_number)
             self._session.experiment_params = dict(experiment_params or {})
             self._session.measurement_mode = measurement_mode
@@ -464,7 +472,8 @@ class PackagePanel(QWidget):
             else:
                 self._log("Recipe snapshot could not be written, skipped.")
 
-            packager.finalize()
+            if not simulation_mode:
+                packager.finalize()
 
             # Referansları güncelle
             self.set_scr_ref(packager.get_packed_scr_path() if needs_discrete else "")
@@ -554,7 +563,7 @@ class PackagePanel(QWidget):
         if self._log_writer and self._log_writer.is_open:
             self._log_writer.write(msg)
 
-    def adopt_recovery_session(self, session):
+    def adopt_recovery_session(self, session, *, simulation_recovery=False):
         """Attach an already reconstructed package without normal startup preparation."""
         if self.sm.state in ("running", AGGREGATING):
             raise RuntimeError("The current session must finish before recovery.")
@@ -564,7 +573,8 @@ class PackagePanel(QWidget):
         self._log_writer = LogWriter(session)
         self._log_writer.open()
         self.part_number_edit.setText(session.part_number)
-        self.package_root_edit.setText(os.path.dirname(os.path.dirname(session.session_dir)))
+        if not simulation_recovery:
+            self.package_root_edit.setText(os.path.dirname(os.path.dirname(session.session_dir)))
         self.session_id_edit.setText(os.path.basename(session.session_dir))
         self.session_dir_lbl.setText(session.session_dir)
         self.set_tp_ref(session.get_file_path("tp") or "")

@@ -11,10 +11,12 @@ from bench_test.watchdog.state import (
     ProcessLock, RunStopSignal, atomic_write, launch, owner_alive, process_identity, read_json,
     recovery_source, runtime_directory,
 )
+from bench_test.watchdog.state import process_exited as dropview_process_exited
 from bench_test.watchdog.progress import CsvProgressProbe
 
 
 TERMINAL = {"closed", "user_stopped", "completed", "paused"}
+DEVICE_FAULT_CONFIRM_SECONDS = 15
 STAGE_TIMEOUT = {"waiting": 45, "valve_a": 90, "valve_b": 90, "pump": 90,
                  "dropview_start": 600, "measurement_start": 600,
                  "measurement_stop": 600, "dropview_exit": 600, "reconciling": 900}
@@ -40,8 +42,10 @@ def fault_reason(state, now, alive):
         return f"worker_timeout:{phase}"
     if phase == "waiting" and state.get("measurement_running"):
         health = state.get("dropview_health") or {}
-        if now - health.get("sampled_at", 0) < 20:
+        if 0 <= now - health.get("sampled_at", 0) < 20:
             if health.get("dv_open") is False:
+                if dropview_process_exited(health.get("process_identity")):
+                    return "dropview_process_exited"
                 return "dropview_missing"
             if health.get("responding") is False:
                 return "dropview_not_responding"
@@ -54,11 +58,14 @@ def fault_reason(state, now, alive):
 def terminate_owner(identity):
     if identity.get("pid") == os.getpid() or not owner_alive(identity):
         return
-    process = psutil.Process(identity["pid"])
-    if abs(process.create_time() - identity["created"]) >= 0.01:
-        return
-    process.terminate()
-    process.wait(timeout=15)
+    try:
+        process = psutil.Process(identity["pid"])
+        if abs(process.create_time() - identity["created"]) >= 0.01:
+            return
+        process.terminate()
+        process.wait(timeout=15)
+    except psutil.NoSuchProcess:
+        pass
 
 
 class Supervisor:
@@ -79,6 +86,13 @@ class Supervisor:
             self.save()
         self.suspect = None
         self.suspect_since = 0
+        self.suspect_samples = 0
+        self.suspect_sample_at = None
+        self.last_connection_read = None
+        self.connection_unverified_since = None
+        self.observation_warning = None
+        self.confirmed_fault = None
+        self.current_run = None
         self.healthy_since = None
         self.stop_signal = None
         self.signal_run = None
@@ -87,23 +101,59 @@ class Supervisor:
     def save(self):
         atomic_write(self.directory / "supervisor_ledger.json", self.ledger)
 
-    def publish(self, message):
+    def publish(self, message, warning=None):
         atomic_write(self.directory / "supervisor_status.json", {
             "owner": process_identity(), "heartbeat": self.clock(), "message": message,
+            "run_id": self.current_run,
+            "warning": warning or self.observation_warning,
+            "confirmed_fault": self.confirmed_fault,
+            "last_connection_read": self.last_connection_read,
+            "last_csv_scan": self.progress.last_successful_scan,
+            "last_csv_progress": self.progress.last_change,
+            "last_valid_csv": self.progress.content_last_progress,
             "attempts": self.ledger.get("attempts", 0),
         })
+
+    def _observe_health(self, state, now):
+        if (state.get("worker_alive") and not state.get("finalizing") and state.get("status") != "starting"
+                and 30 <= now - state.get("ui_heartbeat", now) <= 60):
+            self.observation_warning = "ui_response_delayed"
+        if state.get("phase") != "waiting" or not state.get("measurement_running"):
+            self.connection_unverified_since = None
+            return
+        health = state.get("dropview_health") or {}
+        sampled_at = health.get("sampled_at", 0)
+        if (0 <= now - sampled_at < 20 and health.get("dv_open") is not False
+                and health.get("state") in ("connected", "disconnected")):
+            self.last_connection_read = sampled_at
+            self.connection_unverified_since = None
+        else:
+            if self.connection_unverified_since is None:
+                self.connection_unverified_since = self.last_connection_read if (
+                    self.last_connection_read is not None and now - self.last_connection_read < 30) else now
+            if now - self.connection_unverified_since >= 30 and self.observation_warning is None:
+                self.observation_warning = "connection_read_unverified"
 
     def tick(self):
         now = self.clock()
         state = read_json(self.directory / "active.json")
+        self.observation_warning = self.confirmed_fault = None
         if not state:
             self.publish("idle")
             return True
+        root = state.get("run_id")
+        if root != self.current_run:
+            if self.current_run is not None:
+                self.progress.reset()
+            self.current_run = root
+            self.last_connection_read = self.connection_unverified_since = None
         alive = self.is_alive(state.get("owner", {}))
+        observe_only = state.get("observe_only", False)
         if state.get("status") in TERMINAL or not state.get("armed"):
+            self.connection_unverified_since = None
             self.publish(state.get("status", "idle"))
             return alive and state.get("status") != "closed"
-        if not alive:
+        if not alive and not observe_only:
             # Completion may reach the journal before the UI publishes it.
             record = read_json(state.get("record_path", "")) or {}
             if record.get("status") in ("completed", "completed_after_interruption", "user_stopped"):
@@ -115,10 +165,14 @@ class Supervisor:
         if self.stop_signal.is_set():
             self.publish("user_stopped")
             return alive
+        if alive:
+            self._observe_health(state, now)
         if self.ledger.get("run_id") != root:
             self.ledger = {"run_id": root, "attempts": 0, "boot": self.boot}
+            self.suspect = None
+            self.healthy_since = None
             self.save()
-        pending = self.ledger.get("pending")
+        pending = None if observe_only else self.ledger.get("pending")
         if pending:
             acked = state.get("ack_token") == pending["token"]
             if not acked and state.get("owner") != pending["target_owner"]:
@@ -131,6 +185,7 @@ class Supervisor:
                 self.save()
                 pending = None
             elif alive:
+                self.confirmed_fault = pending["reason"]
                 grace = 900 if state.get("finalizing") else (
                     180 if acked and state.get("command_state") == "starting_recovery" else 60)
                 if now - pending["issued_at"] < grace:
@@ -146,12 +201,19 @@ class Supervisor:
                 # Verify the PID creation time again immediately before termination.
                 if self.stop_signal.is_set():
                     return True
-                self.terminate(state["owner"])
-                if self.is_alive(state["owner"]):
-                    self.publish("blocked: application could not be stopped")
+                try:
+                    self.terminate(state["owner"])
+                    if self.is_alive(state["owner"]):
+                        raise RuntimeError("process still running")
+                except (psutil.Error, OSError, RuntimeError) as exc:
+                    self.ledger.pop("pending", None)
+                    self.ledger["last_attempt"] = now
+                    self.save()
+                    self.publish("blocked: application could not be stopped: " + str(exc))
                     return True
                 alive = False
             if pending and not alive:
+                self.confirmed_fault = pending["reason"]
                 if pending.get("launched_at") is None:
                     path, _ = recovery_source(state, reclaim=True)
                     pending["record_path"] = path
@@ -170,7 +232,8 @@ class Supervisor:
         reason = fault_reason(state, now, alive)
         data_reason, data_notice = self.progress.observe(
             state.get("measurements_dir"), state.get("measurement_epoch"), now,
-            active=alive and state.get("measurement_running"))
+            active=alive and state.get("measurement_running"),
+            expectation=state.get("csv_expectation"), started_ns=state.get("measurement_started_ns"))
         reason = reason or (data_reason if state.get("phase") == "waiting" else None)
         if not reason:
             self.suspect = None
@@ -188,14 +251,40 @@ class Supervisor:
             unverified = (not health or health.get("state") == "unknown"
                           or now - health.get("sampled_at", 0) >= 20)
             message = "connection_not_verified" if state.get("measurement_running") and unverified else "healthy"
-            self.publish(data_notice or message)
+            warning = data_notice
+            if data_notice == "measurement_storage_unavailable" and self.progress.storage_failures < 2:
+                warning = None
+            self.publish(data_notice or message, warning=warning)
             return True
         self.healthy_since = None
         if reason != self.suspect:
             self.suspect, self.suspect_since = reason, now
-        if reason.startswith(("dropview_", "dropsens_")) and now - self.suspect_since < 30:
-            self.publish("checking:" + reason)
-            return True
+            self.suspect_samples = 0
+            self.suspect_sample_at = None
+        if reason != "dropview_process_exited" and reason.startswith(("dropview_", "dropsens_")):
+            sampled_at = (state.get("dropview_health") or {}).get("sampled_at")
+            if sampled_at is not None and (self.suspect_sample_at is None or sampled_at > self.suspect_sample_at):
+                self.suspect_samples += 1
+                self.suspect_sample_at = sampled_at
+            # The deadline alone cannot confirm a fault from a cached reading.
+            if sampled_at is None or sampled_at - self.suspect_since < DEVICE_FAULT_CONFIRM_SECONDS:
+                limit = 2 if reason == "dropview_missing" else 3
+                self.publish("checking:" + reason, warning=reason if self.suspect_samples >= limit else None)
+                return True
+        self.confirmed_fault = reason
+        if observe_only:
+            previous = self.ledger.get("simulation_fault") or {}
+            cancelled = (state.get("ack_token") == previous.get("token")
+                         and state.get("command_state") == "cancelled")
+            if alive and (not previous or cancelled) and not self.stop_signal.is_set():
+                command = {"token": uuid.uuid4().hex, "run_id": root, "observe_only": True,
+                           "target_owner": state["owner"], "reason": reason}
+                atomic_write(self.directory / "command.json", command)
+                self.ledger["simulation_fault"] = command
+                self.save()
+            fault = self.ledger.get("simulation_fault") or {}
+            self.publish("simulation_fault:" + (fault.get("reason", reason) if alive else reason))
+            return alive
         if self.ledger.get("attempts", 0) >= 3:
             self.publish("blocked: recovery retry limit reached")
             return True
@@ -218,8 +307,11 @@ class Supervisor:
         return True
 
 
-def run_supervisor():
-    directory = runtime_directory()
+def run_supervisor(simulation_recovery=False, *, app_executable=None):
+    from bench_test.watchdog.state import SIMULATION_RECOVERY_ARG
+
+    directory = runtime_directory(simulation_recovery, app_executable=app_executable)
+    flags = (SIMULATION_RECOVERY_ARG,) if simulation_recovery else ()
     directory.mkdir(parents=True, exist_ok=True)
     logger = logging.getLogger("bench_test.watchdog")
     handler = RotatingFileHandler(directory / "watchdog.log", maxBytes=2_000_000, backupCount=3, encoding="utf-8")
@@ -227,8 +319,10 @@ def run_supervisor():
     logger.setLevel(logging.INFO)
     try:
         with ProcessLock(directory / "supervisor.lock"):
-            supervisor = Supervisor(directory)
+            supervisor = Supervisor(
+                directory, start_app=lambda *args: launch(*args, *flags, executable=app_executable))
             last_message = None
+            last_warning = None
             while True:
                 try:
                     keep_running = supervisor.tick()
@@ -236,8 +330,13 @@ def run_supervisor():
                     if status.get("message") != last_message:
                         last_message = status.get("message")
                         logger.info(last_message)
+                    warning = (status.get("run_id"), status.get("warning"))
+                    if warning != last_warning and warning[1]:
+                        logger.warning("Prewarning: %s", warning[1])
+                    last_warning = warning
                     active = read_json(directory / "active.json") or {}
-                    if (active.get("status") in ("closed", "user_stopped", "completed")
+                    if not simulation_recovery and not active.get("observe_only") and (
+                            active.get("status") in ("closed", "user_stopped", "completed")
                             or status.get("message") in ("user_stopped", "completed")):
                         from bench_test.watchdog.windows_update import WindowsUpdateGuard
                         WindowsUpdateGuard(directory, active.get("run_id", "")).restore()

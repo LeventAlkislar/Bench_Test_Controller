@@ -180,6 +180,13 @@ class MeasurementSession:
         full = os.path.normpath(os.path.join(self.session_dir, rel))
         return full if os.path.exists(full) else None
 
+    def get_recipe_path(self) -> Optional[str]:
+        path = self.get_file_path("recipe")
+        if path and os.path.isfile(path):
+            return path
+        fallback = os.path.join(self.params_dir, "recipe.json")
+        return fallback if os.path.isfile(fallback) else None
+
     # ── Hesaplanan özellikler ─────────────────────────────────────
 
     @property

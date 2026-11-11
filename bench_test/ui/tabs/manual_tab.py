@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
     QLabel, QLineEdit, QPushButton, QComboBox, QSpinBox, QDoubleSpinBox,
     QGroupBox, QMessageBox, QScrollArea, QFrame, QTextEdit
 )
-from PyQt6.QtCore import pyqtSignal, Qt, QMetaObject, Q_ARG, QTimer
+from PyQt6.QtCore import pyqtSignal, Qt, QMetaObject, Q_ARG, QTimer, QSignalBlocker
 from PyQt6.QtGui import QFont
 
 from bench_test.valve.multiport import ValveController, SV01Protocol
@@ -20,6 +20,7 @@ from bench_test.pump import (
     PumpController,
 )
 from bench_test.dropview.controller import DropViewController
+from bench_test.dropview.windows_devices import list_dropsens_devices
 from bench_test.utils.paths import get_value, remember_value
 from bench_test.ui.widgets import _btn, _lbl, _status_lbl
 
@@ -36,8 +37,8 @@ class ManualControlTab(QWidget):
         self.dv_ctrl = dv_ctrl
         self.pump_ctrl = pump_ctrl or PumpController()
         self._build()
-        self._restore_saved()
         self._refresh_ports()
+        self._restore_saved()
         self._pump_log_timer = None
 
         dv_ctrl.status_changed.connect(self._on_dv_status)
@@ -413,9 +414,9 @@ class ManualControlTab(QWidget):
         fld = QVBoxLayout(gd)
 
         row_dv = QHBoxLayout()
-        row_dv.addWidget(QLabel("COM Port:"))
-        self.port_dv = QComboBox(); self.port_dv.setMinimumWidth(100)
-        self.port_dv.currentTextChanged.connect(self._remember_dropsens_com)
+        row_dv.addWidget(QLabel("DropSens / COM Port:"))
+        self.port_dv = QComboBox(); self.port_dv.setMinimumWidth(190)
+        self.port_dv.currentIndexChanged.connect(self._remember_dropsens_selection)
         row_dv.addWidget(self.port_dv)
         row_dv.addStretch()
         fld.addLayout(row_dv)
@@ -437,7 +438,7 @@ class ManualControlTab(QWidget):
 
         fld.addWidget(_lbl(
             "Start DropView: launches DropView             |  Exit DropView: closes DropView (Alt+F4)\n"
-            "Connect: establishes DropSens connection (Ctrl+C)  |  Disconnect: disconnects DropSens (Ctrl+D)",
+            "Connect: uses the selected DropSens or COM port  |  Disconnect: disconnects DropSens (Ctrl+D)",
             color="#888"))
 
         return gd
@@ -470,20 +471,18 @@ class ManualControlTab(QWidget):
     def _restore_saved(self):
         saved_a  = get_value("valve_a_port", "")
         saved_b  = get_value("valve_b_port", "")
-        saved_dv = get_value("dropsens_com", "")
         saved_pump = get_value("pump_com", "")
         self._select_saved_pump_type()
         if saved_a:  self.port_a.setCurrentText(saved_a)
         if saved_b:  self.port_b.setCurrentText(saved_b)
-        if saved_dv and self.port_dv.findText(saved_dv) >= 0:
-            self.port_dv.setCurrentText(saved_dv)
 
     # ──────────────────────────────────────────────────────────
     #  Port yenileme
     # ──────────────────────────────────────────────────────────
 
     def _refresh_ports(self):
-        ports = [p.device for p in serial.tools.list_ports.comports()]
+        serial_ports = serial.tools.list_ports.comports()
+        ports = [p.device for p in serial_ports]
         for combo in [self.port_a, self.port_b]:
             current = combo.currentText()
             combo.clear()
@@ -497,13 +496,24 @@ class ManualControlTab(QWidget):
         preferred_pump = saved_pump or current_pump
         if preferred_pump and self.port_pump.findText(preferred_pump) >= 0:
             self.port_pump.setCurrentText(preferred_pump)
-        saved_dv   = get_value("dropsens_com", "")
-        current_dv = self.port_dv.currentText()
-        self.port_dv.clear()
-        self.port_dv.addItems(ports)
-        preferred = saved_dv or current_dv
-        if preferred and self.port_dv.findText(preferred) >= 0:
-            self.port_dv.setCurrentText(preferred)
+        saved_device = get_value("dropsens_named_selection", {})
+        saved_com = get_value("dropsens_com", "") or self.port_dv.currentText()
+        with QSignalBlocker(self.port_dv):
+            self.port_dv.clear()
+            self.port_dv.addItems(ports)
+            preferred = self.port_dv.findText(saved_com)
+            saved_address = saved_device.get("address")
+            found_saved_device = False
+            for address, name, port in list_dropsens_devices(serial_ports):
+                self.port_dv.addItem(f"{name} ({port})", {"address": address, "name": name})
+                if address == saved_address:
+                    preferred = self.port_dv.count() - 1
+                    found_saved_device = True
+            if saved_address and not found_saved_device:
+                self.port_dv.addItem(f"{saved_device['name']} (port unavailable)", saved_device)
+                preferred = self.port_dv.count() - 1
+            if preferred >= 0:
+                self.port_dv.setCurrentIndex(preferred)
 
     # ──────────────────────────────────────────────────────────
     #  Valve A – bağlantı
@@ -969,17 +979,23 @@ class ManualControlTab(QWidget):
         self.dv_status.setText("● Connecting...")
         self.dv_status.setStyleSheet("color:#FF9800;")
         self.log_signal.emit("Connecting DropSens...")
-        com = self.port_dv.currentText()
-        remember_value("dropsens_com", com)
-        self.dv_ctrl.do_connect_dropsens(
-            com_port=com,
-            log_fn=lambda msg: self.log_signal.emit(msg)
-        )
+        device = self.port_dv.currentData()
+        log_fn = self.log_signal.emit
+        if device:
+            self._set_dv_btns(False)
+            self.dv_ctrl.do_connect_dropsens(device_address=device["address"], log_fn=log_fn)
+        else:
+            com = self.port_dv.currentText()
+            remember_value("dropsens_com", com)
+            self.dv_ctrl.do_connect_dropsens(com_port=com, log_fn=log_fn)
 
-    def _remember_dropsens_com(self, value):
-        value = value.strip()
-        if value:
-            remember_value("dropsens_com", value)
+    def _remember_dropsens_selection(self, index):
+        if index < 0:
+            return
+        device = self.port_dv.itemData(index)
+        remember_value("dropsens_named_selection", device)
+        if device is None:
+            remember_value("dropsens_com", self.port_dv.itemText(index))
 
     def _dv_disconnect(self):
         self.dv_status.setText("● Disconnecting...")
@@ -1004,6 +1020,9 @@ class ManualControlTab(QWidget):
 
     def _on_dv_action_done(self, action: str, success: bool):
         self._set_dv_btns(True)
+        if action == "connect_named" and not success:
+            self.dv_status.setText("● Connection attempt failed")
+            self.dv_status.setStyleSheet("color:#F44336;")
 
     def _on_dv_status(self, connected: bool):
         if connected:

@@ -16,7 +16,7 @@ class FlexiconPumpController:
         self.port: str = ""
         self.pump_id = pump_id
         self.baudrate = baudrate
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
 
     def configure(self, pump_id: int = None, baudrate: int = None):
         if pump_id is not None:
@@ -33,6 +33,7 @@ class FlexiconPumpController:
                 parity=serial.PARITY_NONE,
                 stopbits=serial.STOPBITS_TWO,
                 timeout=timeout,
+                write_timeout=timeout,
             )
             self.serial_port = ser
             self.port = port
@@ -122,6 +123,28 @@ class FlexiconPumpController:
     def running_status(self) -> list[str]:
         lines = self.send_command("ZY", wait=0.3)
         return [f"STATUS RUNNING={line}" for line in lines] if lines else ["ERR NO_RESPONSE"]
+
+    def stop_and_confirm(self) -> bool:
+        """Stop without changing the speed setting; require a fresh ZY=0 reply."""
+        with self.lock:
+            if not self.is_connected():
+                return False
+            self.send_command("ST", wait=0.2)
+            for _ in range(3):
+                if self.running_state() is False:
+                    return True
+            return False
+
+    def running_state(self):
+        """Return True/False only for a valid pump reply, otherwise None."""
+        with self.lock:
+            if not self.is_connected():
+                return None
+            self.serial_port.reset_input_buffer()
+            lines = self.send_command("ZY", wait=0.5)
+            if len(lines) == 1:
+                return {"0": False, "1": True}.get(lines[0].rstrip("!").strip())
+            return None
 
     def stop(self) -> list[str]:
         lines = self.send_command("ST", wait=0.2)

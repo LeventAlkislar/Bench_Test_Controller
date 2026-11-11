@@ -17,16 +17,22 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from bench_test.dropview.controller import DropViewController
 from bench_test.dropview.script_generator import generate_dropview_script
 from bench_test.measurement.session import MeasurementSession
+from bench_test.pump.flexicon_pump import FlexiconPumpController
 from bench_test.recipe.models import Recipe, RecipeStep
 from bench_test.recipe.recovery import RecoveryJournal, plan_recovery
 from bench_test.recipe.recovery_executor import (
     RecipeExecutionLock, create_recovery_package, reconnect_recovery_pump, verify_recovery_valves,
 )
 from bench_test.recipe.runner import RecipeRunner
+from bench_test.watchdog.state import read_json, recovery_source
+from bench_test.watchdog.supervisor import Supervisor
 
 
 class ExecutorTests(unittest.TestCase):
     def setUp(self):
+        dialogs = patch("bench_test.dropview.automator.dismiss_connection_error_dialogs")
+        dialogs.start()
+        self.addCleanup(dialogs.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.source = MeasurementSession.create(self.temp.name, "SİL 1")
@@ -65,6 +71,9 @@ class ExecutorTests(unittest.TestCase):
             controller.address = address
         self.a.get_current_port.return_value = {"success": True, "status": 0, "param1": 3}
         self.b.get_current_state.return_value = {"success": True, "status": 0, "param1": 2}
+        csv_gate = patch.object(RecipeRunner, "_wait_for_recovery_csv", return_value=True)
+        self.csv_gate = csv_gate.start()
+        self.addCleanup(csv_gate.stop)
         self.dv = Mock()
         self.dv.do_reconcile_discrete_recovery.return_value = True
         self.dv.do_start_dropview.return_value = True
@@ -74,23 +83,63 @@ class ExecutorTests(unittest.TestCase):
         self.pump.active_type = "flexicon"
         self.pump.port = "COM9"
         self.pump.stop.return_value = []
+        self.pump.stop_and_confirm.return_value = True
         self.pump.set_speed_rpm.return_value = []
         logger = patch("bench_test.recipe.runner.debug_log")
         logger.start()
         self.addCleanup(logger.stop)
+        measurement = patch("bench_test.dropview.automator.get_discrete_measurement_state",
+                            return_value={"state": "running"})
+        measurement.start()
+        self.addCleanup(measurement.stop)
 
     def record(self):
         return RecoveryJournal.read(self.original.path)
 
-    def make_runner(self):
-        record = self.record()
-        session, recipe, journal, _ = create_recovery_package(record, self.original.path)
+    def make_runner(self, source_path=None):
+        source_path = source_path or self.original.path
+        record = RecoveryJournal.read(source_path)
+        session, recipe, journal, _ = create_recovery_package(record, source_path)
         runner = RecipeRunner(self.a, self.b, recipe, queue.Queue(), threading.Event(), self.dv,
                               pump_ctrl=self.pump, session_scr_path=session.get_file_path("script"),
                               session_measurements_dir=session.measurements_dir,
                               recovery_journal=journal, recovery_record=record,
-                              recovery_source_path=self.original.path)
+                              recovery_source_path=source_path,
+                              simulation_recovery=record.get("simulation_recovery", False))
         return runner, journal, session
+
+    def test_simulation_recovery_restores_cursor_without_touching_pump_or_valves(self):
+        self.original.update(simulation_recovery=True, requested_settings={
+            "valve_a": 3, "valve_b": 2, "pump_rpm": 50,
+        })
+        runner, journal, session = self.make_runner()
+        runner._prepare_recovery()
+
+        self.assertTrue(runner.simulation_mode)
+        self.assertTrue(RecoveryJournal.read(journal.path)["simulation_recovery"])
+        self.assertEqual((runner.current_loop_index, runner.current_step_index), (1, 3))
+        self.assertTrue(runner._resume_measurement)
+        self.assertTrue(runner._restore_pump_at_step)
+        self.dv.do_reconcile_discrete_recovery.assert_called_once()
+        self.dv.do_start_dropview.assert_called_once()
+        self.assertEqual(self.a.mock_calls + self.b.mock_calls + self.pump.mock_calls, [])
+        self.assertNotEqual(session.session_dir, self.source.session_dir)
+        runner._resume_measurement = False
+        self.assertTrue(runner._execute_step(RecipeStep(0, 0), 3, len(runner.recipe.steps)))
+        self.assertEqual(self.pump.mock_calls, [])
+
+    def test_simulation_recovery_checks_dropview_before_resuming_idle_wait(self):
+        self.original.update(simulation_recovery=True, phase="waiting", sequence_index=3, step_index=3,
+                             active_step=asdict(self.recipe.steps[2]), measurement_running=False,
+                             active_measurement_kind="", remaining_seconds=20)
+        runner, _, _ = self.make_runner()
+        runner._prepare_recovery()
+
+        self.assertEqual(runner.current_step_index, 3)
+        self.assertFalse(runner._resume_measurement)
+        self.dv.do_reconcile_discrete_recovery.assert_called_once_with(False, log_fn=runner._log)
+        self.dv.do_start_dropview.assert_called_once_with(
+            log_fn=runner._log, allow_cleanup=False, cancelled=runner._interrupted)
 
     def test_new_package_preserves_source_and_repoints_method_and_all_exports(self):
         source_method = Path(self.source.get_file_path("tp")).read_bytes()
@@ -180,6 +229,7 @@ class ExecutorTests(unittest.TestCase):
             if not visited:
                 self.pump.stop.assert_not_called()
                 self.pump.set_speed_rpm.assert_not_called()
+                self.assertTrue(runner._resume_measurement)
             visited.append((runner.current_loop_index, sequence))
             return True
         runner._execute_step = execute
@@ -187,9 +237,19 @@ class ExecutorTests(unittest.TestCase):
         self.assertEqual(visited, [(1, 3), (1, 4), (1, 5)] + [(2, n) for n in range(1, 6)])
         self.assertEqual(self.record()["status"], "superseded")
         self.assertEqual(RecoveryJournal.read(journal.path)["status"], "completed")
-        self.dv.do_start_measure.assert_called_once_with(session.get_file_path("script"), log_fn=runner._log)
+        self.dv.do_start_measure.assert_not_called()  # Step execution was replaced above.
         self.a.switch_port.assert_not_called()
         self.b.switch_state.assert_not_called()
+
+    def test_verified_external_stop_does_not_restart_when_the_next_step_is_stop(self):
+        self.recipe.steps[2] = RecipeStep(0, 0, dropview_action="stop_discrete_pad")
+        self.original.update(recipe=asdict(self.recipe), status="interrupted", observed_measurement_state="stopped")
+        runner, _, _ = self.make_runner()
+        runner._prepare_recovery()
+
+        self.assertEqual(runner.current_step_index, 3)
+        self.assertFalse(runner._resume_measurement)
+        self.dv.do_start_measure.assert_not_called()
 
     def test_stale_source_record_blocks_before_any_device_command(self):
         runner, journal, _ = self.make_runner()
@@ -200,16 +260,96 @@ class ExecutorTests(unittest.TestCase):
         self.pump.stop.assert_not_called()
         self.assertEqual(RecoveryJournal.read(journal.path)["status"], "recovery_blocked")
 
-    def test_unverified_old_measurement_blocks_without_stopping_pump(self):
+    def test_restarted_dropview_does_not_prove_old_measurement_stopped(self):
+        self.original.update(requested_settings={"valve_a": 3, "valve_b": 2, "pump_rpm": 12})
         runner, journal, _ = self.make_runner()
         self.dv.do_reconcile_discrete_recovery.return_value = False
+        self.dv.do_restore_discrete_control.return_value = False
         runner._execute_step = Mock()
         runner.run()
         runner._execute_step.assert_not_called()
-        self.pump.stop.assert_not_called()
+        self.pump.stop_and_confirm.assert_called_once()
+        self.pump.run.assert_not_called()
+        self.dv.do_restore_discrete_control.assert_called_once_with(
+            None, log_fn=runner._log, allow_terminate=False, cancelled=runner._interrupted)
         self.dv.do_start_measure.assert_not_called()
         self.assertEqual(self.record()["status"], "interrupted")
+        self.assertTrue(self.record()["recovery_connection_restored"])
+        self.assertNotIn("recovery_resume_basis", self.record())
+        self.assertEqual(RecoveryJournal.read(journal.path)["status"], "operator_required")
+
+    def test_verified_exit_automatically_uses_normal_start_and_resumes_measurement(self):
+        previous = {"pid": 42, "created": 100}
+        self.original.update(status="interrupted", error="dropview_process_exited",
+                             dropview_owner=previous)
+        runner, _, _ = self.make_runner()
+        with patch("bench_test.recipe.runner.process_exited", return_value=True) as exited:
+            runner._prepare_recovery()
+        exited.assert_called_once_with(previous)
+        self.dv.do_start_dropview.assert_called_once()
+        self.dv.do_restore_discrete_control.assert_not_called()
+        self.dv.do_reconcile_discrete_recovery.assert_not_called()
+        self.assertEqual(self.record()["recovery_resume_basis"], "process_exited")
+        self.assertTrue(self.record()["recovery_connection_restored"])
+        self.assertEqual(runner.current_step_index, 3)
+        self.assertTrue(runner._resume_measurement)
+        self.dv.do_start_measure.assert_not_called()
+
+    def test_exit_recovery_does_not_accept_a_still_running_original_process(self):
+        self.original.update(status="interrupted", error="dropview_process_exited",
+                             dropview_owner={"pid": 42, "created": 100})
+        self.dv.do_reconcile_discrete_recovery.return_value = False
+        self.dv.do_restore_discrete_control.return_value = False
+        runner, journal, _ = self.make_runner()
+        with patch("bench_test.recipe.runner.process_exited", return_value=False):
+            runner.run()
+        self.dv.do_start_dropview.assert_not_called()
+        self.dv.do_start_measure.assert_not_called()
+        self.assertEqual(RecoveryJournal.read(journal.path)["status"], "operator_required")
+
+    def test_confirmed_dropview_hang_restarts_before_resuming_the_recipe(self):
+        previous = {"pid": 42, "created": 100}
+        self.original.update(status="interrupted", error="dropview_not_responding", dropview_owner=previous)
+        self.dv.do_reconcile_discrete_recovery.return_value = False
+        self.dv.do_stop_unresponsive_dropview.return_value = True
+        runner, _, _ = self.make_runner()
+        with patch("bench_test.recipe.runner.process_exited", return_value=False):
+            runner._prepare_recovery()
+
+        self.dv.do_stop_unresponsive_dropview.assert_called_once_with(
+            previous, cancelled=runner._interrupted, log_fn=runner._log)
+        self.dv.do_start_dropview.assert_called_once_with(
+            log_fn=runner._log, allow_cleanup=False, cancelled=runner._interrupted)
+        self.assertEqual(self.record()["recovery_resume_basis"], "process_exited")
+        self.assertTrue(self.record()["recovery_connection_restored"])
+        self.assertEqual(runner.current_step_index, 3)
+        self.assertTrue(runner._resume_measurement)
+
+    def test_verified_process_exit_is_saved_even_if_relaunch_fails(self):
+        previous = {"pid": 42, "created": 100}
+        self.original.update(status="interrupted", error="dropview_process_exited", dropview_owner=previous)
+        self.dv.do_start_dropview.return_value = False
+        runner, _, _ = self.make_runner()
+        with patch("bench_test.recipe.runner.process_exited", return_value=True):
+            runner.run()
+
+        self.assertEqual(self.record()["recovery_resume_basis"], "process_exited")
+        self.assertFalse(self.record()["recovery_connection_restored"])
+        self.dv.do_start_measure.assert_not_called()
+
+    def test_disconnection_does_not_restart_measurement_until_reconnection_is_verified(self):
+        previous = {"pid": 42, "created": 100}
+        self.original.update(status="interrupted", error="dropsens_disconnected", dropview_owner=previous)
+        self.dv.do_reconnect_dropsens.return_value = False
+        runner, journal, _ = self.make_runner()
+        with patch("bench_test.recipe.runner.process_exited", return_value=False):
+            runner.run()
+        self.dv.do_reconnect_dropsens.assert_called_once_with(previous, log_fn=runner._log)
+        self.dv.do_start_dropview.assert_not_called()
+        self.dv.do_start_measure.assert_not_called()
         self.assertEqual(RecoveryJournal.read(journal.path)["status"], "recovery_blocked")
+        self.assertNotIn("recovery_resume_basis", self.record())
+        self.assertFalse(self.record()["recovery_connection_restored"])
 
     def test_stop_request_during_reconciliation_does_not_start_new_measurement(self):
         runner, _, _ = self.make_runner()
@@ -227,7 +367,8 @@ class ExecutorTests(unittest.TestCase):
         self.dv.do_start_dropview.return_value = False
         runner.run()
         self.assertEqual(self.record()["status"], "interrupted")
-        self.assertTrue(self.record()["recovery_previous_stopped"])
+        self.assertEqual(self.record()["recovery_resume_basis"], "editor_idle")
+        self.assertFalse(self.record()["recovery_connection_restored"])
         self.assertEqual(plan_recovery(self.record()).sequence_index, 3)
         self.dv.do_start_dropview.return_value = True
         retry, _, _ = self.make_runner()
@@ -237,6 +378,52 @@ class ExecutorTests(unittest.TestCase):
         self.assertEqual(self.dv.do_reconcile_discrete_recovery.call_args_list[1].args, (False,))
         self.assertEqual(self.record()["status"], "superseded")
         self.assertEqual(self.record()["recovery_attempts"], 2)
+
+    def test_legacy_stop_record_remains_eligible_without_claiming_editor_idle(self):
+        self.original.update(recovery_previous_stopped=True)
+        runner, _, _ = self.make_runner()
+        runner._prepare_recovery()
+
+        self.dv.do_reconcile_discrete_recovery.assert_called_once_with(False, log_fn=runner._log)
+        self.assertEqual(self.record()["recovery_resume_basis"], "legacy_reconciled")
+
+    def test_process_exit_during_recovery_preparation_reclaims_the_linked_parent(self):
+        runner, child, _ = self.make_runner()
+        self.dv.do_start_dropview.side_effect = SystemExit("simulated process exit")
+        with self.assertRaises(SystemExit):
+            runner.run()
+        self.assertEqual(self.record()["status"], "recovering")
+        self.assertEqual(self.record()["recovery_resume_basis"], "editor_idle")
+        path, record = recovery_source({"record_path": child.path,
+                                        "recovery_source": self.original.path}, reclaim=True)
+        self.assertEqual(path, self.original.path)
+        self.assertEqual(record["status"], "interrupted")
+        self.assertEqual(plan_recovery(record).sequence_index, 3)
+        self.dv.do_start_measure.assert_not_called()
+
+    def test_process_exit_during_new_start_does_not_replay_it_without_stop_evidence(self):
+        self.recipe.steps[2] = RecipeStep(0, 0)
+        self.recipe.loop_count = 1
+        self.original.update(recipe=asdict(self.recipe))
+        runner, child, _ = self.make_runner()
+        self.dv.do_start_measure.side_effect = SystemExit("simulated exit during Start")
+        with self.assertRaises(SystemExit):
+            runner.run()
+        path, record = recovery_source({"record_path": child.path,
+                                        "recovery_source": self.original.path}, reclaim=True)
+        self.assertEqual(path, child.path)
+        self.assertEqual(self.record()["status"], "superseded")
+        self.assertTrue(record["measurement_restart_pending"])
+        self.assertFalse(record["measurement_running"])
+        self.assertEqual(plan_recovery(record).sequence_index, 3)
+        retry, destination, _ = self.make_runner(path)
+        self.dv.reset_mock(side_effect=True)
+        self.dv.do_reconcile_discrete_recovery.return_value = False
+        self.dv.do_restore_discrete_control.return_value = False
+        retry.run()
+        self.assertEqual(RecoveryJournal.read(destination.path)["status"], "operator_required")
+        self.dv.do_reconcile_discrete_recovery.assert_called_once_with(True, log_fn=retry._log)
+        self.dv.do_start_measure.assert_not_called()
 
     def test_unwritable_destination_record_blocks_before_device_queries(self):
         runner, journal, _ = self.make_runner()
@@ -262,12 +449,161 @@ class ExecutorTests(unittest.TestCase):
                 self.assertTrue(options[0]["skip_valve_b"])
                 self.assertTrue(options[0]["skip_pump"])
                 self.assertFalse(options[0]["skip_wait"])
+                self.assertTrue(runner._resume_measurement)
+                self.assertTrue(runner._restore_pump_at_step)
             seen.append(sequence)
             return True
         runner._execute_step = execute
         runner.run()
         self.assertTrue(seen)
-        self.dv.do_start_measure.assert_called_once()
+        self.pump.stop_and_confirm.assert_called_once()
+
+    def test_recovery_applies_target_or_inherited_speed_before_new_measurement(self):
+        for target_rpm, expected in ((None, 12), (0, 0), (8, 8)):
+            with self.subTest(target_rpm=target_rpm):
+                self.recipe.steps[2] = RecipeStep(0, 0, pump_rpm=target_rpm)
+                self.original.update(recipe=asdict(self.recipe), status="running",
+                                     recovery_previous_stopped=False,
+                                     requested_settings={"valve_a": 3, "valve_b": 2, "pump_rpm": 12})
+                runner, journal, session = self.make_runner()
+                order = Mock()
+                order.hold.return_value = True
+                order.reconcile.return_value = True
+                order.speed.return_value = []
+                order.run.return_value = []
+                order.running_state.return_value = expected > 0
+                order.start.return_value = True
+                with patch.object(self.pump, "stop_and_confirm", order.hold), \
+                        patch.object(self.dv, "do_reconcile_discrete_recovery", order.reconcile), \
+                        patch.object(self.pump, "set_speed_rpm", order.speed), \
+                        patch.object(self.pump, "run", order.run), \
+                        patch.object(self.pump, "running_state", order.running_state), \
+                        patch.object(self.dv, "do_start_measure", order.start):
+                    runner._prepare_recovery()
+                    self.assertEqual(RecoveryJournal.read(journal.path)["requested_settings"]["pump_rpm"], 12)
+                    self.assertTrue(runner._execute_step(self.recipe.steps[2], 3, 5))
+                names = [call[0] for call in order.mock_calls]
+                self.assertLess(names.index("hold"), names.index("reconcile"))
+                self.assertLess(names.index("speed"), names.index("start"))
+                order.speed.assert_called_once_with(expected)
+                if expected:
+                    order.run.assert_called_once_with("FWD")
+                else:
+                    order.run.assert_not_called()
+                order.start.assert_called_once_with(session.get_file_path("script"), log_fn=runner._log)
+
+    def test_unconfirmed_pump_stop_blocks_before_any_dropview_action(self):
+        self.original.update(requested_settings={"valve_a": 3, "valve_b": 2, "pump_rpm": 12})
+        self.pump.stop_and_confirm.return_value = False
+        runner, journal, _ = self.make_runner()
+        runner.run()
+        self.dv.do_start_measure.assert_not_called()
+        self.dv.do_reconcile_discrete_recovery.assert_not_called()
+        self.assertEqual(RecoveryJournal.read(journal.path)["pump_recovery_stop"], "unverified")
+
+    def test_disconnection_recovers_through_supervisor_client_and_new_package(self):
+        from PyQt6.QtWidgets import QApplication
+        from bench_test.watchdog.client import WatchdogClient
+        import time
+
+        with patch.dict(os.environ, {"QT_QPA_PLATFORM": "offscreen"}):
+            app = QApplication.instance() or QApplication(["recovery-integration"])
+        self.recipe.steps[2] = RecipeStep(0, 0)
+        self.recipe.loop_count = 1
+        self.original.update(recipe=asdict(self.recipe),
+                             requested_settings={"valve_a": 3, "valve_b": 2, "pump_rpm": 12})
+        old = RecipeRunner(self.a, self.b, self.recipe, queue.Queue(), threading.Event(), self.dv,
+                           pump_ctrl=self.pump, recovery_journal=self.original)
+        old.current_loop_index, old.current_sequence_index, old.current_step_index = 1, 2, 2
+        old._active_step = self.recipe.steps[1]
+        old._requested_settings.update(self.record()["requested_settings"])
+        old.measurement_running = True
+        old.active_measurement_kind = "discrete_pad"
+        old._measurement_owner = {"pid": 42, "created": 100}
+        old.is_alive = Mock(return_value=True)
+        old.checkpoint("waiting", status="running", remaining_seconds=120)
+
+        state_machine = SimpleNamespace(state="running")
+        tab = SimpleNamespace(package_tab=SimpleNamespace(sm=state_machine), recover_from_record=Mock())
+        health = SimpleNamespace(last_health={})
+        runtime = Path(self.temp.name) / "watchdog-integration"
+        client = WatchdogClient(tab, health, directory=runtime)
+        client._timer.stop()
+        now = [time.monotonic()]
+        launch, terminate = Mock(), Mock()
+        supervisor = Supervisor(runtime, clock=lambda: now[0], is_alive=lambda _: True,
+                                start_app=launch, terminate=terminate)
+        recovered = []
+
+        def adopt(path):
+            self.assertEqual(path, self.original.path)
+            runner, journal, session = self.make_runner()
+            recovered.append((runner, journal, session))
+            client.arm(runner)
+
+        tab.recover_from_record.side_effect = adopt
+        self.pump.running_state.return_value = True
+        self.pump.run.return_value = []
+        self.dv.do_reconnect_dropsens.return_value = True
+        self.dv.discrete_measurement_owner = old._measurement_owner
+        with patch.object(client, "_ensure_supervisor"), \
+                patch("bench_test.recipe.runner.process_exited", return_value=False), \
+                patch("bench_test.watchdog.client.WindowsUpdateGuard") as guard_factory, \
+                patch("bench_test.watchdog.client.threading.Thread",
+                      side_effect=lambda target, **_: SimpleNamespace(start=target)), \
+                patch("bench_test.watchdog.client.time.monotonic", side_effect=lambda: now[0]):
+            guard = guard_factory.return_value
+            guard.protect.return_value = guard.status.return_value = "test-only"
+            guard.restore.return_value = "test-only"
+            try:
+                client.arm(old)
+                for delta in (0, 15):
+                    now[0] += delta
+                    health.last_health = {"dv_open": True, "state": "disconnected", "sampled_at": now[0],
+                                          "process_identity": old._measurement_owner}
+                    old.worker_heartbeat = now[0]
+                    client._publish()
+                    supervisor.tick()
+                self.assertEqual(read_json(runtime / "command.json")["reason"], "dropsens_disconnected")
+                client._tick()
+                self.assertTrue(old._interrupted())
+                tab.recover_from_record.assert_not_called()
+                old._finish_watchdog_interrupt()
+                old.is_alive.return_value = False
+                client._tick()
+                tab.recover_from_record.assert_not_called()  # Old package is still being finalized.
+                state_machine.state = "idle"
+                client._tick()
+                runner, journal, session = recovered[0]
+                runner.run()
+                result = RecoveryJournal.read(journal.path)
+                self.assertEqual(result["status"], "completed", result.get("error"))
+                self.assertTrue(runner.recovery_continued)
+                self.assertEqual(self.record()["status"], "superseded")
+                self.assertEqual(self.record()["recovery_resume_basis"], "link_restored")
+                self.assertTrue(self.record()["recovery_connection_restored"])
+                self.dv.do_reconnect_dropsens.assert_called_once_with(old._measurement_owner, log_fn=runner._log)
+                self.dv.do_start_dropview.assert_not_called()
+                self.dv.do_reconcile_discrete_recovery.assert_not_called()
+                self.pump.set_speed_rpm.assert_any_call(12)
+                self.dv.do_start_measure.assert_called_once_with(session.get_file_path("script"), log_fn=runner._log)
+                self.assertEqual(self.pump.stop_and_confirm.call_count, 2)
+                launch.assert_not_called()
+                terminate.assert_not_called()
+            finally:
+                client.close()
+        app.processEvents()
+
+    def test_flexicon_stop_requires_valid_fresh_running_status(self):
+        for replies, expected in (([[], ["1 !"], ["0 !"]], True),
+                                  ([[], [], ["ERR NO_RESPONSE"], ["OK STOP"]], False)):
+            with self.subTest(replies=replies):
+                pump = FlexiconPumpController()
+                pump.serial_port = Mock(is_open=True)
+                with patch.object(pump, "send_command", side_effect=replies) as command:
+                    self.assertIs(pump.stop_and_confirm(), expected)
+                self.assertEqual(command.call_args_list[0].args, ("ST",))
+                self.assertTrue(all(call.args == ("ZY",) for call in command.call_args_list[1:]))
 
     def test_final_measurement_interruption_does_not_start_another_loop(self):
         self.recipe.steps = self.recipe.steps[:3]
@@ -350,6 +686,30 @@ class ExecutorTests(unittest.TestCase):
 
 
 class DiscreteReconciliationTests(unittest.TestCase):
+    def test_recovery_can_reopen_the_editor_in_the_verified_original_session(self):
+        owner = {"pid": 42, "created": 100}
+        for stopped in (True, False):
+            with self.subTest(stopped=stopped):
+                controller = Mock()
+                controller.do_stop_measure.return_value = stopped
+                with patch("bench_test.dropview.controller.automator.verify_discrete_session_connection") as verify, \
+                        patch("bench_test.dropview.controller.automator.window_exists", return_value=False):
+                    result = DropViewController.do_reconcile_discrete_recovery(
+                        controller, True, expected_owner=owner)
+                self.assertEqual(result, stopped)
+                verify.assert_called_once_with(owner)
+                controller.do_stop_measure.assert_called_once_with(
+                    log_fn=None, require_editor=True, expected_owner=owner, reopen_if_needed=True)
+
+    def test_recovery_does_not_touch_the_editor_when_the_original_session_cannot_be_verified(self):
+        owner = {"pid": 42, "created": 100}
+        controller = Mock()
+        with patch("bench_test.dropview.controller.automator.verify_discrete_session_connection",
+                   side_effect=RuntimeError("The original DropView process could not be verified.")):
+            self.assertFalse(DropViewController.do_reconcile_discrete_recovery(
+                controller, True, expected_owner=owner))
+        controller.do_stop_measure.assert_not_called()
+
     def test_absent_editor_is_not_treated_as_stop_confirmation(self):
         controller = Mock()
         with patch("bench_test.dropview.controller.automator.window_exists", return_value=False):
@@ -357,11 +717,12 @@ class DiscreteReconciliationTests(unittest.TestCase):
             self.assertTrue(DropViewController.do_reconcile_discrete_recovery(controller, False))
         controller.do_stop_measure.assert_not_called()
 
-    def test_present_editor_requires_successful_stop_and_verified_close(self):
+    def test_present_editor_requires_successful_verified_stop(self):
         controller = Mock()
         controller.do_stop_measure.return_value = True
-        with patch("bench_test.dropview.controller.automator.window_exists", side_effect=[True, False]):
+        with patch("bench_test.dropview.controller.automator.window_exists", return_value=True):
             self.assertTrue(DropViewController.do_reconcile_discrete_recovery(controller, True))
+        controller.do_stop_measure.return_value = False
         with patch("bench_test.dropview.controller.automator.window_exists", return_value=True):
             self.assertFalse(DropViewController.do_reconcile_discrete_recovery(controller, True))
 

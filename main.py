@@ -27,10 +27,15 @@ def resource_path(relative_path):
     return os.path.join(base_path, relative_path)
 
 def main():
+    from bench_test.watchdog.state import SIMULATION_RECOVERY_ARG
+
     arguments = sys.argv[1:]
+    simulation_recovery = bool(arguments and arguments[-1] == SIMULATION_RECOVERY_ARG)
+    if simulation_recovery:
+        arguments = arguments[:-1]
     if arguments == ["--watchdog"]:
         from bench_test.watchdog.supervisor import run_supervisor
-        run_supervisor()
+        run_supervisor(simulation_recovery)
         return
     from bench_test.ui.main_window import MainWindow
     from bench_test.watchdog.state import ProcessLock, runtime_directory
@@ -53,7 +58,7 @@ def main():
         def restore_if_needed():
             try:
                 token = arguments[1] if len(arguments) == 2 and arguments[0] == "--watchdog-recover" else None
-                win.watchdog.accept_startup(token)
+                win.watchdog.accept_startup(token, simulation_recovery=simulation_recovery)
             except Exception as exc:
                 win.statusBar().showMessage(f"Automatic recovery unavailable: {exc}")
                 logging.exception("Automatic recovery startup failed")

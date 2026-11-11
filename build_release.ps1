@@ -36,7 +36,21 @@ def window_title(suffix: str = "") -> str:
 
 Set-Content -Path $VersionFile -Value $VersionContent -Encoding UTF8
 
-& $PyInstaller `
+function Invoke-ReleaseBuild {
+    $OriginalPath = $env:Path
+    try {
+        # Prefer Windows DLLs when tools on PATH ship libraries with the same name.
+        $env:Path = "$env:SystemRoot\System32;$OriginalPath"
+        & $PyInstaller @args
+        if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+        }
+    } finally {
+        $env:Path = $OriginalPath
+    }
+}
+
+Invoke-ReleaseBuild `
     --onefile `
     --windowed `
     --clean `
@@ -48,9 +62,16 @@ Set-Content -Path $VersionFile -Value $VersionContent -Encoding UTF8
     --exclude-module PIL._avif `
     main.py
 
-if ($LASTEXITCODE -ne 0) {
-    exit $LASTEXITCODE
-}
+Invoke-ReleaseBuild `
+    --onefile `
+    --windowed `
+    --clean `
+    -y `
+    --name BenchTestWatchdog `
+    --exclude-module PIL._avif `
+    watchdog_main.py
 
 $OutputExe = Join-Path $Root "dist\$ExeName.exe"
+$WatchdogExe = Join-Path $Root "dist\BenchTestWatchdog.exe"
 Write-Host "Build completed: $OutputExe"
+Write-Host "Watchdog executable: $WatchdogExe"

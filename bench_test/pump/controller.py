@@ -67,6 +67,14 @@ class PumpController:
     def stop(self) -> list[str]:
         return self._active.stop()
 
+    def stop_and_confirm(self) -> bool:
+        if self.active_type != PUMP_TYPE_FLEXICON:
+            return False
+        return self._active.stop_and_confirm()
+
+    def running_state(self):
+        return self._active.running_state() if self.active_type == PUMP_TYPE_FLEXICON else None
+
     def run(self, direction: str) -> list[str]:
         return self._active.run(direction)
 

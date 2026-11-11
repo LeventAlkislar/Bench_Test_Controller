@@ -8,8 +8,9 @@ Uygulamada aynı anda iki bağımsız session kavramını taşır:
   active_session   : Pipeline çalışan, SM'e bağlı session.
                      Yalnızca SM.build() / SM.reset() ile değişir.
 
-  displayed_session: Ekranda gösterilen session.
+  displayed_session: Grafik ve log ekranlarında gösterilen session.
                      Yalnızca switch_display() ile değişir.
+  setup_session    : Recipe ve Measurement Setup ekranlarının session'ı.
 
   display_mode     : "empty" | "active" | "archived" | "history" | "legacy"
 
@@ -30,12 +31,14 @@ class SessionContext:
     active_session   : Optional[MeasurementSession] = field(default=None)
     displayed_session: Optional[MeasurementSession] = field(default=None)
     display_mode     : DisplayMode                  = field(default="empty")
+    setup_session    : Optional[MeasurementSession] = field(default=None)
 
     # ── Yardımcılar ───────────────────────────────────────────────
 
     def set_active(self, session: MeasurementSession) -> None:
         """SM.build() çağrısından hemen sonra MainWindow tarafından çağrılır."""
         self.active_session = session
+        self.setup_session = session
 
     def clear_active(self) -> None:
         """SM.reset() çağrısından hemen sonra MainWindow tarafından çağrılır."""
@@ -59,6 +62,12 @@ class SessionContext:
     def is_live(self) -> bool:
         """Ekranda gösterilen session canlı (active) mı?"""
         return self.display_mode == "active"
+
+    @property
+    def is_inspecting(self) -> bool:
+        return self.display_mode in ("history", "legacy") or (
+            self.display_mode == "archived" and self.displayed_session is not self.setup_session
+        )
 
     @property
     def is_archived(self) -> bool:

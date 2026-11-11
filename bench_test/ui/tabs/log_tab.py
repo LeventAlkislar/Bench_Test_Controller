@@ -54,7 +54,7 @@ class LogTab(QWidget):
         """Session nesnesinden log dosyasini yukler."""
         import os
 
-        log_path = os.path.join(session.logs_dir, "session.log")
+        log_path = session.get_file_path("log") or os.path.join(session.logs_dir, "session.log")
         self.log.clear()
         if not os.path.isfile(log_path):
             self.log.append(f"# Log file not found: {log_path}")

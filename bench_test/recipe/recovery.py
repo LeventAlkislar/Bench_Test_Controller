@@ -15,7 +15,12 @@ from datetime import datetime, timezone
 from bench_test.recipe.models import Recipe, RecipeStep, StepLoop
 
 
+class RecoveryVerificationBlocked(RuntimeError):
+    """Automatic continuation requires evidence that software cannot currently obtain."""
+
+
 SCHEMA_VERSION = 1
+EDITOR_CONTROL_UNVERIFIED = "editor_control_unverified"
 RECORD_FILENAME = "recipe_recovery.json"
 
 
@@ -85,13 +90,14 @@ class RecoveryJournal:
         self._data = copy.deepcopy(initial)
 
     @classmethod
-    def create(cls, session, recipe: Recipe, connections: dict):
+    def create(cls, session, recipe: Recipe, connections: dict, *, simulation_recovery=False):
         journal = cls(os.path.join(session.logs_dir, RECORD_FILENAME), {
             "schema_version": SCHEMA_VERSION,
             "session_dir": session.session_dir,
             "measurement_mode": session.measurement_mode,
             "session_snapshot": session.to_dict(),
             "connections": connections,
+            "simulation_recovery": simulation_recovery,
             "recipe": asdict(recipe),
             "status": "prepared",
             "phase": "prepared",
@@ -113,6 +119,11 @@ class RecoveryJournal:
             data = json.load(stream)
         if not isinstance(data, dict) or data.get("schema_version") != SCHEMA_VERSION:
             raise ValueError("Unsupported recovery record schema.")
+        if type(data.get("simulation_recovery", False)) is not bool:
+            raise ValueError("Invalid simulation recovery mode.")
+        if "recovery_resume_basis" in data and data["recovery_resume_basis"] not in (
+                "editor_idle", "process_exited", "link_restored", "not_required", "legacy_reconciled"):
+            raise ValueError("Invalid recovery resume basis.")
         return data
 
     def update(self, **changes):
@@ -151,6 +162,8 @@ def plan_recovery(record: dict) -> RecoveryPlan:
         raise ValueError("Unsupported recovery record schema.")
     if record.get("measurement_mode") != "script_pad":
         raise ValueError("Recovery is currently limited to Discrete PAD.")
+    if record.get("observed_measurement_state") == EDITOR_CONTROL_UNVERIFIED:
+        raise ValueError("Verify the previous Discrete PAD measurement before starting a new one.")
     if record.get("status") not in ("running", "interrupted"):
         raise ValueError("This run is not eligible for recovery.")
     if any(type(record.get(key)) is not bool for key in ("measurement_running", "paused", "stop_requested")):

@@ -192,7 +192,6 @@ POLL_INTERVAL_MS = 10_000   # 10 saniye
 
 class ViewerTab(QWidget):
     log_signal     = pyqtSignal(str)
-    session_loaded = pyqtSignal(str)
     session_deleted = pyqtSignal(str)
     delay_changed  = pyqtSignal(int, int)   # (minutes, seconds)
 
@@ -559,7 +558,7 @@ class ViewerTab(QWidget):
 
         mw = self._get_main_window()
         if mw:
-            mw.switch_display(session, "active")
+            mw.switch_display(session, "active", inspection_only=True)
             return
         self._load_session(session, live=True)
 
@@ -636,10 +635,9 @@ class ViewerTab(QWidget):
                 return
             mw = self._get_main_window()
             if mw:
-                mw.switch_display(session, "archived")
+                mw.browse_session(session)
             else:
                 self._load_session(session)
-            self.session_loaded.emit(str(session.session_dir))
             return
 
         # ── 2. Yol: Alt klasörlerde session.json var mı? (history) ────
@@ -647,7 +645,7 @@ class ViewerTab(QWidget):
         if history_sessions:
             mw = self._get_main_window()
             if mw:
-                mw.switch_display(None, "history", history_sessions=history_sessions)
+                mw.switch_display(None, "history", history_sessions=history_sessions, inspection_only=True)
                 return
             self.render_history(history_sessions)
             return
@@ -657,7 +655,7 @@ class ViewerTab(QWidget):
         if legacy:
             mw = self._get_main_window()
             if mw:
-                mw.switch_display(legacy, "legacy")
+                mw.switch_display(legacy, "legacy", inspection_only=True)
             else:
                 self._load_session(legacy)
             return
@@ -705,6 +703,7 @@ class ViewerTab(QWidget):
         self._history_sessions = []
         self._dropsens_pad = None
         self._viewer_mode_user_selected = False
+        self.restore_default_response_delay()
         self.restore_response_delay(getattr(session, "experiment_params", {}))
 
         # Canlı mod: sadece IN_PROGRESS iken
@@ -2021,9 +2020,6 @@ class ViewerTab(QWidget):
         self.session_deleted.emit(session_dir)
         self.clear()
         self.session_lbl.setText("Oturum silindi")
-        mw = self._get_main_window()
-        if mw and hasattr(mw, "set_part_banner"):
-            mw.set_part_banner("")
 
     @staticmethod
     def _handle_remove_error(func, path, exc_info):

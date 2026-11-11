@@ -92,7 +92,10 @@ def create_recovery_package(record: dict, source_path: str):
                    "source_sequence": record["sequence_index"], "source_phase": record["phase"],
                    "target": asdict(plan)}, stream, ensure_ascii=False, indent=2)
     session.register_file("recovery_origin", origin)
-    journal = RecoveryJournal.create(session, recipe, record.get("connections", {}))
+    journal = RecoveryJournal.create(
+        session, recipe, record.get("connections", {}),
+        simulation_recovery=record.get("simulation_recovery", False),
+    )
     journal.update(recovered_from=source_dir, source_record=os.path.abspath(source_path),
                    requested_settings=record.get("requested_settings", {}))
     session.register_file("recipe_recovery", journal.path)
@@ -147,7 +150,7 @@ def reconnect_recovery_pump(record, recipe, pump):
     if pump.is_connected():
         if pump.active_type != pump_type or pump.port != config.get("pump_com"):
             raise RuntimeError("The connected pump differs from the saved pump.")
-        return
+        return True
     if pump_type != "flexicon":
         raise RuntimeError("Arduino serial reopen can reset the pump; automatic reconnect is disabled.")
     if not config.get("pump_com"):
@@ -157,3 +160,4 @@ def reconnect_recovery_pump(record, recipe, pump):
                             config.get("flexicon_baudrate") or 9600)
     if not pump.connect(config["pump_com"]):
         raise RuntimeError("Pump serial connection could not be restored.")
+    return True

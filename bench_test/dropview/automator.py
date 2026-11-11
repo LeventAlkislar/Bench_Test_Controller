@@ -6,10 +6,12 @@ import threading
 import subprocess
 import ctypes
 import xml.etree.ElementTree as ET
+from contextlib import contextmanager
 
 import psutil
 from serial.tools import list_ports
 import pyautogui
+from PIL import ImageOps
 import win32api
 import win32clipboard
 import win32con
@@ -25,15 +27,16 @@ from bench_test.config import (
     PYAUTOGUI_FAILSAFE, PYAUTOGUI_PAUSE,
     DROPSENS_COM_PORTS,
     MANUAL_CONNECTION_WINDOW, ERROR_WINDOW,
-    MSG_NO_DEVICE, MSG_POTENTIOSTAT_NOT_FOUND,
+    MSG_NO_DEVICE, MSG_POTENTIOSTAT_NOT_FOUND, MSG_POTENTIOSTAT_NULL,
 )
 from bench_test.dropview.vision import (
     find_on_screen, match_score_on_screen, match_cropped_image_score_on_window,
     connection_scores_on_window,
     wait_for_image, wait_for_image_gone,
-    _grab_region, _images_equal,
+    _grab_region, _images_equal, read_label_positions,
 )
 from bench_test.dropview.window_actions import (
+    bring_to_front,
     safe_click,
     safe_find_on_screen,
     safe_hotkey,
@@ -64,6 +67,8 @@ _IMG = {k: os.path.join(_IMG_DIR, v) for k, v in {
     "green_dot_selected":  "green_dot_selected.png",
     "connected":                    "connected_status.png",
     "disconnected":                 "disconnected_status.png",
+    "pad_status_run":              "Run.png",
+    "pad_status_stopped":          "Stopped.png",
     "manual_conn_com3":             "manual_connection_com3.png",
     "manual_conn_com4":             "manual_connection_com4.png",
     "manual_conn_com10":            "manual_connection_com10.png",
@@ -109,19 +114,41 @@ _dialog_watchdog_stop = None
 _dialog_watchdog_log_fn = None
 _dialog_watchdog_seen = {}
 _dialog_watchdog_autodismiss = {WARNING_UNSAVED}
+_warning_ack_lock = threading.Lock()
+_connection_error_lock = threading.Lock()
+_connection_error_waiters = {}
+_POTENTIOSTAT_NULL = "potentiostat_null"
+_USB_DISCONNECTED = "device_usb_disconnected"
+_connection_faults = {}
+_CONNECTION_ERRORS = {
+    MSG_POTENTIOSTAT_NULL.casefold(): _POTENTIOSTAT_NULL,
+    "device usb cable disconnected": _USB_DISCONNECTED,
+}
+
+
+def connection_fault(expected_owner, *, since=0):
+    """Retain a confirmed link loss after its dialog has been acknowledged."""
+    if not expected_owner:
+        return None
+    with _connection_error_lock:
+        fault = _connection_faults.get(expected_owner["pid"])
+        if fault and fault["owner"] == expected_owner and fault["sampled_at"] >= since:
+            return dict(fault)
+    return None
 
 
 # ── Pencere yardımcıları ───────────────────────────────────────
 
-def find_window(title_keyword, timeout=60, poll_interval=1.0):
+def find_window(title_keyword, timeout=60, poll_interval=1.0, *, pid=None, include_hidden=False):
     """Başlığında title_keyword geçen ilk görünür pencereyi bulur."""
     start = time.time()
     while time.time() - start < timeout:
         found = []
         def _cb(hwnd, _):
-            if win32gui.IsWindowVisible(hwnd):
-                if title_keyword in win32gui.GetWindowText(hwnd):
-                    found.append(hwnd)
+            if ((include_hidden or win32gui.IsWindowVisible(hwnd))
+                    and title_keyword in win32gui.GetWindowText(hwnd)
+                    and (pid is None or get_window_pid(hwnd) == pid)):
+                found.append(hwnd)
         win32gui.EnumWindows(_cb, None)
         if found:
             return found[0]
@@ -129,22 +156,24 @@ def find_window(title_keyword, timeout=60, poll_interval=1.0):
     raise TimeoutError(f"'{title_keyword}' window was not found within {timeout}s.")
 
 
-def window_exists(title_keyword) -> bool:
+def window_exists(title_keyword, include_hidden=False, *, pid=None) -> bool:
     """Başlığında title_keyword geçen görünür bir pencere var mı?"""
     found = []
     def _cb(hwnd, _):
-        if win32gui.IsWindowVisible(hwnd):
-            if title_keyword in win32gui.GetWindowText(hwnd):
+        if include_hidden or win32gui.IsWindowVisible(hwnd):
+            if (title_keyword in win32gui.GetWindowText(hwnd)
+                    and (pid is None or get_window_pid(hwnd) == pid)):
                 found.append(hwnd)
     win32gui.EnumWindows(_cb, None)
     return len(found) > 0
 
 
-def wait_for_window_close(title_keyword, timeout=60, poll_interval=0.5):
+def wait_for_window_close(title_keyword, timeout=60, poll_interval=0.5, *, hwnd=None):
     """Başlığında title_keyword geçen pencere kapanana kadar bekler."""
     start = time.time()
     while time.time() - start < timeout:
-        if not window_exists(title_keyword):
+        visible = win32gui.IsWindowVisible(hwnd) if hwnd is not None else window_exists(title_keyword)
+        if not visible:
             return
         time.sleep(poll_interval)
     raise TimeoutError(f"'{title_keyword}' penceresi {timeout}sn icinde kapanmadi.")
@@ -170,30 +199,18 @@ def _wait_for_dropview_process_exit(timeout=15, poll_interval=0.5):
         f"DropView process did not exit within {timeout}s."
     )
 
-def _focus_window(hwnd, click_title=False, restore_if_iconic=True, sleep_after=SLEEP_AFTER_CLICK):
-    """Bring a window to foreground with optional restore, title click and post-focus wait."""
-    if restore_if_iconic and win32gui.IsIconic(hwnd):
-        win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
-        time.sleep(SLEEP_AFTER_FOCUS)
-    win32gui.BringWindowToTop(hwnd)
-    win32gui.SetForegroundWindow(hwnd)
+def _focus_window(hwnd, click_title=False, restore_if_iconic=True, sleep_after=SLEEP_AFTER_CLICK,
+                  *, require_foreground=True):
+    focused = bring_to_front(hwnd, retries=1, click_title=click_title, restore_if_iconic=restore_if_iconic)
+    if require_foreground and not focused:
+        raise RuntimeError(f"Could not give keyboard focus to window hwnd={hwnd}.")
     time.sleep(sleep_after)
-    if win32gui.GetForegroundWindow() != hwnd:
-        debug_log(
-            f"SetForegroundWindow had no effect (hwnd={hwnd}); continuing.",
-            level="warning",
-        )
-    if click_title:
-        rect = win32gui.GetWindowRect(hwnd)
-        pyautogui.click((rect[0] + rect[2]) // 2, rect[1] + 10)
-        time.sleep(SLEEP_AFTER_FOCUS)
 
 def _is_dropview_ui_ready(dv_hwnd, timeout=3.0) -> bool:
     """
     Quick readiness check for DropView UI before trusting early return.
     """
     try:
-        _focus_window(dv_hwnd, click_title=True)
         wait_for_image(
             _IMG["scripts_menu"],
             timeout=timeout,
@@ -210,10 +227,29 @@ def _is_dropview_ui_ready(dv_hwnd, timeout=3.0) -> bool:
 def get_window_pid(hwnd) -> int | None:
     """Pencere handle'ından process PID'ini döner."""
     try:
-        _, pid = win32process.GetWindowThreadProcessId(hwnd)
-        return pid
+        thread_id, pid = win32process.GetWindowThreadProcessId(hwnd)
+        return pid if thread_id > 0 and pid > 0 else None
     except Exception:
         return None
+
+
+def dropview_process_identity(hwnd):
+    pid = get_window_pid(hwnd)
+    if not pid:
+        return None
+    try:
+        process = psutil.Process(pid)
+        if _is_dropview_process(process):
+            return {"pid": pid, "created": process.create_time()}
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        pass
+    return None
+
+
+def _is_dropview_process(process):
+    name = process.name().lower()
+    return "dropview" in name or (name in ("java.exe", "javaw.exe") and _is_dropview_java_process(process))
+
 
 def find_owned_dialogs(owner_hwnd) -> list[int]:
     """
@@ -349,17 +385,52 @@ def _log_dialog_closed(hwnd):
 
 
 def _auto_dismiss_dialog(hwnd, title: str):
+    """Acknowledge only the known DropView warning, then verify that it closed."""
+    with _warning_ack_lock:
+        try:
+            owner = dropview_process_identity(hwnd)
+            if title != WARNING_UNSAVED or owner is None or win32gui.GetWindowText(hwnd).strip() != title:
+                return False
+            for attempt in range(2):
+                if not win32gui.IsWindowVisible(hwnd):
+                    return True
+                if dropview_process_identity(hwnd) != owner or win32gui.GetWindowText(hwnd).strip() != title:
+                    return False
+                _focus_window(hwnd, restore_if_iconic=False)
+                if (win32gui.GetForegroundWindow() != hwnd or dropview_process_identity(hwnd) != owner
+                        or win32gui.GetWindowText(hwnd).strip() != title):
+                    _watchdog_log(f"│  WARNING: Dialog could not be brought to the foreground ('{title}').")
+                    return False
+                pyautogui.press("enter")
+                _watchdog_log(f"│  Acknowledging dialog: '{title}' (hwnd={hwnd}, PID={owner['pid']}, attempt={attempt + 1}).")
+                try:
+                    wait_for_window_close(title, timeout=1.5, poll_interval=0.1, hwnd=hwnd)
+                except TimeoutError:
+                    continue
+                _watchdog_log(f"│  Dialog closure verified: '{title}' (hwnd={hwnd}, PID={owner['pid']}).")
+                return True
+            _watchdog_log(f"│  WARNING: Dialog is still open after acknowledgement ('{title}', hwnd={hwnd}).")
+            return False
+        except Exception as exc:
+            _watchdog_log(f"│  WARNING: Dialog could not be auto-dismissed ('{title}'): {exc}")
+            return False
+
+
+def acknowledge_discrete_unsaved_warning(expected_owner):
+    """Accept the known warning only in the process that owns the PAD run."""
+    if not expected_owner:
+        return False
+    scope = {"pid": expected_owner["pid"]}
     try:
-        pid = get_window_pid(hwnd)
-        owner_title, owner_hwnd = _get_dialog_owner_info(hwnd)
-        _focus_window(hwnd, restore_if_iconic=False)
-        pyautogui.press("enter")
-        _watchdog_log(
-            f"│  Auto-dismissing dialog: '{title}' "
-            f"(hwnd={hwnd}, pid={pid}, owner='{owner_title}', owner_hwnd={owner_hwnd})"
-        )
-    except Exception as e:
-        _watchdog_log(f"│  WARNING: Dialog could not be auto-dismissed ('{title}'): {e}")
+        if not window_exists(WARNING_UNSAVED, **scope):
+            return False
+        hwnd = find_window(WARNING_UNSAVED, timeout=0.2, poll_interval=0.05, **scope)
+        if (win32gui.GetWindowText(hwnd).strip() == WARNING_UNSAVED
+                and dropview_process_identity(hwnd) == expected_owner):
+            return _auto_dismiss_dialog(hwnd, WARNING_UNSAVED)
+    except Exception as exc:
+        debug_log(f"DropView unsaved-curves warning could not be verified: {exc}", level="warning")
+    return False
 
 
 def _dialog_watchdog_loop():
@@ -417,29 +488,15 @@ def stop_dialog_watchdog():
 
 
 def _dismiss_warning_if_present(window_title: str, wait: float = 3.0) -> bool:
-    """
-    Belirtilen başlıktaki uyarı penceresini kısa bir süre boyunca yoklar.
-    Diyalog görünürse öne alır, Enter ile kapatır ve kapandığını doğrular.
-    Bulamazsa sessizce geçer.
-    """
-    deadline = time.time() + wait
-    while time.time() < deadline:
+    """Use the same verified acknowledgement for warnings during measurement start."""
+    deadline = time.monotonic() + wait
+    while time.monotonic() < deadline:
         if window_exists(window_title):
             try:
-                warn_hwnd = find_window(window_title, timeout=0.5, poll_interval=0.1)
-                _focus_window(warn_hwnd, restore_if_iconic=False, sleep_after=0.3)
-            except Exception:
-                warn_hwnd = None
-
-            time.sleep(0.3)
-            pyautogui.press("enter")
-            try:
-                wait_for_window_close(window_title, timeout=2, poll_interval=0.1)
+                hwnd = find_window(window_title, timeout=0.5, poll_interval=0.1)
+                return _auto_dismiss_dialog(hwnd, window_title)
             except TimeoutError:
-                time.sleep(SLEEP_AFTER_FOCUS)
-            else:
-                time.sleep(SLEEP_AFTER_FOCUS)
-            return True
+                continue
         time.sleep(0.2)
     return False
 
@@ -734,6 +791,22 @@ def _node_checked_by_pixels(hwnd) -> bool | None:
     except Exception as exc:
         debug_log(f"Node 1 checkbox pixel check failed: {exc}", level="warning")
     return None
+
+
+def _is_dropview_java_process(process):
+    executable = os.path.normcase(os.path.realpath(process.exe()))
+    for launcher in DROPVIEW_EXE_CANDIDATES:
+        install_dir = os.path.dirname(os.path.realpath(launcher))
+        expected = os.path.join(install_dir, "jre", "bin", os.path.basename(executable))
+        if executable != os.path.normcase(expected):
+            continue
+        arguments = process.cmdline()
+        for option, value in zip(arguments, arguments[1:]):
+            if option == "-jar":
+                jar = value if os.path.isabs(value) else os.path.join(process.cwd(), value)
+                return os.path.normcase(os.path.realpath(jar)) == os.path.normcase(
+                    os.path.join(install_dir, "dropview.jar"))
+    return False
 
 
 def _cv_node_checked_by_template(hwnd) -> bool | None:
@@ -1073,6 +1146,116 @@ def _read_error_window_text(hwnd) -> str:
     return " ".join(texts)
 
 
+@contextmanager
+def _track_connection_error(hwnd):
+    """Keep a dismissed error visible to the connection attempt that raised it."""
+    owner = dropview_process_identity(hwnd)
+    seen = threading.Event()
+    if owner is None:
+        yield seen
+        return
+    key = (owner["pid"], owner["created"])
+    with _connection_error_lock:
+        _connection_error_waiters.setdefault(key, set()).add(seen)
+    try:
+        yield seen
+    finally:
+        with _connection_error_lock:
+            waiters = _connection_error_waiters[key]
+            waiters.remove(seen)
+            if not waiters:
+                del _connection_error_waiters[key]
+
+
+def _read_connection_error_labels(hwnd):
+    capture = connection_scores_on_window(hwnd, {}, full_client=True)
+    if capture["error"]:
+        return "", None
+    left, top, _, _ = capture["region"]
+    lines = []
+    ok_point = None
+    for text, x, y in read_label_positions(capture["image"]):
+        if text.strip().casefold() in ("ok", "0k"):
+            ok_point = (left + x, top + y)
+        else:
+            lines.append(text)
+    return " ".join(lines), ok_point
+
+
+def _dismiss_connection_error_dialog(hwnd):
+    """Acknowledge the exact DropView error and report a match even if OK needs a retry."""
+    with _connection_error_lock:
+        if not win32gui.IsWindowVisible(hwnd) or win32gui.GetWindowText(hwnd).strip() != ERROR_WINDOW:
+            return False
+        owner = dropview_process_identity(hwnd)
+        if owner is None:
+            return False
+        text = _read_error_window_text(hwnd)
+        message = " ".join(text.split()).rstrip(".")
+        reason = _CONNECTION_ERRORS.get(message.casefold())
+        if text.strip() and reason is None:
+            return False
+        button = _find_child_by_text(hwnd, "OK", exact=True)
+        if button and win32gui.GetClassName(button) != "Button":
+            button = None
+        ok_point = None
+        dialog_rect = None
+        if not text.strip() or not button:
+            try:
+                dialog_rect = win32gui.GetWindowRect(hwnd)
+                visual_text, ok_point = _read_connection_error_labels(hwnd)
+            except (OSError, RuntimeError, subprocess.SubprocessError, TypeError, ValueError) as exc:
+                debug_log(f"DropView Error dialog OCR could not be read: {exc}", level="warning")
+                visual_text = ""
+            if not text.strip():
+                message = " ".join(visual_text.split()).rstrip(".")
+                reason = _CONNECTION_ERRORS.get(message.casefold())
+            if reason is None:
+                return False
+        if dropview_process_identity(hwnd) != owner or win32gui.GetWindowText(hwnd).strip() != ERROR_WINDOW:
+            return False
+
+        key = (owner["pid"], owner["created"])
+        if reason == _USB_DISCONNECTED:
+            _connection_faults[owner["pid"]] = {
+                "owner": owner, "reason": reason, "sampled_at": time.monotonic(), "message": message}
+        for seen in _connection_error_waiters.get(key, ()):
+            seen.reason = reason
+            seen.set()
+        debug_log(f"DropView Error: {message} (PID={owner['pid']}, hwnd={hwnd}).", level="warning")
+        try:
+            if not button and ok_point is not None and win32gui.GetForegroundWindow() != hwnd:
+                _focus_window(hwnd, restore_if_iconic=False)
+            if dropview_process_identity(hwnd) != owner or win32gui.GetWindowText(hwnd).strip() != ERROR_WINDOW:
+                return True
+            if button:
+                if (win32gui.IsWindowEnabled(button) and win32gui.GetAncestor(button, win32con.GA_ROOT) == hwnd
+                        and win32gui.GetWindowText(button).strip().casefold() == "ok"):
+                    win32gui.PostMessage(button, win32con.BM_CLICK, 0, 0)
+            elif (ok_point is not None and win32gui.GetForegroundWindow() == hwnd
+                  and win32gui.GetWindowRect(hwnd) == dialog_rect):
+                hit = win32gui.WindowFromPoint(ok_point)
+                if hit and win32gui.GetAncestor(hit, win32con.GA_ROOT) == hwnd:
+                    pyautogui.click(*ok_point)
+        except Exception as exc:
+            debug_log(f"DropView Error OK could not be clicked: {exc}", level="warning")
+        return True
+
+
+def dismiss_connection_error_dialogs():
+    """Acknowledge known connection errors even without the main DropView window."""
+    def inspect(hwnd, _):
+        try:
+            _dismiss_connection_error_dialog(hwnd)
+        except Exception as exc:
+            debug_log(f"DropView Error dialog inspection failed: {exc}", level="warning")
+
+    try:
+        win32gui.EnumWindows(inspect, None)
+    except Exception as exc:
+        debug_log(f"DropView Error dialog scan failed: {exc}", level="warning")
+
+
 def _classify_error_dialog_by_template(log_fn=None, hwnd=None, use_foreground_fallback=False) -> str | None:
     """
     Error metni Win32 child text'ten okunamazsa, ekrandaki metin template'lerine
@@ -1117,58 +1300,67 @@ def _classify_error_dialog_by_template(log_fn=None, hwnd=None, use_foreground_fa
     return None
 
 
-def _wait_for_connection_result(timeout=30, poll_interval=0.5, log_fn=None) -> str:
+def _wait_for_connection_result(timeout=30, poll_interval=0.5, log_fn=None, *, hwnd=None, connection_error=None) -> str:
     """
     Bağlantı girişimi sonucunu bekler ve döner.
     Dönüş değerleri:
         'connected'              - Bağlantı başarılı
         'no_device_connected'    - Cihaz bulunamadı
         'potentiostat_not_found' - Potentiostat bulunamadı
+        'potentiostat_null'      - DropView null potentiostat hatası
         'unknown_error'          - Tanınmayan hata penceresi
         'timeout'                - Zaman aşımı
     """
     def _log(msg):
         debug_log(msg)
 
+    scope = {"pid": get_window_pid(hwnd)} if hwnd is not None else {}
     start = time.time()
     while time.time() - start < timeout:
-        if not window_exists(CONNECTING_DIALOG):
-            if window_exists(ERROR_WINDOW):
-                err_hwnd = find_window(ERROR_WINDOW, timeout=3)
+        if connection_error is not None and connection_error.is_set():
+            return getattr(connection_error, "reason", _POTENTIOSTAT_NULL)
+        if not window_exists(CONNECTING_DIALOG, **scope):
+            if window_exists(ERROR_WINDOW, **scope):
+                try:
+                    err_hwnd = find_window(ERROR_WINDOW, timeout=3, **scope)
+                except TimeoutError:
+                    if connection_error is not None and connection_error.is_set():
+                        return getattr(connection_error, "reason", _POTENTIOSTAT_NULL)
+                    raise
+                if connection_error is not None and (
+                        _dismiss_connection_error_dialog(err_hwnd) or connection_error.is_set()):
+                    return getattr(connection_error, "reason", _POTENTIOSTAT_NULL)
                 text = _read_error_window_text(err_hwnd)
                 shown_text = text if text else "(text could not be read)"
                 _log(f"│  DropView Error dialog text: {shown_text}")
+                classification = None
+                if MSG_NO_DEVICE in text:
+                    classification = "no_device_connected"
+                elif MSG_POTENTIOSTAT_NOT_FOUND in text:
+                    classification = "potentiostat_not_found"
                 try:
                     _focus_window(err_hwnd, restore_if_iconic=False)
-                    pyautogui.press("enter")
-                    time.sleep(SLEEP_AFTER_FOCUS)
-                except Exception:
-                    pass
-                if MSG_NO_DEVICE in text:
-                    _log("│  DropView connection error classified: no_device_connected")
-                    return "no_device_connected"
-                if MSG_POTENTIOSTAT_NOT_FOUND in text:
-                    _log("│  DropView connection error classified: potentiostat_not_found")
-                    return "potentiostat_not_found"
-
-                template_result = _classify_error_dialog_by_template(
-                    log_fn=log_fn,
-                    hwnd=err_hwnd,
-                    use_foreground_fallback=False,
-                )
-                if template_result == "no_device_connected":
-                    _log("│  DropView connection error classified by template: no_device_connected")
-                    return "no_device_connected"
-                if template_result == "potentiostat_not_found":
-                    _log("│  DropView connection error classified by template: potentiostat_not_found")
-                    return "potentiostat_not_found"
+                    if win32gui.GetForegroundWindow() == err_hwnd:
+                        if classification is None:
+                            classification = _classify_error_dialog_by_template(
+                                log_fn=log_fn, hwnd=err_hwnd, use_foreground_fallback=False)
+                        if win32gui.GetForegroundWindow() == err_hwnd:
+                            pyautogui.press("enter")
+                            time.sleep(SLEEP_AFTER_FOCUS)
+                except Exception as exc:
+                    _log(f"│  WARNING: DropView Error dialog could not be handled: {exc}")
+                if classification is not None:
+                    _log(f"│  DropView connection error classified: {classification}")
+                    return classification
 
                 _log(f"│  WARNING: Unclassified DropView Error dialog text: {shown_text}")
                 return "unknown_error"
-            if _is_dropview_connected():
-                return "connected"
+            connected = (_connection_snapshot(hwnd=hwnd)["state"] == "connected"
+                         if hwnd is not None else _is_dropview_connected())
+            if connected:
+                return getattr(connection_error, "reason", _POTENTIOSTAT_NULL) if connection_error is not None and connection_error.is_set() else "connected"
         time.sleep(poll_interval)
-    return "timeout"
+    return getattr(connection_error, "reason", _POTENTIOSTAT_NULL) if connection_error is not None and connection_error.is_set() else "timeout"
 
 
 def _resolve_target_dropsens_ports(preferred_port=None) -> list[str]:
@@ -1176,15 +1368,25 @@ def _resolve_target_dropsens_ports(preferred_port=None) -> list[str]:
     Denenecek COM portlarını öncelik sırasıyla döner.
     Sıralama:
         1. preferred_port (varsa)
-        2. get_value("dropsens_com") ile kaydedilmiş port (varsa)
-        3. DROPSENS_COM_PORTS listesindeki kalanlar
+        2. Son başarılı manuel port, ardından kayıtlı port
+        3. DROPSENS_COM_PORTS listesindeki mevcut diğer portlar
     Tekrarlar korunmaz.
     """
     seen = set()
     ports = []
     available = {port.device.upper() for port in list_ports.comports()}
-    for p in [preferred_port, get_value("dropsens_com", "")] + DROPSENS_COM_PORTS:
-        if p and p in DROPSENS_COM_PORTS and p.upper() in available and p not in seen:
+    from bench_test.dropview.windows_devices import list_dropsens_devices
+    selection = get_value("dropsens_named_selection")
+    mapped = []
+    if isinstance(selection, dict) and selection.get("address"):
+        mapped = [port for address, _, port in list_dropsens_devices()
+                  if address == selection["address"]]
+    route = get_value("dropsens_connection_route", {})
+    last_route_port = route.get("port") if isinstance(route, dict) and route.get("kind") == "manual" else None
+    candidates = [preferred_port, *mapped, get_value("dropsens_last_successful_port"), last_route_port,
+                  get_value("dropsens_com", ""), *DROPSENS_COM_PORTS]
+    for p in candidates:
+        if p and (p in DROPSENS_COM_PORTS or p in mapped) and p.upper() in available and p not in seen:
             seen.add(p)
             ports.append(p)
     return ports
@@ -1200,18 +1402,95 @@ def dropview_responding(hwnd):
     return bool(function(hwnd, 0, 0, 0, 2, 500, ctypes.byref(result)))
 
 
-def _try_preferred_automatic_connection(hwnd, preferred_port=None):
-    route = get_value("dropsens_connection_route", {})
-    if preferred_port or not isinstance(route, dict) or route.get("kind") != "usb_auto":
-        return False
-    safe_sequence(hwnd, [{"type": "hotkey", "keys": ("ctrl", "c"), "post_delay": SLEEP_AFTER_COMMAND}])
-    if _wait_for_connection_result(timeout=TIMEOUT_CONNECT) != "connected":
-        return False
-    _verify_dropview_connection()
-    return True
+def _normalize_ocr_com_label(label):
+    label = "".join(label.upper().split())
+    # Windows OCR can split the M in these small Swing labels into "TV1".
+    if label.startswith("COTV1"):
+        label = "COM" + label[5:]
+    if not label.startswith("COM"):
+        return ""
+    digits = label[3:].translate(str.maketrans({"O": "0", "I": "1", "L": "1", "B": "8"}))
+    return f"COM{digits}" if digits.isascii() and digits.isdigit() else ""
 
 
-def _connect_manual(dv_hwnd, target_com: str, log_fn=None) -> str:
+def _select_named_connection_port(dialog, port, port_count):
+    """Read the Swing popup and click only an exact COM label."""
+    arrow_x, arrow_y = find_on_screen(
+        _IMG["manual_conn_dropdown_arrow"], threshold=THRESHOLD_MID,
+        hwnd=dialog, use_foreground_fallback=False,
+    )
+    hit = win32gui.WindowFromPoint((arrow_x, arrow_y))
+    if not hit or win32gui.GetAncestor(hit, win32con.GA_ROOT) != dialog:
+        return False
+    safe_click(dialog, arrow_x, arrow_y, post_delay=SLEEP_AFTER_CLICK)
+    # Swing opens the list as a separate popup above or below the field.
+    for offset_y in (22, -22):
+        hit = win32gui.WindowFromPoint((arrow_x - 24, arrow_y + offset_y))
+        popup = win32gui.GetAncestor(hit, win32con.GA_ROOT) if hit else None
+        if popup and win32gui.GetWindow(popup, win32con.GW_OWNER) == dialog:
+            break
+    else:
+        debug_log(f"Manual port {port}: DropView dropdown popup could not be located.", level="warning")
+        return False
+
+    left, top, right, bottom = win32gui.GetWindowRect(popup)
+    pyautogui.moveTo(left + (right - left) // 2, top + (bottom - top) // 2)
+    if port_count > 8:
+        pyautogui.scroll(port_count)
+        time.sleep(SLEEP_AFTER_CLICK)
+    previous = None
+    for _ in range(port_count):
+        if not win32gui.IsWindowVisible(popup):
+            return False
+        snapshot = _grab_region(left, top, right - left, bottom - top)
+        if previous is not None and _images_equal(previous, snapshot):
+            return False
+        labels = read_label_positions(snapshot)
+        debug_log(f"Manual port {port}: dropdown OCR read {[label for label, _, _ in labels]!r}.")
+        matches = [(left + x, top + y) for label, x, y in labels
+                   if _normalize_ocr_com_label(label) == port]
+        if len(matches) > 1:
+            return False
+        if matches:
+            point = matches[0]
+            hit = win32gui.WindowFromPoint(point)
+            if (hit and win32gui.GetAncestor(hit, win32con.GA_ROOT) == popup
+                    and _images_equal(snapshot, _grab_region(left, top, right - left, bottom - top))):
+                pyautogui.click(*point)
+                time.sleep(SLEEP_AFTER_CLICK)
+                if win32gui.IsWindowVisible(popup):
+                    return False
+                return _verify_named_connection_port(dialog, port, left, arrow_x, arrow_y)
+            return False
+        previous = snapshot
+        pyautogui.scroll(-3)
+        time.sleep(SLEEP_AFTER_CLICK)
+    return False
+
+
+def _verify_named_connection_port(dialog, port, left, arrow_x, arrow_y):
+    # Crop the collapsed field immediately to the left of the arrow.
+    dpi = ctypes.windll.user32.GetDpiForWindow(dialog) or 96
+    half_height = round(9 * dpi / 96)
+    border = round(2 * dpi / 96)
+    left += border
+    right = arrow_x - half_height - border
+    hit = win32gui.WindowFromPoint(((left + right) // 2, arrow_y)) if right > left else None
+    if not hit or win32gui.GetAncestor(hit, win32con.GA_ROOT) != dialog:
+        debug_log(f"Manual port {port}: selected field is not visible.", level="warning")
+        return False
+    field = _grab_region(left, arrow_y - half_height, right - left, 2 * half_height)
+    # Remove the gray Swing background and preserve dark glyphs for OCR.
+    field = ImageOps.grayscale(field).point(lambda value: 255 if value >= 160 else 0)
+    labels = [label for label, _, _ in read_label_positions(field)]
+    selected = [_normalize_ocr_com_label(label) for label in labels]
+    verified = selected == [port]
+    debug_log(f"Manual port {port}: selected field OCR read {labels!r}; verified={verified}.",
+              level="debug" if verified else "warning")
+    return verified
+
+
+def _connect_manual(dv_hwnd, target_com: str, log_fn=None, *, exact_port=False) -> str:
     """
     Alt+D → M ile Manual Connection penceresini açar,
     hedef COM portunu seçer ve Connect butonuna basar.
@@ -1221,10 +1500,11 @@ def _connect_manual(dv_hwnd, target_com: str, log_fn=None) -> str:
     def _log(msg):
         debug_log(msg, level="warning")
 
-    if target_com not in DROPSENS_COM_PORTS:
+    if not exact_port and target_com not in DROPSENS_COM_PORTS:
         _log(f"│  WARNING: Unsupported COM port: {target_com}")
         return "timeout"
-    if target_com.upper() not in {port.device.upper() for port in list_ports.comports()}:
+    available = {port.device.upper() for port in list_ports.comports()}
+    if target_com.upper() not in available:
         _log(f"Manual connection skipped: {target_com} is not present in Windows.")
         return "port_unavailable"
 
@@ -1238,13 +1518,61 @@ def _connect_manual(dv_hwnd, target_com: str, log_fn=None) -> str:
     )
 
     try:
-        manual_hwnd = find_window(MANUAL_CONNECTION_WINDOW, timeout=10)
+        manual_hwnd = find_window(MANUAL_CONNECTION_WINDOW, timeout=10, pid=get_window_pid(dv_hwnd))
     except TimeoutError:
         _log("│  WARNING: Manual Connection window did not open.")
         return "timeout"
 
     time.sleep(SLEEP_AFTER_FOCUS)
 
+    if exact_port:
+        try:
+            if not _select_named_connection_port(manual_hwnd, target_com, len(available)):
+                return "port_not_selectable"
+        except subprocess.CalledProcessError as exc:
+            _log(f"Windows OCR failed: {exc.stderr.strip()}")
+            return "port_not_selectable"
+        except subprocess.TimeoutExpired:
+            _log("Windows OCR did not respond in time.")
+            return "port_not_selectable"
+        except Exception as exc:
+            _log(f"Could not select {target_com} in DropView: {exc}")
+            return "port_not_selectable"
+    elif not _select_manual_port_image(manual_hwnd, target_com, _log):
+        return "timeout"
+
+    try:
+        bx, by = find_on_screen(
+            _IMG["manual_conn_connect_btn"],
+            threshold=THRESHOLD_MID,
+            hwnd=manual_hwnd,
+            use_foreground_fallback=False,
+        )
+        if exact_port:
+            hit = win32gui.WindowFromPoint((bx, by))
+            if not hit or win32gui.GetAncestor(hit, win32con.GA_ROOT) != manual_hwnd:
+                return "connect_button_unavailable"
+    except Exception as e:
+        _log(f"│  WARNING: Connect button not found: {e}")
+        return "timeout"
+
+    with _track_connection_error(dv_hwnd) as connection_error:
+        try:
+            pyautogui.click(bx, by)
+            time.sleep(SLEEP_AFTER_COMMAND)
+            wait_for_window_close(MANUAL_CONNECTION_WINDOW, timeout=10, hwnd=manual_hwnd)
+        except TimeoutError:
+            _log("│  WARNING: Manual Connection window did not close.")
+            return getattr(connection_error, "reason", _POTENTIOSTAT_NULL) if connection_error.is_set() else "timeout"
+        except Exception as exc:
+            _log(f"│  WARNING: Manual connection could not be submitted: {exc}")
+            return getattr(connection_error, "reason", _POTENTIOSTAT_NULL) if connection_error.is_set() else "timeout"
+
+        return _wait_for_connection_result(
+            timeout=TIMEOUT_CONNECT, log_fn=log_fn, hwnd=dv_hwnd, connection_error=connection_error)
+
+
+def _select_manual_port_image(manual_hwnd, target_com, _log):
     try:
         dx, dy = find_on_screen(
             _IMG["manual_conn_dropdown_arrow"],
@@ -1256,7 +1584,7 @@ def _connect_manual(dv_hwnd, target_com: str, log_fn=None) -> str:
         time.sleep(SLEEP_AFTER_CLICK)
     except Exception as e:
         _log(f"│  WARNING: COM port dropdown could not be opened: {e}")
-        return "timeout"
+        return False
 
     com_key = {
         "COM3": "manual_conn_com3",
@@ -1274,51 +1602,42 @@ def _connect_manual(dv_hwnd, target_com: str, log_fn=None) -> str:
         time.sleep(SLEEP_AFTER_CLICK)
     except Exception as e:
         _log(f"│  WARNING: {target_com} image not found: {e}")
-        return "timeout"
-
-    try:
-        bx, by = find_on_screen(
-            _IMG["manual_conn_connect_btn"],
-            threshold=THRESHOLD_MID,
-            hwnd=manual_hwnd,
-            use_foreground_fallback=False,
-        )
-        pyautogui.click(bx, by)
-        time.sleep(SLEEP_AFTER_COMMAND)
-    except Exception as e:
-        _log(f"│  WARNING: Connect button not found: {e}")
-        return "timeout"
-
-    try:
-        wait_for_window_close(MANUAL_CONNECTION_WINDOW, timeout=10)
-    except TimeoutError:
-        _log("│  WARNING: Manual Connection window did not close.")
-        return "timeout"
-
-    return _wait_for_connection_result(timeout=TIMEOUT_CONNECT, log_fn=log_fn)
+        return False
+    return True
 
 # ── Bağlantı durumu ────────────────────────────────────────────
 
 _CONNECTION_MIN_DELTA = 0.08
+_indicator_capture_lock = threading.Lock()
 _CONNECTION_VERIFY_TIMEOUT = 5.0
 
 
-def _connection_snapshot() -> dict:
+def _connection_snapshot(should_focus=None, *, hwnd=None, measurement_status=False) -> dict:
     started = time.monotonic()
     result = {"dv_open": False, "connected_score": 0.0,
               "disconnected_score": 0.0, "state": "unknown",
               "image": None, "region": None, "error": ""}
     try:
-        result["dv_open"] = window_exists(DROPVIEW_WINDOW_NAME)
+        result["dv_open"] = win32gui.IsWindow(hwnd) if hwnd else window_exists(DROPVIEW_WINDOW_NAME)
         if not result["dv_open"]:
             result["state"] = "disconnected"
             result["error"] = "DropView window is not open."
         else:
-            hwnd = find_window(DROPVIEW_WINDOW_NAME, timeout=0.2, poll_interval=0.05)
-            result.update(connection_scores_on_window(hwnd, {
-                "connected": _IMG["connected"],
-                "disconnected": _IMG["disconnected"],
-            }))
+            hwnd = hwnd or find_window(DROPVIEW_WINDOW_NAME, timeout=0.2, poll_interval=0.05)
+            with _indicator_capture_lock:
+                if should_focus is not None and should_focus():
+                    _focus_window(hwnd, sleep_after=SLEEP_AFTER_FOCUS, require_foreground=False)
+                result["sampled_at"] = time.monotonic()
+                templates = {
+                    "connected": _IMG["connected"],
+                    "disconnected": _IMG["disconnected"],
+                }
+                status_keys = ("pad_status_run", "pad_status_stopped")
+                if measurement_status:
+                    templates.update((key, _IMG[key]) for key in status_keys)
+                    result.update(connection_scores_on_window(hwnd, templates, optional_templates=status_keys))
+                else:
+                    result.update(connection_scores_on_window(hwnd, templates))
             conn = result["connected_score"]
             disc = result["disconnected_score"]
             if not result["error"]:
@@ -1339,6 +1658,69 @@ def _connection_snapshot() -> dict:
     return result
 
 
+def _discrete_pad_activity(snapshot):
+    if snapshot.get("optional_error"):
+        return "unknown"
+    if snapshot["state"] != "connected":
+        return "disconnected" if snapshot["state"] == "disconnected" else "unknown"
+    connection_y = snapshot.get("connected_center_y")
+    if connection_y is None:
+        return "unknown"
+
+    def status_row_score(key):
+        center_y = snapshot.get(f"{key}_center_y")
+        # A Run label elsewhere in the client is not the status field.
+        if center_y is None or abs(center_y - connection_y) > 12:
+            return 0.0
+        return snapshot[f"{key}_score"]
+
+    running = status_row_score("pad_status_run")
+    stopped = status_row_score("pad_status_stopped")
+    if running >= 0.9 and running - stopped >= 0.08:
+        return "running"
+    if stopped >= 0.9 and stopped - running >= 0.08:
+        return "stopped"
+    return "unknown"
+
+
+def observe_dropview(*, expected_owner=None, should_focus=None) -> dict:
+    """Read link and PAD status from the same window and timestamp the sample."""
+    observation = {"sampled_at": time.monotonic(), "dv_open": None, "state": "unknown",
+                   "pad_activity": "unknown", "pad_observed": expected_owner is not None,
+                   "responding": None, "process_identity": None}
+    scope = {"pid": expected_owner["pid"]} if expected_owner else {}
+    try:
+        hwnd = find_window(DROPVIEW_WINDOW_NAME, timeout=0.2, poll_interval=0.05, **scope)
+    except TimeoutError:
+        return {**observation, "dv_open": False, "state": "disconnected", "process_identity": expected_owner}
+
+    identity = dropview_process_identity(hwnd)
+    observation["dv_open"] = True
+    if expected_owner and identity != expected_owner:
+        if identity is not None:
+            observation.update(dv_open=False, state="disconnected", process_identity=expected_owner)
+        return observation
+
+    options = {"hwnd": hwnd, "measurement_status": expected_owner is not None}
+    sampled_at = time.monotonic()
+    snapshot = _connection_snapshot(**options)
+    if (snapshot["state"] == "unknown" and should_focus
+            and any(reason in snapshot.get("error", "").lower() for reason in ("covered", "hidden", "minimized"))
+            and should_focus()):
+        sampled_at = time.monotonic()
+        snapshot = _connection_snapshot(should_focus, **options)
+    responding = dropview_responding(hwnd)
+    if identity is not None and dropview_process_identity(hwnd) != identity:
+        return observation
+
+    snapshot.pop("image", None)
+    observation.update(snapshot, sampled_at=snapshot.get("sampled_at", sampled_at),
+                       process_identity=identity, responding=responding)
+    if expected_owner and snapshot["dv_open"]:
+        observation["pad_activity"] = _discrete_pad_activity(snapshot)
+    return observation
+
+
 def _save_connection_failure(snapshot: dict):
     image = snapshot.get("image")
     if image is None:
@@ -1356,14 +1738,15 @@ def _save_connection_failure(snapshot: dict):
         debug_log(f"Could not save DropView failure image: {exc}", level="warning")
 
 
-def _verify_dropview_connection():
+def _verify_dropview_connection(*, hwnd=None):
     started = time.monotonic()
     deadline = started + _CONNECTION_VERIFY_TIMEOUT
     stable_hits = 0
     snapshot = {}
+    scope = {"pid": get_window_pid(hwnd)} if hwnd is not None else {}
     while time.monotonic() < deadline:
-        snapshot = _connection_snapshot()
-        connecting = window_exists(CONNECTING_DIALOG)
+        snapshot = _connection_snapshot(hwnd=hwnd) if hwnd is not None else _connection_snapshot()
+        connecting = window_exists(CONNECTING_DIALOG, **scope)
         stable_hits = stable_hits + 1 if snapshot["state"] == "connected" and not connecting else 0
         debug_log(f"DropView final verification: stable_hits={stable_hits}, "
                   f"connecting={connecting}, elapsed={time.monotonic() - started:.3f}s")
@@ -1392,21 +1775,37 @@ def wait_until_connected(timeout=30, poll_interval=1.0):
     raise TimeoutError("DropSens connection timed out.")
 
 
-def wait_until_disconnected(timeout=10, poll_interval=1.0):
+def wait_until_disconnected(timeout=10, poll_interval=1.0, *, hwnd=None):
     deadline = time.monotonic() + timeout
+    # Leave a bounded observation window after a late modal acknowledgement.
+    final_deadline = deadline + 4
+    if hwnd is None and window_exists(DROPVIEW_WINDOW_NAME):
+        hwnd = find_window(DROPVIEW_WINDOW_NAME, timeout=0.5, poll_interval=0.1)
+    owner = dropview_process_identity(hwnd) if hwnd is not None else None
+    options = {"hwnd": hwnd} if hwnd is not None else {}
     while time.monotonic() < deadline:
-        if _connection_snapshot()["state"] == "disconnected":
+        if owner:
+            if dropview_process_identity(hwnd) != owner:
+                raise RuntimeError("The DropView process changed while waiting for disconnection.")
+            if acknowledge_discrete_unsaved_warning(owner):
+                deadline = min(final_deadline, max(deadline, time.monotonic() + poll_interval))
+            if window_exists(WARNING_UNSAVED, pid=owner["pid"]):
+                time.sleep(poll_interval)
+                continue
+            if dropview_process_identity(hwnd) != owner:
+                raise RuntimeError("The DropView process changed while acknowledging the disconnect warning.")
+        if _connection_snapshot(**options)["state"] == "disconnected":
             return
         time.sleep(poll_interval)
-    raise TimeoutError("DropSens disconnection could not be verified.")
+    raise TimeoutError("DropSens disconnection could not be verified; the link or a blocking warning is still unresolved.")
 
 
 def _is_dropview_connected() -> bool:
     return _connection_snapshot()["state"] == "connected"
 
 
-def get_dropview_connection_scores() -> dict:
-    result = _connection_snapshot()
+def get_dropview_connection_scores(should_focus=None) -> dict:
+    result = _connection_snapshot(should_focus) if should_focus is not None else _connection_snapshot()
     result.pop("image", None)
     return result
 
@@ -1492,64 +1891,226 @@ def step_launch_dropview():
     time.sleep(SLEEP_AFTER_LAUNCH)
 
 
-def step_connect_dropsens(target_com: str = None, log_fn=None):
-    """Manuel COM port seçimi ile DropSens'e bağlanır; başarısız olursa Ctrl+C fallback."""
+def _verified_dropview_process(owner):
+    process = psutil.Process(owner["pid"])
+    if abs(process.create_time() - owner["created"]) >= 0.01 or not process.is_running():
+        return None
+    if not _is_dropview_process(process):
+        raise RuntimeError("The recorded process could not be verified as DropView.")
+    return process
+
+
+def _check_restart_cancelled(cancelled):
+    if cancelled and cancelled():
+        raise RuntimeError("DropView restart was cancelled.")
+
+
+def _wait_for_dropview_close(owner, *, cancelled=None, timeout=8):
+    """Wait for process exit while servicing only its verified unsaved-curves warning."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        _check_restart_cancelled(cancelled)
+        process = _verified_dropview_process(owner)
+        if process is None:
+            return
+        acknowledge_discrete_unsaved_warning(owner)
+        _check_restart_cancelled(cancelled)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            process.wait(timeout=min(0.25, remaining))
+            return
+        except psutil.TimeoutExpired:
+            continue
+    if _verified_dropview_process(owner) is not None:
+        raise psutil.TimeoutExpired(timeout, pid=owner["pid"])
+
+
+def _close_verified_dropview(owner, hwnd=None, *, allow_terminate, hung_only=False,
+                             service_dialogs=False, cancelled=None, log_fn=None):
+    """Close a verified process using the caller's escalation policy."""
+    _check_restart_cancelled(cancelled)
+    try:
+        process = _verified_dropview_process(owner)
+        if process is None:
+            return
+        pid = owner["pid"]
+        if hung_only or service_dialogs:
+            hwnd = find_window(DROPVIEW_WINDOW_NAME, timeout=0.5, poll_interval=0.1, pid=pid)
+        if hwnd is not None:
+            if dropview_process_identity(hwnd) != owner:
+                raise RuntimeError("The DropView window no longer belongs to the recorded process.")
+            if hung_only:
+                acknowledge_discrete_unsaved_warning(owner)
+                if dropview_responding(hwnd):
+                    raise RuntimeError("DropView is responding again; a forced restart was withheld.")
+            elif service_dialogs:
+                acknowledge_discrete_unsaved_warning(owner)
+                if dropview_process_identity(hwnd) != owner:
+                    if _verified_dropview_process(owner) is None:
+                        return
+                    raise RuntimeError("The DropView window changed before normal closure.")
+            _check_restart_cancelled(cancelled)
+            _log(log_fn, f"Requesting a normal close of DropView (PID={pid}).")
+            win32gui.PostMessage(hwnd, win32con.WM_CLOSE, 0, 0)
+            try:
+                if service_dialogs:
+                    _wait_for_dropview_close(owner, cancelled=cancelled)
+                else:
+                    process.wait(timeout=5)
+                return
+            except psutil.TimeoutExpired:
+                _check_restart_cancelled(cancelled)
+                if service_dialogs and allow_terminate:
+                    _log(log_fn, "Normal DropView closure timed out; verifying the original process before forced termination.")
+
+        if not allow_terminate:
+            raise RuntimeError("DropView did not close normally; forced termination is unavailable in this recovery.")
+        if hung_only:
+            acknowledge_discrete_unsaved_warning(owner)
+        process = _verified_dropview_process(owner)
+        if process is None:
+            return
+        if hung_only and (dropview_process_identity(hwnd) != owner or dropview_responding(hwnd)):
+            raise RuntimeError("The recorded DropView window is no longer confirmed unresponsive.")
+        _check_restart_cancelled(cancelled)
+        _log(log_fn, f"Terminating verified DropView (PID={pid}).")
+        process.terminate()
+        process.wait(timeout=5)
+    except psutil.NoSuchProcess:
+        return
+
+
+def stop_unresponsive_dropview(expected_owner, *, cancelled, log_fn=None):
+    """Escalate a confirmed hang only while the original window is unresponsive."""
+    _close_verified_dropview(expected_owner, allow_terminate=True, hung_only=True, cancelled=cancelled, log_fn=log_fn)
+
+
+def close_dropview_for_recovery(expected_owner, *, cancelled, log_fn=None):
+    """Close a failed link's original session, escalating after normal-close timeout."""
+    _close_verified_dropview(expected_owner, allow_terminate=True, service_dialogs=True,
+                             cancelled=cancelled, log_fn=log_fn)
+
+
+def restore_dropview_control(previous_owner=None, log_fn=None, *, allow_terminate=False, cancelled=None):
+    """Reconnect or relaunch; never treat a new editor as proof of old device state."""
+    _check_restart_cancelled(cancelled)
+    hwnd = find_window(DROPVIEW_WINDOW_NAME, timeout=0.5, poll_interval=0.1) if window_exists(DROPVIEW_WINDOW_NAME) else None
+    current = dropview_process_identity(hwnd) if hwnd else None
+    if hwnd and current is None:
+        raise RuntimeError("The DropView window process could not be verified.")
+    if hwnd and current and previous_owner and current != previous_owner:
+        step_connect_dropsens(log_fn=log_fn, hwnd=hwnd)
+        _verify_dropview_connection(hwnd=hwnd)
+        return False
+    if hwnd and dropview_responding(hwnd):
+        try:
+            step_connect_dropsens(log_fn=log_fn, hwnd=hwnd)
+            _verify_dropview_connection(hwnd=hwnd)
+            if current == previous_owner and window_exists(MULTISCRIPT_WINDOW, pid=current["pid"]):
+                return True
+        except RuntimeError as exc:
+            if log_fn:
+                log_fn(f"DropView reconnect before restart failed: {exc}")
+
+    identity = current or previous_owner
+    if identity:
+        _close_verified_dropview(identity, hwnd, allow_terminate=allow_terminate, cancelled=cancelled, log_fn=log_fn)
+    if _get_dropview_pid() is not None:
+        raise RuntimeError("A DropView process is still present; a duplicate will not be launched.")
+    _check_restart_cancelled(cancelled)
+    step_launch_dropview()
+    _check_restart_cancelled(cancelled)
+    step_connect_dropsens(log_fn=log_fn)
+    _verify_dropview_connection()
+    return False
+
+
+def step_connect_dropsens(target_com: str = None, log_fn=None, *, hwnd=None, exact_port=False, force_reconnect=False):
+    """Connect via DropView, with fallback only for the regular COM selection."""
     def _log(msg):
         debug_log(msg)
+        if log_fn:
+            log_fn(msg)
 
-    if _is_dropview_connected():
+    options = {"hwnd": hwnd} if hwnd is not None else {}
+    connected = _connection_snapshot(**options)["state"] == "connected" if options else _is_dropview_connected()
+    if connected and not force_reconnect:
+        if exact_port:
+            raise RuntimeError("DropView is already connected. Disconnect it before selecting a DropSens device.")
+        _verify_dropview_connection(**options)
         return
-    if not window_exists(DROPVIEW_WINDOW_NAME):
+    if hwnd is None and not window_exists(DROPVIEW_WINDOW_NAME):
         raise RuntimeError("DropView window is not open.")
-
-    dv_hwnd = find_window(DROPVIEW_WINDOW_NAME, timeout=10)
+    dv_hwnd = hwnd if hwnd is not None else find_window(DROPVIEW_WINDOW_NAME, timeout=10)
+    if force_reconnect:
+        owner = dropview_process_identity(dv_hwnd)
+        if owner:
+            acknowledge_discrete_unsaved_warning(owner)
+            if window_exists(WARNING_UNSAVED, pid=owner["pid"]):
+                raise RuntimeError("The unsaved-curves warning is still open; reconnection cannot continue.")
+            if dropview_process_identity(dv_hwnd) != owner:
+                raise RuntimeError("The DropView process changed before reconnection.")
     _focus_window(dv_hwnd)
+    if force_reconnect:
+        # A cable-loss dialog invalidates the old green indicator.
+        safe_sequence(dv_hwnd, [{"type": "hotkey", "keys": ("ctrl", "d"),
+                                 "post_delay": SLEEP_AFTER_COMMAND}], log_fn=log_fn)
+        wait_until_disconnected(timeout=TIMEOUT_CLOSE_WINDOW, hwnd=dv_hwnd)
 
-    if _try_preferred_automatic_connection(dv_hwnd, target_com):
-        return
     manual_attempts = []
     result = "timeout"
-    for com in _resolve_target_dropsens_ports(preferred_port=target_com):
+    ports = [target_com] if exact_port else _resolve_target_dropsens_ports(preferred_port=target_com)
+    for com in ports:
         _log(f"│  Trying manual connection: {com}...")
-        result = _connect_manual(dv_hwnd, com, log_fn=log_fn)
+        manual_options = {"exact_port": True} if exact_port else {}
+        result = _connect_manual(dv_hwnd, com, log_fn=log_fn, **manual_options)
         manual_attempts.append((com, result))
         if result == "connected":
+            _verify_dropview_connection(**options)
             _log(f"│  DropSens connected (manual: {com}).")
-            _verify_dropview_connection()
+            if exact_port:
+                return
             remember_value("dropsens_com", com)
+            remember_value("dropsens_last_successful_port", com)
             remember_value("dropsens_connection_route", {"kind": "manual", "port": com})
             return
         _log(f"│  Manual connection failed ({com}: {result}).")
+        pid = get_window_pid(dv_hwnd)
+        if pid and window_exists(MANUAL_CONNECTION_WINDOW, pid=pid):
+            dialog = find_window(MANUAL_CONNECTION_WINDOW, timeout=0.5, poll_interval=0.1, pid=pid)
+            win32gui.PostMessage(dialog, win32con.WM_CLOSE, 0, 0)
+            wait_for_window_close(MANUAL_CONNECTION_WINDOW, timeout=3, hwnd=dialog)
+
+    if exact_port:
+        raise RuntimeError(f"DropView could not connect on {target_com} ({result}).")
 
     attempts_str = ", ".join(f"{p}={s}" for p, s in manual_attempts)
     _log(f"│  Manual connections failed ({attempts_str}); retrying with Ctrl+C...")
-    safe_sequence(
-        dv_hwnd,
-        [
-            {
-                "type": "hotkey",
-                "keys": ("ctrl", "c"),
-                "post_delay": SLEEP_AFTER_COMMAND,
-            },
-        ],
-        log_fn=log_fn,
-    )
-
-    fallback_result = _wait_for_connection_result(timeout=TIMEOUT_CONNECT, log_fn=log_fn)
+    with _track_connection_error(dv_hwnd) as connection_error:
+        safe_sequence(
+            dv_hwnd,
+            [
+                {
+                    "type": "hotkey",
+                    "keys": ("ctrl", "c"),
+                    "post_delay": SLEEP_AFTER_COMMAND,
+                },
+            ],
+            log_fn=log_fn,
+        )
+        fallback_result = _wait_for_connection_result(
+            timeout=TIMEOUT_CONNECT, log_fn=log_fn, hwnd=dv_hwnd, connection_error=connection_error)
     if fallback_result != "connected":
         raise RuntimeError(
             f"DropSens connection could not be established (manual: {result}, "
             f"Ctrl+C: {fallback_result}). Make sure the device is connected "
             f"and DropView is ready."
         )
+    _verify_dropview_connection(**options)
     _log("│  DropSens connected (Ctrl+C fallback).")
-
-    time.sleep(SLEEP_AFTER_FOCUS)
-    if not _is_dropview_connected():
-        raise RuntimeError(
-            "DropSens connection signal was received, but final verification failed."
-        )
-    remember_value("dropsens_connection_route", {"kind": "usb_auto", "port": None})
+    remember_value("dropsens_connection_route", {"kind": "automatic", "port": None})
 
 
 def step_disconnect_dropsens():
@@ -1573,22 +2134,117 @@ def step_disconnect_dropsens():
     )
     wait_until_disconnected(timeout=TIMEOUT_CLOSE_WINDOW)
 
-def step_stop_measure(log_fn=None):
+def get_discrete_measurement_state(*, expected_owner=None, refocus_if_covered=True, hwnd=None):
+    """Read the visible editor before attempting to change focus."""
+    result = {"state": "unknown", "sampled_at": time.monotonic(), "error": ""}
+    try:
+        scope = {"pid": expected_owner["pid"]} if expected_owner else {}
+        if hwnd is None and not window_exists(MULTISCRIPT_WINDOW, **scope):
+            result["editor_missing"] = not window_exists(MULTISCRIPT_WINDOW, include_hidden=True, **scope)
+            result["editor_hidden"] = not result["editor_missing"]
+            result["error"] = "Multiscript Editor is not open; measurement state is unverified."
+            return result
+        hwnd = hwnd or find_window(MULTISCRIPT_WINDOW, timeout=0.2, poll_interval=0.05, **scope)
+        if expected_owner and dropview_process_identity(hwnd) != expected_owner:
+            result["editor_missing"] = True
+            result["error"] = "The editor does not belong to the measurement's DropView process."
+            return result
+        templates = {
+            "running": _IMG["yellow_dot_selected"], "stopped": _IMG["green_dot_selected"],
+        }
+        with _indicator_capture_lock:
+            scores = connection_scores_on_window(hwnd, templates, full_client=True)
+            visibility_error = scores.get("error", "").lower()
+            if refocus_if_covered and any(
+                    reason in visibility_error for reason in ("covered", "hidden", "minimized")):
+                result["error"] = scores["error"]
+                _focus_window(hwnd, sleep_after=SLEEP_AFTER_FOCUS, require_foreground=False)
+                scores = connection_scores_on_window(hwnd, templates, full_client=True)
+        result.update({key: value for key, value in scores.items() if key != "image"})
+        if not scores["error"]:
+            running, stopped = scores["running_score"], scores["stopped_score"]
+            if running >= 0.8 and running - stopped >= 0.08:
+                result["state"] = "running"
+            elif stopped >= 0.8 and stopped - running >= 0.08:
+                result["state"] = "stopped"
+    except Exception as exc:
+        result["error"] = "; ".join(part for part in (result["error"], str(exc)) if part)
+    return result
+
+
+def _find_ready_discrete_editor(expected_owner, *, timeout=0, refocus_if_covered=False):
+    deadline = time.monotonic() + timeout
+    while True:
+        candidates = []
+
+        def collect(hwnd, _):
+            if (win32gui.IsWindowVisible(hwnd) and MULTISCRIPT_WINDOW in win32gui.GetWindowText(hwnd)
+                    and (not expected_owner or get_window_pid(hwnd) == expected_owner["pid"])):
+                candidates.append(hwnd)
+
+        win32gui.EnumWindows(collect, None)
+        idle_editor = None
+        for hwnd in candidates:
+            observation = get_discrete_measurement_state(
+                expected_owner=expected_owner, hwnd=hwnd,
+                refocus_if_covered=refocus_if_covered and bool(expected_owner))
+            if observation["state"] == "running":
+                return hwnd, "running"
+            if observation["state"] == "stopped" and idle_editor is None:
+                idle_editor = hwnd
+            if refocus_if_covered and observation["state"] == "unknown":
+                error = observation.get("error") or "Run/Stop indicator unreadable"
+                debug_log(f"Discrete PAD Stop could not read existing Multiscript hwnd={hwnd}: {error}.")
+        if idle_editor is not None:
+            return idle_editor, "stopped"
+        if time.monotonic() >= deadline:
+            return None, "unknown"
+        time.sleep(0.1)
+
+
+def _acquire_discrete_editor(expected_owner, *, reopen_if_needed=False, for_stop=False, log_fn=None):
+    """Select a readable editor and reopen it only in the verified original session."""
+    dv_hwnd = None if for_stop else verify_discrete_session_connection(expected_owner)
+    editor, state = _find_ready_discrete_editor(expected_owner, refocus_if_covered=reopen_if_needed)
+    if editor is None:
+        if not reopen_if_needed or not expected_owner:
+            raise RuntimeError("No Multiscript window with a verified run or idle indicator is available.")
+        dv_hwnd = dv_hwnd or verify_discrete_session_connection(expected_owner)
+        _open_multiscript_menu(dv_hwnd, log_fn=log_fn, timeout=3, expected_owner=expected_owner)
+        editor, state = _find_ready_discrete_editor(expected_owner, timeout=3)
+        if editor is None:
+            raise RuntimeError("The reopened Multiscript window did not show a readable run or idle indicator.")
+    return editor, state
+
+
+def step_stop_measure(log_fn=None, require_editor=False, *, expected_owner=None, reopen_if_needed=False):
     """Stop butonuna basar, ölçümün durmasını bekler, Exit ile Multiscript Editor'ü kapatır."""
     ensure_dialog_watchdog(log_fn=log_fn)
-    if not window_exists(MULTISCRIPT_WINDOW):
-        return
+    focus = not require_editor
+    if require_editor:
+        ms_hwnd, state = _acquire_discrete_editor(
+            expected_owner, reopen_if_needed=reopen_if_needed, for_stop=True, log_fn=log_fn)
+        debug_log(f"Discrete PAD Stop selected Multiscript hwnd={ms_hwnd}, state={state}.")
+    else:
+        if not window_exists(MULTISCRIPT_WINDOW):
+            return
+        ms_hwnd = find_window(MULTISCRIPT_WINDOW, timeout=5)
+        _focus_window(ms_hwnd, restore_if_iconic=False, sleep_after=SLEEP_AFTER_FOCUS)
+        state = get_discrete_measurement_state()["state"]
 
-    ms_hwnd = find_window(MULTISCRIPT_WINDOW, timeout=5)
-    _focus_window(ms_hwnd, restore_if_iconic=False, sleep_after=SLEEP_AFTER_FOCUS)
-
-    sx, sy = safe_find_on_screen(
-        ms_hwnd,
-        _IMG["stop_btn"],
-        threshold=THRESHOLD_HIGH,
-        log_fn=log_fn,
-    )
-    safe_click(ms_hwnd, sx, sy, log_fn=log_fn, post_delay=SLEEP_AFTER_COMMAND)
+    # An external Stop can leave the editor open with its Stop button disabled.
+    # Still verify idle and close the editor through the normal path below.
+    if state != "stopped":
+        sx, sy = safe_find_on_screen(
+            ms_hwnd,
+            _IMG["stop_btn"],
+            threshold=THRESHOLD_HIGH,
+            log_fn=log_fn,
+            focus=focus,
+        )
+        if expected_owner and dropview_process_identity(ms_hwnd) != expected_owner:
+            raise RuntimeError("The Multiscript process changed before Stop.")
+        safe_click(ms_hwnd, sx, sy, log_fn=log_fn, post_delay=SLEEP_AFTER_COMMAND, focus=focus)
 
     safe_wait_for_image_gone(
         ms_hwnd,
@@ -1597,6 +2253,7 @@ def step_stop_measure(log_fn=None):
         poll_interval=POLL_INTERVAL_SLOW,
         threshold=THRESHOLD_HIGH,
         log_fn=log_fn,
+        focus=focus,
     )
 
     safe_wait_for_image(
@@ -1606,17 +2263,25 @@ def step_stop_measure(log_fn=None):
         poll_interval=POLL_INTERVAL_NORMAL,
         threshold=THRESHOLD_HIGH,
         log_fn=log_fn,
+        focus=focus,
     )
+    if require_editor and get_discrete_measurement_state(
+            expected_owner=expected_owner, hwnd=ms_hwnd, refocus_if_covered=False)["state"] != "stopped":
+        raise RuntimeError("The old Multiscript Editor did not confirm an idle measurement.")
 
     ex, ey = safe_find_on_screen(
         ms_hwnd,
         _IMG["exit_btn"],
         threshold=THRESHOLD_HIGH,
         log_fn=log_fn,
+        focus=focus,
     )
-    safe_click(ms_hwnd, ex, ey, log_fn=log_fn, post_delay=SLEEP_AFTER_FOCUS)
+    if expected_owner and dropview_process_identity(ms_hwnd) != expected_owner:
+        raise RuntimeError("The Multiscript process changed before Exit.")
+    safe_click(ms_hwnd, ex, ey, log_fn=log_fn, post_delay=SLEEP_AFTER_FOCUS, focus=focus)
 
-    wait_for_window_close(MULTISCRIPT_WINDOW, timeout=TIMEOUT_CLOSE_WINDOW)
+    close_options = {"hwnd": ms_hwnd} if require_editor else {}
+    wait_for_window_close(MULTISCRIPT_WINDOW, timeout=TIMEOUT_CLOSE_WINDOW, **close_options)
     debug_log("Multiscript Editor closed.")
 
 
@@ -2224,133 +2889,49 @@ def step_exit_dropview(config: dict, log_fn=None):
     finally:
         stop_dialog_watchdog()
 
-def step_start_dropview(config: dict, log_fn=None):
-    def _log(msg):
-        debug_log(msg)
-
+def step_start_dropview(config: dict, log_fn=None, *, allow_cleanup=True, cancelled=None):
+    _check_restart_cancelled(cancelled)
     ensure_dialog_watchdog(log_fn=log_fn)
 
-    # Pencere var mı kontrol et; varsa sağlıklı mı diye bak
     if window_exists(DROPVIEW_WINDOW_NAME):
-        dv_hwnd = find_window(DROPVIEW_WINDOW_NAME, timeout=5)
-        is_enabled = win32gui.IsWindowEnabled(dv_hwnd)
-        has_modal  = len(find_owned_dialogs(dv_hwnd)) > 0
-        if not is_enabled or has_modal:
-            _log("│  DropView appears broken or blocked; cleaning up...")
-            pid = get_window_pid(dv_hwnd)
-            if pid:
-                try:
-                    psutil.Process(pid).kill()
-                    _wait_for_dropview_process_exit(timeout=5)
-                    _log("│  Old DropView instance closed.")
-                except Exception as e:
-                    _log(f"│  WARNING: Old instance could not be closed: {e}")
-        elif _is_dropview_connected():
-            hwnd_pid = get_window_pid(dv_hwnd)
-            if not hwnd_pid:
-                _log("│  WARNING: Appears connected but window PID could not be read; restarting.")
-                try:
-                    win32gui.PostMessage(dv_hwnd, win32con.WM_CLOSE, 0, 0)
-                    wait_for_window_close(DROPVIEW_WINDOW_NAME, timeout=3, poll_interval=0.2)
-                    _log("│  Suspicious DropView window closed.")
-                except Exception:
-                    _log("│  WARNING: Suspicious DropView window could not be closed; restart will be attempted.")
-            else:
-                try:
-                    proc = psutil.Process(hwnd_pid)
-                    if proc.is_running() and not _is_dropview_ui_ready(dv_hwnd, timeout=3.0):
-                        _log(
-                            f"│  WARNING: DropView appears connected but UI is not ready "
-                            f"(PID={hwnd_pid}); restarting."
-                        )
-                        try:
-                            psutil.Process(hwnd_pid).kill()
-                            _wait_for_dropview_process_exit(timeout=5)
-                            _log("│  Non-ready DropView instance closed.")
-                            proc = psutil.Process(hwnd_pid)
-                        except psutil.NoSuchProcess:
-                            pass
-                        except Exception as e:
-                            _log(f"│  WARNING: Non-ready instance could not be closed: {e}")
-                    if not proc.is_running():
-                        _log(f"│  WARNING: Appears connected but process is not running (PID={hwnd_pid}); restarting.")
-                    else:
-                        _log(f"│  DropView is healthy and connected (PID={hwnd_pid}); continuing.")
-                        time.sleep(0.4)
-                        if not _is_dropview_ui_ready(dv_hwnd, timeout=2.0) or not _is_dropview_connected():
-                            _log(
-                                f"│  WARNING: Early health check is inconsistent (PID={hwnd_pid}); "
-                                "restarting."
-                            )
-                        else:
-                            return
-                except Exception as e:
-                    _log(f"│  WARNING: DropView process health could not be verified (PID={hwnd_pid}): {e}")
+        hwnd = find_window(DROPVIEW_WINDOW_NAME, timeout=5)
+        owner = dropview_process_identity(hwnd)
+        if owner is None:
+            raise RuntimeError("The DropView window process could not be verified.")
+        blocked = not win32gui.IsWindowEnabled(hwnd) or bool(find_owned_dialogs(hwnd))
+        if not blocked and _connection_snapshot(hwnd=hwnd)["state"] == "connected":
+            blocked = not _is_dropview_ui_ready(hwnd, timeout=3.0)
+            if not blocked:
+                time.sleep(0.4)
+                if (_is_dropview_ui_ready(hwnd, timeout=2.0)
+                        and _connection_snapshot(hwnd=hwnd)["state"] == "connected"
+                        and dropview_process_identity(hwnd) == owner):
+                    return
+                _log(log_fn, "DropView startup health checks were inconsistent; verifying the connection again.")
+        if blocked:
+            if not allow_cleanup:
+                raise RuntimeError("The existing DropView window is blocked during recovery startup.")
+            _close_verified_dropview(owner, hwnd, allow_terminate=True, cancelled=cancelled, log_fn=log_fn)
     else:
-        # Pencere yok ama zombie process olabilir
         pid = _get_dropview_pid()
-        if pid:
+        if pid is not None:
+            if not allow_cleanup:
+                raise RuntimeError("A DropView process without a window is still present during recovery startup.")
             try:
-                psutil.Process(pid).kill()
-                _wait_for_dropview_process_exit(timeout=5)
-                _log("│  Zombie DropView process cleaned up.")
-            except Exception as e:
-                _log(f"│  WARNING: Zombie process could not be closed: {e}")
+                owner = {"pid": pid, "created": psutil.Process(pid).create_time()}
+                _close_verified_dropview(owner, allow_terminate=True, cancelled=cancelled, log_fn=log_fn)
+            except psutil.NoSuchProcess:
+                pass
 
-    if not window_exists(DROPVIEW_WINDOW_NAME):
-        subprocess.Popen([_get_dropview_exe()])
-        find_window(DROPVIEW_WINDOW_NAME, timeout=TIMEOUT_WINDOW_OPEN)
-        time.sleep(SLEEP_AFTER_LAUNCH)
-
-    dv_hwnd = find_window(DROPVIEW_WINDOW_NAME, timeout=10)
-    _focus_window(dv_hwnd)
-
-    if _try_preferred_automatic_connection(dv_hwnd):
-        return
-    manual_attempts = []
-    result = "timeout"
-    for target_com in _resolve_target_dropsens_ports():
-        _log(f"│  Trying manual connection: {target_com}...")
-        result = _connect_manual(dv_hwnd, target_com, log_fn=log_fn)
-        manual_attempts.append((target_com, result))
-        if result == "connected":
-            _log(f"│  DropSens connected (manual: {target_com}).")
-            remember_value("dropsens_com", target_com)
-            break
-        _log(f"│  Manual connection failed ({target_com}: {result}).")
-
-    if result == "connected":
-        pass
-    elif result in ("no_device_connected", "potentiostat_not_found", "unknown_error", "timeout", "port_unavailable"):
-        attempts_str = ", ".join(f"{port}={status}" for port, status in manual_attempts)
-        _log(f"│  Manual connections failed ({attempts_str}); retrying with Ctrl+C...")
-        safe_sequence(dv_hwnd, [{"type": "hotkey", "keys": ("ctrl", "c"), "post_delay": SLEEP_AFTER_COMMAND}], log_fn=log_fn)
-        fallback_result = _wait_for_connection_result(timeout=TIMEOUT_CONNECT, log_fn=log_fn)
-        if fallback_result != "connected":
-            raise RuntimeError(
-                f"DropSens connection could not be established (manual: {attempts_str}, "
-                f"Ctrl+C: {fallback_result}). Make sure the device is connected "
-                f"and DropView is ready."
-            )
-        _log("│  DropSens connected (Ctrl+C fallback).")
-    else:
-        raise RuntimeError(
-            "DropSens connection timed out. "
-            "Make sure the device is connected."
-        )
-
-    _verify_dropview_connection()
-    if result == "connected":
-        remember_value("dropsens_connection_route", {"kind": "manual", "port": target_com})
-    else:
-        remember_value("dropsens_connection_route", {"kind": "usb_auto", "port": None})
+    _check_restart_cancelled(cancelled)
+    if not window_exists(DROPVIEW_WINDOW_NAME) and _get_dropview_pid() is not None:
+        raise RuntimeError("A DropView process is still present; a duplicate will not be launched.")
+    step_launch_dropview()
+    _check_restart_cancelled(cancelled)
+    step_connect_dropsens(log_fn=log_fn)
 
 
-def step_start_measure(config: dict, log_fn=None):
-    ensure_dialog_watchdog(log_fn=log_fn)
-    dv_hwnd = find_window(DROPVIEW_WINDOW_NAME, timeout=10)
-    _focus_window(dv_hwnd, click_title=True)
-
+def _open_multiscript_menu(dv_hwnd, log_fn=None, *, timeout=TIMEOUT_WINDOW_OPEN, expected_owner=None):
     # Alt+S S öncesi: DropView enabled ve modal yok mu doğrula
     if not win32gui.IsWindowEnabled(dv_hwnd):
         raise RuntimeError(
@@ -2367,12 +2948,15 @@ def step_start_measure(config: dict, log_fn=None):
     safe_wait_for_image(
         dv_hwnd,
         _IMG["scripts_menu"],
-        timeout=TIMEOUT_WINDOW_OPEN,
+        timeout=timeout,
         poll_interval=POLL_INTERVAL_SLOW,
         threshold=THRESHOLD_HIGH,
         log_fn=log_fn,
     )
     time.sleep(SLEEP_AFTER_FOCUS)
+    if expected_owner:
+        if dropview_process_identity(dv_hwnd) != expected_owner:
+            raise RuntimeError("The DropView process changed before opening Multiscript.")
     safe_sequence(
         dv_hwnd,
         [
@@ -2380,7 +2964,37 @@ def step_start_measure(config: dict, log_fn=None):
             {"type": "press", "key": "s", "post_delay": 1.2},
         ],
         log_fn=log_fn,
+        retries=1 if expected_owner else 3,
     )
+
+
+def verify_discrete_session_connection(expected_owner):
+    if not expected_owner:
+        raise RuntimeError("The measurement's DropView process was not recorded.")
+    hwnd = find_window(DROPVIEW_WINDOW_NAME, timeout=0.5, poll_interval=0.1, pid=expected_owner["pid"])
+    if dropview_process_identity(hwnd) != expected_owner or not dropview_responding(hwnd):
+        raise RuntimeError("The original DropView process could not be verified.")
+    connection = _connection_snapshot(hwnd=hwnd)
+    if connection["state"] == "unknown":
+        connection = _connection_snapshot(lambda: True, hwnd=hwnd)
+    if (connection["state"] != "connected"
+            or dropview_process_identity(hwnd) != expected_owner):
+        raise RuntimeError("DropSens connection in the original DropView process could not be verified.")
+    return hwnd
+
+
+def reopen_discrete_editor(expected_owner, log_fn=None):
+    """Restore only the editor belonging to the running measurement."""
+    editor, state = _acquire_discrete_editor(expected_owner, reopen_if_needed=True, log_fn=log_fn)
+    debug_log(f"Multiscript control restored: hwnd={editor}, state={state}.")
+    return editor
+
+
+def step_start_measure(config: dict, log_fn=None):
+    ensure_dialog_watchdog(log_fn=log_fn)
+    dv_hwnd = find_window(DROPVIEW_WINDOW_NAME, timeout=10)
+    _focus_window(dv_hwnd, click_title=True)
+    _open_multiscript_menu(dv_hwnd, log_fn=log_fn)
 
     ms_hwnd = find_window(MULTISCRIPT_WINDOW, timeout=15)
     debug_log(f"Multiscript Editor opened (hwnd={ms_hwnd}).")
@@ -2491,3 +3105,4 @@ def step_start_measure(config: dict, log_fn=None):
             )
         raise
     stop_dialog_watchdog()
+    return dropview_process_identity(ms_hwnd)

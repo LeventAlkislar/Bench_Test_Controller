@@ -39,7 +39,7 @@ from bench_test.measurement.session import (
 from bench_test.ui.tabs.package_panel       import PackagePanel
 from bench_test.ui.tabs.method_editor_panel import MethodEditorPanel
 from bench_test.ui.tabs.script_params_panel import ScriptParamsPanel
-from bench_test.utils.paths import remember_value
+from bench_test.utils.paths import get_value, remember_value
 
 
 _METHOD_FILE_KEY_BY_MODE = {
@@ -165,7 +165,7 @@ class MeasurementSetupTab(QWidget):
 
     # ── RecipeTab arayüzü ─────────────────────────────────────────
 
-    def build_package(self, recipe_path: str = "", recipe_steps: list = None) -> bool:
+    def build_package(self, recipe_path: str = "", recipe_steps: list = None, *, simulation_mode=False) -> bool:
         """
         RecipeTab._start_recipe() tarafından çağrılır.
         Üç panelden veri toplayıp PackagePanel.build_package()'a iletir.
@@ -203,6 +203,7 @@ class MeasurementSetupTab(QWidget):
             method_paths=method_paths,
             method_values_by_mode=method_values_by_mode,
             recipe_steps=recipe_steps,
+            simulation_mode=simulation_mode,
         )
 
     @staticmethod
@@ -228,11 +229,12 @@ class MeasurementSetupTab(QWidget):
         return self.package_panel.get_session()
 
     def get_experiment_params(self) -> dict:
-        """Script panel ve viewer delay alanlarini tek session snapshot'inda toplar."""
+        """Collect setup parameters without using an archive's graph delay."""
         params = self.script_panel.get_experiment_params()
-        mw = self._get_main_window()
-        if mw and hasattr(mw, "viewer_tab"):
-            params.update(mw.viewer_tab.get_response_delay_params())
+        session = self._setup_session()
+        saved_params = (session.experiment_params or {}) if session is not None else {}
+        for key in ("response_delay_min", "response_delay_sec"):
+            params[key] = saved_params[key] if key in saved_params else get_value(key, 0)
         return params
 
     def _get_main_window(self):
@@ -251,7 +253,7 @@ class MeasurementSetupTab(QWidget):
         if self._rendering_session:
             return
 
-        session = self._displayed_session()
+        session = self._setup_session()
         if session is None:
             return
         if self.package_panel.sm.state == "running":
@@ -278,14 +280,11 @@ class MeasurementSetupTab(QWidget):
             return
         self.package_panel.set_tp_ref(method_path)
 
-    def _displayed_session(self):
+    def _setup_session(self):
         mw = self._get_main_window()
         ctx = getattr(mw, "_ctx", None) if mw is not None else None
-        display_mode = (
-            getattr(ctx, "display_mode", "empty") if ctx is not None else "empty"
-        )
-        if ctx is not None and display_mode in ("active", "archived"):
-            return ctx.displayed_session
+        if ctx is not None and ctx.setup_session is not None:
+            return ctx.setup_session
         return self.package_panel.get_session()
 
     @staticmethod
@@ -295,26 +294,22 @@ class MeasurementSetupTab(QWidget):
 
     def on_response_delay_changed(self, minutes: int, seconds: int):
         """Viewer delay degisince label'i gunceller ve session/global kaydi yapar."""
+        mw = self._get_main_window()
+        if mw is not None and mw._ctx.is_inspecting:
+            return
         self.script_panel.set_response_delay(minutes, seconds)
-        self._persist_experiment_params(self.get_experiment_params())
+        params = self.get_experiment_params()
+        params.update(response_delay_min=minutes, response_delay_sec=seconds)
+        self._persist_experiment_params(params)
 
     def _persist_experiment_params(self, params: dict):
         """Moda gore experiment_params'i session.json ve/veya last_paths'a yazar."""
         mw = self._get_main_window()
         ctx = getattr(mw, "_ctx", None) if mw is not None else None
-        mode = getattr(ctx, "display_mode", "empty") if ctx is not None else "empty"
-
-        if mode in ("empty", "active"):
+        session = self._setup_session()
+        if session is None or (ctx is not None and session is ctx.active_session):
             self._remember_experiment_defaults(params)
 
-        session = None
-        if ctx is not None and mode in ("active", "archived"):
-            session = ctx.displayed_session
-        if session is None and mode == "active":
-            session = self.package_panel.get_session()
-
-        if mode == "history":
-            return
         if session is None:
             return
 

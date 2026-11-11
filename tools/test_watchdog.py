@@ -1,5 +1,7 @@
 """Watchdog fault injection; no real process termination, UI or registry writes."""
 import sys
+import os
+import queue
 import tempfile
 import threading
 import unittest
@@ -13,10 +15,39 @@ from unittest.mock import Mock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from bench_test.recipe.models import Recipe, RecipeStep
 from bench_test.recipe.recovery import RecoveryJournal
+from bench_test.recipe.runner import RecipeRunner
+from bench_test.watchdog import state as watchdog_state
 from bench_test.watchdog.state import atomic_write, read_json, RunStopSignal, recovery_source
 from bench_test.watchdog.supervisor import Supervisor, fault_reason
-from bench_test.watchdog.progress import CsvProgressProbe
+from bench_test.watchdog.progress import CsvProgressProbe, read_csv_expectation
+from bench_test.dropview.script_generator import generate_dropview_script
 from bench_test.watchdog.windows_update import WindowsUpdateGuard, POLICY, EFFECTIVE, PAUSE_NAMES, REBOOT_KEYS
+
+
+class PackagedWatchdogTests(unittest.TestCase):
+    def test_packaged_watchdog_receives_exact_versioned_application_path(self):
+        btc = str(Path.cwd() / "release files" / "BenchTestController_v18.0.2.exe")
+        watchdog = str(Path(btc).with_name("BenchTestWatchdog.exe"))
+        with patch.object(sys, "frozen", True, create=True), patch.object(sys, "executable", btc), \
+                patch.object(Path, "is_file", return_value=True), \
+                patch.object(watchdog_state.subprocess, "Popen") as popen:
+            watchdog_state.launch_watchdog(watchdog_state.SIMULATION_RECOVERY_ARG)
+        self.assertEqual(popen.call_args.args[0], [
+            watchdog, "--app-executable", btc, watchdog_state.SIMULATION_RECOVERY_ARG,
+        ])
+        self.assertEqual(popen.call_args.kwargs["env"]["PYINSTALLER_RESET_ENVIRONMENT"], "1")
+
+    def test_standalone_watchdog_uses_btc_state_and_relaunches_that_btc(self):
+        btc = str(Path.cwd() / "BenchTestController_v18.0.2.exe")
+        watchdog = str(Path(btc).with_name("BenchTestWatchdog.exe"))
+        with patch.object(sys, "frozen", True, create=True), patch.object(sys, "executable", btc):
+            btc_directory = watchdog_state.runtime_directory()
+        with patch.object(sys, "frozen", True, create=True), patch.object(sys, "executable", watchdog), \
+                patch.object(watchdog_state.subprocess, "Popen") as popen:
+            self.assertEqual(watchdog_state.runtime_directory(app_executable=btc), btc_directory)
+            watchdog_state.launch("--watchdog-recover", "token", executable=btc)
+        self.assertEqual(popen.call_args.args[0], [btc, "--watchdog-recover", "token"])
+        self.assertEqual(popen.call_args.kwargs["env"]["PYINSTALLER_RESET_ENVIRONMENT"], "1")
 
 
 class ImmediateThread:
@@ -29,6 +60,9 @@ class ImmediateThread:
 
 class TemporaryTest(unittest.TestCase):
     def setUp(self):
+        dialogs = patch("bench_test.dropview.automator.dismiss_connection_error_dialogs")
+        dialogs.start()
+        self.addCleanup(dialogs.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.directory = Path(self.temp.name)
@@ -67,6 +101,18 @@ class SupervisorTests(TemporaryTest):
     def message(self):
         return read_json(self.directory / "supervisor_status.json")["message"]
 
+    def startup_client(self):
+        from PyQt6.QtWidgets import QApplication
+        from bench_test.watchdog.client import WatchdogClient
+        with patch.dict(os.environ, {"QT_QPA_PLATFORM": "offscreen"}):
+            self.app = QApplication.instance() or QApplication(["watchdog-relaunch"])
+        tab = SimpleNamespace(package_tab=SimpleNamespace(sm=SimpleNamespace(state="idle")),
+                              recover_from_record=Mock())
+        client = WatchdogClient(tab, SimpleNamespace(last_health={}), directory=self.directory)
+        client._timer.stop()
+        self.addCleanup(client.close)
+        return client, tab
+
     def test_unknown_health_never_restarts(self):
         for time in (1000, 2000, 4000):
             self.now = time
@@ -84,6 +130,69 @@ class SupervisorTests(TemporaryTest):
         self.launch.assert_called_once_with("--watchdog-recover", token)
         self.terminate.assert_not_called()
 
+    def test_watchdog_relaunch_token_hands_saved_run_to_new_application(self):
+        self.alive = False
+        self.tick()
+        self.tick()
+        token = self.launch.call_args.args[1]
+        client, tab = self.startup_client()
+        with patch("bench_test.watchdog.client.owner_alive", return_value=False):
+            client.accept_startup(token)
+            with self.assertRaisesRegex(RuntimeError, "no longer matches"):
+                client.accept_startup(token)
+        tab.recover_from_record.assert_called_once_with(str(self.path))
+        active = read_json(self.directory / "active.json")
+        self.assertEqual(active["owner"], client.owner)
+        self.assertEqual(active["run_id"], self.state["run_id"])
+        self.assertEqual(active["ack_token"], token)
+        self.assertEqual(active["command_state"], "running")
+        self.launch.assert_called_once()
+
+    def test_stale_relaunch_token_cannot_recover_another_or_cancelled_run(self):
+        self.alive = False
+        self.tick()
+        token = read_json(self.directory / "command.json")["token"]
+        client, tab = self.startup_client()
+        for changes in (
+                {"run_id": uuid.uuid4().hex},
+                {"owner": {"pid": 123456, "created": 2}},
+                {"status": "user_stopped", "armed": False},
+                {"status": "paused"},
+                {"armed": False},
+                {"observe_only": True}):
+            with self.subTest(changes=changes):
+                atomic_write(self.directory / "active.json", {**self.state, **changes})
+                with patch("bench_test.watchdog.client.owner_alive", return_value=False), \
+                        patch("bench_test.watchdog.client.recovery_source") as source:
+                    with self.assertRaisesRegex(RuntimeError, "no longer matches"):
+                        client.accept_startup(token)
+                    source.assert_not_called()
+        tab.recover_from_record.assert_not_called()
+        self.assertFalse(client.is_armed)
+
+    def test_startup_checks_stop_signal_before_reclaiming_the_journal(self):
+        self.alive = False
+        self.tick()
+        token = read_json(self.directory / "command.json")["token"]
+        self.monitor.stop_signal.set()
+        client, tab = self.startup_client()
+        with patch("bench_test.watchdog.client.owner_alive", return_value=False), \
+                patch("bench_test.watchdog.client.recovery_source") as source:
+            with self.assertRaisesRegex(RuntimeError, "explicitly cancelled"):
+                client.accept_startup(token)
+            source.assert_not_called()
+        tab.recover_from_record.assert_not_called()
+
+    def test_manual_reopen_recovers_only_after_previous_owner_exits(self):
+        atomic_write(self.directory / "active.json", self.state)
+        client, tab = self.startup_client()
+        with patch("bench_test.watchdog.client.owner_alive", return_value=True):
+            client.accept_startup()
+        tab.recover_from_record.assert_not_called()
+        with patch("bench_test.watchdog.client.owner_alive", return_value=False):
+            client.accept_startup()
+        tab.recover_from_record.assert_called_once_with(str(self.path))
+
     def test_hung_ui_requests_cooperation_before_termination(self):
         self.now += 61
         self.tick(worker_heartbeat=self.now)
@@ -95,6 +204,19 @@ class SupervisorTests(TemporaryTest):
         self.tick()
         self.terminate.assert_called_once_with(self.state["owner"])
         self.launch.assert_called_once()
+
+    def test_hung_ui_failed_termination_waits_for_backoff_without_launching(self):
+        self.terminate.side_effect = PermissionError("denied")
+        self.now += 61
+        self.tick()
+        self.now += 61
+        self.tick()
+        self.assertTrue(self.message().startswith("blocked: application could not be stopped"))
+        self.now += 2
+        self.tick()
+        self.assertEqual(self.message(), "retry_backoff")
+        self.terminate.assert_called_once()
+        self.launch.assert_not_called()
 
     def test_completed_source_prevents_pending_kill(self):
         self.now += 61
@@ -134,10 +256,98 @@ class SupervisorTests(TemporaryTest):
     def test_connection_fault_requires_persistence(self):
         self.tick(dropview_health={"dv_open": False, "sampled_at": self.now})
         self.assertTrue(self.message().startswith("checking:"))
-        self.now += 31
+        self.now += 14
         self.tick(ui_heartbeat=self.now, worker_heartbeat=self.now,
                   dropview_health={"dv_open": False, "sampled_at": self.now})
-        self.assertIn("dropview_missing", self.message())
+        self.assertIsNone(read_json(self.directory / "command.json"))
+        self.now += 1
+        self.tick(ui_heartbeat=self.now, worker_heartbeat=self.now)
+        self.assertIsNone(read_json(self.directory / "command.json"))  # Cached sample is not confirmation.
+        self.tick(dropview_health={"dv_open": False, "sampled_at": self.now})
+        self.assertEqual(read_json(self.directory / "command.json")["reason"], "dropview_missing")
+
+    def test_disconnection_warning_counts_distinct_controller_reads(self):
+        for seconds, sampled, expected_warning in (
+                (0, 0, None), (2, 0, None), (3, 3, None), (5, 3, None), (6, 6, "dropsens_disconnected")):
+            self.now = 1000 + seconds
+            self.tick(ui_heartbeat=self.now, worker_heartbeat=self.now,
+                      dropview_health={"dv_open": True, "state": "disconnected", "sampled_at": 1000 + sampled})
+            status = read_json(self.directory / "supervisor_status.json")
+            self.assertEqual(status["warning"], expected_warning)
+            self.assertIsNone(status["confirmed_fault"])
+        self.assertIsNone(read_json(self.directory / "command.json"))
+        self.now = 1015
+        self.tick(ui_heartbeat=self.now, worker_heartbeat=self.now,
+                  dropview_health={"dv_open": True, "state": "disconnected", "sampled_at": self.now})
+        status = read_json(self.directory / "supervisor_status.json")
+        self.assertEqual(status["confirmed_fault"], "dropsens_disconnected")
+        self.assertEqual(status["last_connection_read"], self.now)
+
+    def test_unreadable_connection_warning_preserves_last_verified_read_without_recovery(self):
+        self.tick(dropview_health={"dv_open": True, "state": "connected", "sampled_at": self.now})
+        for time in (1010, 1029, 1030):
+            self.now = time
+            self.tick(ui_heartbeat=time, worker_heartbeat=time,
+                      dropview_health={"dv_open": True, "state": "unknown", "sampled_at": time})
+            status = read_json(self.directory / "supervisor_status.json")
+            self.assertEqual(status["last_connection_read"], 1000)
+            self.assertEqual(status["warning"], "connection_read_unverified" if time == 1030 else None)
+        self.assertIsNone(read_json(self.directory / "command.json"))
+
+    def test_unresponsive_ui_warns_at_30_seconds_without_interruption(self):
+        self.now += 30
+        self.tick(worker_heartbeat=self.now)
+        status = read_json(self.directory / "supervisor_status.json")
+        self.assertEqual(status["warning"], "ui_response_delayed")
+        self.assertIsNone(status["confirmed_fault"])
+        self.assertIsNone(read_json(self.directory / "command.json"))
+
+    def test_verified_dropview_process_exit_skips_window_disappearance_debounce(self):
+        import psutil
+        identity = {"pid": 234567, "created": 2}
+        with patch("bench_test.watchdog.supervisor.psutil.Process", side_effect=psutil.NoSuchProcess(234567)):
+            # The supervisor also queries its own identity when publishing.
+            with patch("bench_test.watchdog.supervisor.process_identity", return_value=self.state["owner"]):
+                self.tick(dropview_health={"dv_open": False, "sampled_at": self.now,
+                                           "process_identity": identity})
+        self.assertEqual(read_json(self.directory / "command.json")["reason"], "dropview_process_exited")
+        self.terminate.assert_not_called()
+
+    def test_missing_first_csv_uses_existing_recovery_only_during_measurement_wait(self):
+        self.monitor.progress.observe = Mock(return_value=("discrete_first_export_missing", None))
+        self.tick(phase="measurement_stop")
+        self.assertIsNone(read_json(self.directory / "command.json"))
+        self.tick(phase="waiting")
+        self.assertEqual(read_json(self.directory / "command.json")["reason"], "discrete_first_export_missing")
+
+    def test_simulation_reports_same_connection_fault_without_recovery_record(self):
+        for state, reason in (
+                ({"dv_open": False}, "dropview_missing"),
+                ({"dv_open": True, "responding": False}, "dropview_not_responding"),
+                ({"dv_open": True, "state": "disconnected"}, "dropsens_disconnected")):
+            with self.subTest(reason=reason):
+                self.tick(run_id=uuid.uuid4().hex, observe_only=True, record_path="",
+                          ui_heartbeat=self.now, worker_heartbeat=self.now,
+                          dropview_health={**state, "sampled_at": self.now})
+                self.assertEqual(self.message(), "checking:" + reason)
+                self.now += 15
+                self.tick(ui_heartbeat=self.now, worker_heartbeat=self.now,
+                          dropview_health={**state, "sampled_at": self.now})
+                command = read_json(self.directory / "command.json")
+                self.assertEqual(command["reason"], reason)
+                self.assertTrue(command["observe_only"])
+                self.now += 90
+                self.tick()
+                self.assertEqual(read_json(self.directory / "command.json"), command)
+        self.terminate.assert_not_called()
+        self.launch.assert_not_called()
+
+    def test_simulation_logs_dead_owner_and_does_not_relaunch(self):
+        self.alive = False
+        self.assertFalse(self.tick(observe_only=True, record_path=""))
+        self.assertEqual(self.message(), "simulation_fault:application_exited")
+        self.launch.assert_not_called()
+        self.terminate.assert_not_called()
 
     def test_planned_exit_does_not_use_measurement_health(self):
         self.tick(phase="dropview_exit", dropview_health={"dv_open": False, "sampled_at": self.now})
@@ -187,6 +397,26 @@ class SupervisorTests(TemporaryTest):
         with self.assertRaisesRegex(ValueError, "belong"):
             recovery_source(state, reclaim=True)
 
+    def test_prepared_child_does_not_fall_back_to_an_unrelated_running_record(self):
+        parent = self.directory / "parent.json"
+        RecoveryJournal(parent, self.record).update(status="running")
+        RecoveryJournal(self.path, self.record).update(status="prepared",
+                                                      source_record=str(self.directory / "other.json"))
+        before = parent.read_bytes()
+        with self.assertRaisesRegex(ValueError, "does not belong"):
+            recovery_source({**self.state, "recovery_source": str(parent)}, reclaim=True)
+        self.assertEqual(parent.read_bytes(), before)
+
+    def test_reclaim_does_not_rewrite_a_parent_with_user_stop_recorded(self):
+        parent = self.directory / "parent.json"
+        RecoveryJournal(parent, self.record).update(status="recovering", stop_requested=True,
+                                                   recovery_session=str(self.directory))
+        RecoveryJournal(self.path, self.record).update(status="prepared", source_record=str(parent))
+        before = parent.read_bytes()
+        with self.assertRaisesRegex(ValueError, "user stop"):
+            recovery_source({**self.state, "recovery_source": str(parent)}, reclaim=True)
+        self.assertEqual(parent.read_bytes(), before)
+
 
 class ProgressTests(TemporaryTest):
     def setUp(self):
@@ -199,9 +429,15 @@ class ProgressTests(TemporaryTest):
     def observe(self, now, epoch=1):
         return self.probe.observe(str(self.directory), epoch, now)
 
+    def write_export(self, name="PAD-001.csv", curve=1, rows='"0";"0.1"\n"2.5";"0.2"\n'):
+        path = self.directory / name
+        path.write_text(f'"i400sN1_1#{curve:03d}";"";""\n""\n"Time (s)";"Current (uA)";""\n{rows}',
+                        encoding="utf-8")
+        return path
+
     def test_stall_requires_a_learned_cadence(self):
         for index, now in enumerate((1000, 1060, 1120)):
-            (self.directory / "data.csv").write_text("x" * (index + 1))
+            self.write_export(name=f"data-{index}.csv", curve=index + 1)
             self.assertEqual(self.observe(now), (None, None))
         self.assertEqual(self.observe(2400)[0], "discrete_data_stalled")
 
@@ -212,6 +448,12 @@ class ProgressTests(TemporaryTest):
     def test_storage_error_is_not_a_recovery_command(self):
         result = self.probe.observe(str(self.directory / "absent"), 1, 1000)
         self.assertEqual(result, (None, "measurement_storage_unavailable"))
+
+    def test_storage_failure_counter_requires_new_scans(self):
+        missing = str(self.directory / "absent")
+        for now, failures in ((1000, 1), (1001, 1), (1060, 2)):
+            self.probe.observe(missing, 1, now)
+            self.assertEqual(self.probe.storage_failures, failures)
 
     def test_new_measurement_resets_cadence(self):
         self.probe.intervals = [60, 60]
@@ -226,6 +468,221 @@ class ProgressTests(TemporaryTest):
             thread.assert_not_called()
         self.probe.lock.release()
 
+    def expected(self, now, exports=5, started_ns=None):
+        return self.probe.observe(
+            str(self.directory), 1000, now, started_ns=started_ns,
+            expectation={"first_seconds": 10, "interval_seconds": 120,
+                         "exports": exports, "csv_stem": "pad"})
+
+    def test_first_export_requires_second_successful_scan_after_warning(self):
+        self.assertEqual(self.expected(1000), (None, None))
+        self.assertEqual(self.expected(1060), (None, None))
+        self.assertEqual(self.expected(1120), (None, "discrete_first_export_late"))
+        self.assertEqual(self.expected(1122), (None, "discrete_first_export_late"))
+        self.assertEqual(self.expected(1180), ("discrete_first_export_missing", None))
+
+    def test_late_first_export_clears_warning(self):
+        self.expected(1000)
+        self.assertEqual(self.expected(1120)[1], "discrete_first_export_late")
+        (self.directory / "PAD-001.csv").write_text("new data")
+        self.assertEqual(self.expected(1180), (None, None))
+
+    def test_subsequent_missed_exports_use_configured_interval(self):
+        self.write_export()
+        self.assertEqual(self.expected(1000), (None, None))
+        self.assertEqual(self.expected(1180), (None, "discrete_export_late"))
+        self.assertEqual(self.expected(1300), ("discrete_data_stalled", None))
+
+    def test_one_scan_after_multiple_deadlines_does_not_trigger_recovery_immediately(self):
+        self.write_export()
+        self.expected(1000)
+        self.assertEqual(self.expected(1400), (None, "discrete_export_late"))
+        self.assertEqual(self.expected(1402), (None, "discrete_export_late"))
+        self.assertEqual(self.expected(1460), ("discrete_data_stalled", None))
+
+    def test_old_unrelated_or_empty_files_do_not_satisfy_first_export(self):
+        start = 1_760_000_000_000_000_000
+        old = self.directory / "PAD-001.csv"
+        old.write_text("old measurement")
+        os.utime(old, ns=(start - 1_000_000_000,) * 2)
+        (self.directory / "other.csv").write_text("unrelated")
+        (self.directory / "PAD-002.csv").touch()
+        self.expected(1000, started_ns=start)
+        self.assertEqual(self.expected(1120, started_ns=start)[1], "discrete_first_export_late")
+
+    def test_all_numbered_exports_complete_without_stall_fault(self):
+        self.write_export()
+        self.expected(1000, exports=1)
+        self.assertEqual(self.expected(4000, exports=1), (None, None))
+
+    def test_storage_error_interrupts_first_export_confirmation(self):
+        self.expected(1000)
+        self.assertEqual(self.expected(1120)[1], "discrete_first_export_late")
+        with patch("bench_test.watchdog.progress.os.scandir", side_effect=OSError("offline")):
+            self.assertEqual(self.expected(1180), (None, "measurement_storage_unavailable"))
+        self.assertEqual(self.expected(1240), (None, "discrete_first_export_late"))
+        self.assertEqual(self.expected(1300)[0], "discrete_first_export_missing")
+
+    def test_stale_scan_cannot_confirm_an_export_timeout(self):
+        self.expected(1000)
+        self.expected(1120)
+        self.probe.lock.acquire()
+        try:
+            self.assertEqual(self.expected(1500), (None, "measurement_probe_not_responding"))
+        finally:
+            self.probe.lock.release()
+
+    def test_distinct_curves_can_repeat_times_and_current_values(self):
+        self.write_export()
+        self.assertEqual(self.expected(1000), (None, None))
+        self.write_export("PAD-002.csv", curve=2)
+        self.assertEqual(self.expected(1240), (None, None))
+        self.assertEqual(self.probe.content_last_progress, 1240)
+
+    def test_metadata_changes_with_same_curve_and_times_warn_without_recovery(self):
+        self.write_export()
+        self.expected(1000)
+        self.write_export("PAD-002.csv", curve=1)
+        self.assertEqual(self.expected(1120), (None, None))
+        self.write_export("PAD-003.csv", curve=1)
+        self.assertEqual(self.expected(1240), (None, "measurement_csv_records_not_advancing"))
+        self.write_export("PAD-004.csv", curve=1, rows='"0";"0.1"\n"5";"0.2"\n')
+        self.assertEqual(self.expected(1300), (None, None))
+
+    def test_invalid_measurement_content_requires_two_distinct_scans(self):
+        self.write_export(rows='"0";"nan"\n')
+        self.assertEqual(self.expected(1000), (None, None))
+        self.assertEqual(self.expected(1002), (None, None))
+        self.write_export("PAD-002.csv", curve=2, rows='"0";"0.1"\n"0";"0.2"\n')
+        self.assertEqual(self.expected(1060), (None, "measurement_csv_invalid"))
+        self.write_export("PAD-003.csv", curve=3)
+        self.assertEqual(self.expected(1120), (None, None))
+
+    def test_unknown_header_is_unverified_not_invalid_or_a_recovery_fault(self):
+        (self.directory / "PAD-001.csv").write_text("unsupported CSV layout")
+        self.assertEqual(self.expected(1000), (None, None))
+        self.assertEqual(self.expected(1060), (None, "measurement_csv_content_unverified"))
+
+    def test_timing_uses_packaged_method_duration_and_wait_only_after_first_export(self):
+        method = self.directory / "pad.tp"
+        method.write_text(
+            '<root><technic id="PAD"><commonUserParameters><parameter id="t">10</parameter>'
+            '</commonUserParameters><pretreatmentUserParameters><parameter id="tcond">2</parameter>'
+            '</pretreatmentUserParameters></technic></root>', encoding="utf-8")
+        script = self.directory / "pad.scr"
+        generate_dropview_script(str(method), str(self.directory / "PAD.csv"), 8, 47500, str(script))
+        self.assertEqual(read_csv_expectation(script, self.directory),
+                         {"first_seconds": 12, "interval_seconds": 59.5, "exports": 8, "csv_stem": "pad"})
+        self.assertIsNone(read_csv_expectation(script, self.directory / "not_the_export_directory"))
+        method.write_text('<root><technic id="PAD" /></root>', encoding="utf-8")
+        self.assertIsNone(read_csv_expectation(script, self.directory))
+
+
+class SimulationFlowTests(TemporaryTest):
+    def test_discrete_pad_faults_interrupt_simulated_recipe_without_hardware_recovery(self):
+        from PyQt6.QtWidgets import QApplication
+        from bench_test.watchdog.client import WatchdogClient
+
+        with patch.dict(os.environ, {"QT_QPA_PLATFORM": "offscreen"}):
+            app = QApplication.instance() or QApplication(["watchdog-simulation"])
+        cases = (
+            ("covered", "unknown", {"state": "unknown"}, None),
+            ("stopped", "stopped", {}, "stopped unexpectedly"),
+            ("missing_editor", "unknown", {"editor_missing": True}, "Editor could not be recovered"),
+            ("disconnected", "running", {"state": "disconnected"}, "dropsens_disconnected"),
+            ("dropview_hang", "running", {"responding": False}, "dropview_not_responding"),
+            ("dropview_exit", "running", {"dv_open": False}, "dropview_process_exited"),
+            ("missing_csv", "running", {}, "discrete_first_export_missing"),
+        )
+        for scenario, measurement, health_changes, expected in cases:
+            with self.subTest(scenario=scenario):
+                directory = self.directory / scenario
+                directory.mkdir()
+                csv_directory = directory / "measurements"
+                csv_directory.mkdir()
+                method = directory / "pad.tp"
+                method.write_text(
+                    '<root><technic id="PAD"><commonUserParameters><parameter id="t">10</parameter>'
+                    '</commonUserParameters></technic></root>', encoding="utf-8")
+                script = str(directory / "pad.scr")
+                generate_dropview_script(str(method), str(csv_directory / "PAD.csv"), 6, 47500, script)
+
+                clock = [1000.0]
+                pump, dv = Mock(), Mock()
+                dv.do_start_measure.return_value = True
+                dv.discrete_measurement_owner = {"pid": 42, "created": 100}
+                runner = RecipeRunner(
+                    None, None, Recipe("Simulated PAD", [
+                        RecipeStep(0, 4, dropview_action="start_discrete_pad"),
+                        RecipeStep(0, 0, dropview_action="stop_discrete_pad"),
+                    ], 1), queue.Queue(), threading.Event(), dv, pump_ctrl=pump,
+                    simulation_mode=True, pump_simulation_mode=True, session_scr_path=script,
+                    session_measurements_dir=str(csv_directory) if scenario == "missing_csv" else "")
+                runner.is_alive = Mock(return_value=True)
+                tab = SimpleNamespace(recover_from_record=Mock())
+                health = SimpleNamespace(last_health={})
+                runtime = directory / "runtime"
+                launch, terminate = Mock(), Mock()
+                supervisor = Supervisor(runtime, clock=lambda: clock[0], is_alive=lambda _: True,
+                                        start_app=launch, terminate=terminate)
+                client = WatchdogClient(tab, health, directory=runtime)
+                client._timer.stop()
+                messages = []
+                client.log_message.connect(messages.append)
+
+                def tick(_sleep):
+                    clock[0] += 3
+                    runner.worker_heartbeat = clock[0]
+                    health.last_health = {
+                        "dv_open": True, "responding": True, "state": "connected",
+                        "process_identity": dv.discrete_measurement_owner,
+                        "sampled_at": clock[0], **health_changes,
+                    }
+                    client._publish()
+                    supervisor.tick()
+                    client._tick()
+
+                observation = {"state": measurement, "editor_missing": scenario == "missing_editor"}
+                def observe_editor(**_):
+                    if scenario == "covered" and runner._recovery_phase == "measurement_stop":
+                        return {"state": "running"}
+                    return observation
+
+                with patch.object(client, "_ensure_supervisor"), \
+                        patch.object(runner, "_check_dropview_connected", return_value=True), \
+                        patch("bench_test.recipe.runner.debug_log"), \
+                        patch("bench_test.dropview.automator.get_discrete_measurement_state", side_effect=observe_editor), \
+                        patch("bench_test.watchdog.supervisor.dropview_process_exited", return_value=scenario == "dropview_exit"), \
+                        patch("bench_test.watchdog.client.WindowsUpdateGuard") as update_guard, \
+                        patch("bench_test.watchdog.progress.threading.Thread", ImmediateThread), \
+                        patch("bench_test.recipe.runner.time.monotonic", side_effect=lambda: clock[0]), \
+                        patch("bench_test.recipe.runner.time.time", side_effect=lambda: clock[0]), \
+                        patch("bench_test.recipe.runner.time.sleep", side_effect=tick):
+                    try:
+                        client.arm(runner)
+                        self.assertTrue(read_json(runtime / "active.json")["observe_only"])
+                        runner.run()
+                        runner.is_alive.return_value = False
+                        if expected:
+                            self.assertEqual(runner.outcome, "interrupted", list(runner.status_queue.queue))
+                            self.assertEqual(runner.current_sequence_index, 1)
+                            self.assertIn(expected, runner._watchdog_reason)
+                            dv.do_stop_measure.assert_not_called()
+                        else:
+                            self.assertEqual(runner.outcome, "completed", list(runner.status_queue.queue))
+                            self.assertEqual(runner.current_sequence_index, 2)
+                            self.assertTrue(any("connection read unverified" in line for line in messages))
+                        pump.assert_not_called()
+                        self.assertEqual(pump.mock_calls, [])
+                        dv.do_start_measure.assert_called_once()
+                        tab.recover_from_record.assert_not_called()
+                        launch.assert_not_called()
+                        terminate.assert_not_called()
+                        update_guard.assert_not_called()
+                    finally:
+                        client.close()
+        app.processEvents()
+
 
 class ClientTests(TemporaryTest):
     def setUp(self):
@@ -238,7 +695,7 @@ class ClientTests(TemporaryTest):
         self.client = WatchdogClient(self.tab, SimpleNamespace(last_health={}), directory=self.directory)
         self.client._timer.stop()
         self.addCleanup(self.client.close)
-        self.launch_patch = patch("bench_test.watchdog.client.launch")
+        self.launch_patch = patch("bench_test.watchdog.client.launch_watchdog")
         self.launch = self.launch_patch.start()
         self.addCleanup(self.launch_patch.stop)
         self.thread_patch = patch("bench_test.watchdog.client.threading.Thread", ImmediateThread)
@@ -265,7 +722,120 @@ class ClientTests(TemporaryTest):
         self.assertEqual(active["owner"], self.client.owner)
         self.assertTrue(active["armed"])
         self.assertEqual(active["worker_heartbeat"], 1000)
-        self.launch.assert_called_once_with("--watchdog")
+        self.launch.assert_called_once_with()
+
+    def test_publishes_only_observations_for_the_current_measurement_owner(self):
+        owner = {"pid": 42, "created": 100}
+        self.runner._measurement_owner = owner
+        self.runner.measurement_epoch = 1000
+        health = {"state": "disconnected", "dv_open": True, "sampled_at": 1001, "process_identity": owner}
+        for observation, published in (
+            ({**health, "process_identity": {**owner, "created": 200}}, {}),
+            ({**health, "sampled_at": 999}, {}),
+            (health, health),
+        ):
+            with self.subTest(observation=observation):
+                self.client.dv.last_health = observation
+                self.client._publish()
+                self.assertEqual(read_json(self.directory / "active.json")["dropview_health"], published)
+
+    def test_new_reading_timestamps_do_not_repeat_the_same_warning(self):
+        log, status = [], []
+        self.client.log_message.connect(log.append)
+        self.client.status_changed.connect(status.append)
+        snapshot = {"run_id": self.client._run_id, "message": "checking:dropsens_disconnected",
+                    "warning": "dropsens_disconnected", "last_connection_read": 1000}
+        self.client._display_watchdog_status(snapshot)
+        self.client._display_watchdog_status({**snapshot, "last_connection_read": 1003})
+        self.assertEqual(len(log), 1)
+        self.assertEqual(len(status), 2)
+
+    def test_recovery_success_logged_only_after_reaching_resumed_step(self):
+        log = []
+        self.client.log_message.connect(log.append)
+        self.runner.recovery_record = {"record": True}
+        self.client._report_recovery_result("running")
+        self.assertEqual(log, [])
+        self.runner.recovery_continued = True
+        self.client._report_recovery_result("running")
+        self.client._report_recovery_result("running")
+        self.assertEqual(log, ["Recovery verified: recipe resumed in the new package."])
+
+    def test_simulation_monitors_and_interrupts_without_update_or_recovery(self):
+        self.client.disarm()
+        self.guard.reset_mock()
+        self.runner.simulation_mode = True
+        self.runner.measurement_mode = "script_pad"
+        self.runner.recovery_journal = None
+        self.client.arm(self.runner)
+        active = read_json(self.directory / "active.json")
+        self.assertTrue(active["armed"])
+        self.assertTrue(active["observe_only"])
+        self.assertEqual(active["record_path"], "")
+        self.command(observe_only=True, reason="dropsens_disconnected")
+        self.client._tick()
+        self.runner.request_recovery.assert_called_once()
+        self.assertIn("dropsens_disconnected", self.runner.request_recovery.call_args.args[0])
+        self.tab.recover_from_record.assert_not_called()
+        self.assertEqual(self.guard.mock_calls, [])
+        self.runner.is_alive.return_value = False
+        self.client._tick()
+        self.assertFalse(self.client.is_armed)
+
+    def test_simulation_orphan_is_not_recovered_at_startup(self):
+        atomic_write(self.directory / "active.json", {
+            "armed": True, "observe_only": True, "owner": {"pid": 0, "created": 0}})
+        self.client.accept_startup()
+        self.tab.recover_from_record.assert_not_called()
+
+    def test_simulation_recovery_arms_separate_watchdog_without_update_policy(self):
+        self.client.disarm()
+        self.guard.reset_mock()
+        self.launch.reset_mock()
+        self.runner.simulation_mode = self.runner.simulation_recovery = True
+        self.runner.measurement_mode = "script_pad"
+
+        self.client.arm(self.runner)
+
+        active = read_json(self.directory / "simulation" / "active.json")
+        self.assertTrue(active["armed"])
+        self.assertTrue(active["simulation_recovery"])
+        self.assertFalse(active["observe_only"])
+        self.assertEqual(active["record_path"], self.runner.recovery_journal.path)
+        self.assertEqual(read_json(self.directory / "active.json")["status"], "user_stopped")
+        self.launch.assert_called_once_with("--simulation-recovery")
+        self.assertEqual(self.guard.mock_calls, [])
+
+    def test_simulation_restart_token_is_read_from_simulation_namespace(self):
+        self.client.disarm()
+        simulation_dir = self.directory / "simulation"
+        old_owner = {"pid": -1, "created": 0}
+        run_id, token = uuid.uuid4().hex, uuid.uuid4().hex
+        atomic_write(simulation_dir / "active.json", {
+            "armed": True, "simulation_recovery": True, "owner": old_owner,
+            "run_id": run_id, "status": "armed",
+        })
+        atomic_write(simulation_dir / "command.json", {
+            "token": token, "run_id": run_id, "target_owner": old_owner,
+        })
+        self.runner.is_alive.return_value = False
+        with patch("bench_test.watchdog.client.recovery_source", return_value=("test-record.json", {})):
+            self.client.accept_startup(token, simulation_recovery=True)
+
+        self.tab.recover_from_record.assert_called_once_with("test-record.json")
+        active = read_json(simulation_dir / "active.json")
+        self.assertTrue(active["simulation_recovery"])
+        self.assertEqual(active["ack_token"], token)
+        self.assertEqual(read_json(self.directory / "active.json")["status"], "user_stopped")
+
+    def test_focus_policy_is_limited_to_active_unpaused_measurement_wait(self):
+        self.runner._interrupted = Mock(return_value=False)
+        self.assertTrue(self.client.should_focus_connection())
+        self.runner.pause_event.clear()
+        self.assertFalse(self.client.should_focus_connection())
+        self.runner.pause_event.set()
+        self.runner._recovery_phase = "measurement_stop"
+        self.assertFalse(self.client.should_focus_connection())
 
     def command(self, **changes):
         command = dict(token=uuid.uuid4().hex, run_id=self.client._run_id, target_owner=self.client.owner,

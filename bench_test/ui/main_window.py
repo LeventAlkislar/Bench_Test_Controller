@@ -15,7 +15,6 @@ from PyQt6.QtWidgets import (
 )
 
 from bench_test.dropview.controller import DropViewController
-from bench_test.measurement.session import MeasurementSession
 from bench_test.measurement.session_context import SessionContext
 from bench_test.pump import PumpController
 from bench_test.ui.tabs.log_tab import LogTab
@@ -116,7 +115,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
 
         self.sim_banner = QLabel(
-            "Simulation Mode - Valve connection missing, valve steps will be skipped"
+            "Simulation Mode - Pump and valves simulated. DropView and DropSens are real."
         )
         self.sim_banner.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.sim_banner.setStyleSheet(
@@ -163,14 +162,13 @@ class MainWindow(QMainWindow):
             self.recipe_tab,
             self.viewer_tab,
         ]:
-            tab.log_signal.connect(self.log_tab.append)
+            tab.log_signal.connect(self._append_application_log)
 
         self.recipe_tab.log_signal.connect(self.setup_tab.write_to_log)
         self.setup_tab.sm.aggregate_done.connect(self._on_aggregate_done)
         self.setup_tab.sm.log_signal.connect(self._on_sm_log_signal)
         self.setup_tab.sm.state_changed.connect(self._on_sm_state_changed)
         self.setup_tab.sm.state_changed.connect(self.viewer_tab._on_session_state_changed)
-        self.viewer_tab.session_loaded.connect(self._on_browse_session_loaded)
         self.viewer_tab.session_deleted.connect(self._on_session_deleted)
         self.setup_tab.package_panel.clear_session_requested.connect(
             self._on_clear_session
@@ -181,59 +179,45 @@ class MainWindow(QMainWindow):
 
         self.dv_ctrl.start_polling()
         self.watchdog = WatchdogClient(self.recipe_tab, self.dv_ctrl, self)
+        self.dv_ctrl.health_focus_requested = self.watchdog.should_focus_connection
         self.recipe_tab.watchdog = self.watchdog
         self.watchdog.status_changed.connect(self.statusBar().showMessage)
-        self.watchdog.log_message.connect(self.log_tab.append)
+        self.watchdog.log_message.connect(self._append_application_log)
         self.setup_tab.sm.aggregate_activity.connect(self.watchdog.set_finalizing)
 
-    def switch_display(self, session, mode: str, history_sessions=None):
-        """
-        Tum sekmeleri verilen session'a gore yeniden render eder.
-        mode: "empty" | "active" | "archived" | "history" | "legacy"
-        """
-        session_dir = getattr(session, "session_dir", None)
-        history_count = len(history_sessions or [])
+    def browse_session(self, session):
+        self.switch_display(session, "archived", inspection_only=True)
+        self.recipe_tab.load_package_recipe(session)
+
+    def switch_display(self, session, mode: str, history_sessions=None, *, inspection_only: bool = False):
+        """Render the graph and log, and update the working tabs for lifecycle events."""
         self._ctx.switch(session, mode)
-        preserve_live_recipe = (
-            mode == "active"
-            and self.recipe_tab.recipe_runner is not None
-            and self.recipe_tab.recipe_runner.is_alive()
-        )
-        self._clear_all_tabs(preserve_live_recipe=preserve_live_recipe)
+        self.viewer_tab.clear()
+        self.log_tab.clear()
+        if not inspection_only:
+            self._ctx.setup_session = session
+            runner = self.recipe_tab.recipe_runner
+            if runner is None or not runner.is_alive():
+                self.recipe_tab.clear(stop_runner=False)
+            self.setup_tab.package_panel.clear_display()
+            self.setup_tab.method_panel.clear()
+            self.setup_tab.script_panel.clear()
+            self.set_part_banner(session.part_number if session is not None else "")
 
         if mode == "history":
             sessions = history_sessions or []
-            part = sessions[0].part_number if sessions else ""
-            self.set_part_banner(part)
             self.viewer_tab.render_history(sessions)
             self.log_tab.render_history(sessions)
-            return
-
-        if mode == "legacy" and session is not None:
-            self.set_part_banner(session.part_number)
-            self.viewer_tab.render_session(session, live=False)
-            return
-
-        if session is not None:
-            self.set_part_banner(session.part_number)
+        elif session is not None:
             self.viewer_tab.render_session(session, live=(mode == "active"))
             self.log_tab.render_session(session)
-            self.recipe_tab.render_session(session)
-            self.setup_tab.render_session(session)
-            return
-
-        self.set_part_banner("")
-
-    def _clear_all_tabs(self, preserve_live_recipe: bool = False):
-        self.viewer_tab.clear()
-        self.log_tab.clear()
-        if not preserve_live_recipe:
-            self.recipe_tab.clear(stop_runner=False)
-        self.setup_tab.package_panel.clear_display()
-        self.setup_tab.method_panel.clear()
-        self.setup_tab.script_panel.clear()
+            if not inspection_only:
+                self.recipe_tab.render_session(session)
+                self.setup_tab.render_session(session)
 
     def _clear_session_views_preserve_recipe(self):
+        self._ctx.switch(None, "empty")
+        self._ctx.setup_session = None
         self.viewer_tab.clear()
         self.log_tab.clear()
         self.setup_tab.package_panel.clear_display()
@@ -258,11 +242,13 @@ class MainWindow(QMainWindow):
             was_live = self._ctx.display_mode == "active"
             last_active = self._ctx.active_session
             self._ctx.clear_active()
-            if was_live and last_active is not None:
+            if last_active is not None:
                 if not os.path.isdir(last_active.session_dir):
-                    self._clear_session_views_preserve_recipe()
-                    return
-                self.switch_display(last_active, "archived")
+                    self._ctx.setup_session = None
+                    if was_live:
+                        self._clear_session_views_preserve_recipe()
+                elif was_live:
+                    self.switch_display(last_active, "archived")
 
     def _on_aggregate_done(self, xlsx: str):
         """Aggregate tamamlandiysa sadece live moddaki Viewer'i yenile."""
@@ -274,13 +260,9 @@ class MainWindow(QMainWindow):
         if self._ctx.is_live:
             self.log_tab.append(msg)
 
-    def _on_browse_session_loaded(self, session_dir: str):
-        """Viewer'dan gecmis session secildiginde tum sekmeleri guncelle."""
-        try:
-            session = MeasurementSession.load(session_dir)
-        except Exception:
-            return
-        self.switch_display(session, "archived")
+    def _append_application_log(self, msg: str):
+        if not self._ctx.is_inspecting:
+            self.log_tab.append(msg)
 
     def _on_session_deleted(self, session_dir: str):
         """Silinen session referanslarini kapat ve gorunumu bosalt."""
@@ -298,11 +280,16 @@ class MainWindow(QMainWindow):
             if active_dir == target_dir:
                 self._ctx.clear_active()
 
-        self.switch_display(None, "empty")
+        setup_session = self._ctx.setup_session
+        deleted_setup = (
+            setup_session is not None
+            and os.path.normcase(os.path.abspath(setup_session.session_dir)) == target_dir
+        )
+        self.switch_display(None, "empty", inspection_only=not deleted_setup)
 
     def _on_clear_session(self):
         """Oturumu Temizle -> display'i bosalt, aktif pipeline etkilenmez."""
-        if self._ctx.display_mode == "active":
+        if self._ctx.active_session is not None:
             return
         self.set_part_banner("")
         self.switch_display(None, "empty")
@@ -318,12 +305,9 @@ class MainWindow(QMainWindow):
             self.part_banner.setText("")
             self.part_banner.setVisible(False)
 
-    def set_simulation_mode(self, active: bool, missing: str = ""):
+    def set_simulation_mode(self, active: bool):
         self.sim_banner.setVisible(active)
-        if active:
-            self.setWindowTitle(window_title(f"[Simulation - {missing} missing]"))
-        else:
-            self.setWindowTitle(window_title())
+        self.setWindowTitle(window_title("[Simulation]" if active else ""))
 
     def closeEvent(self, event):
         if self.recipe_tab.recipe_runner and self.recipe_tab.recipe_runner.is_alive():

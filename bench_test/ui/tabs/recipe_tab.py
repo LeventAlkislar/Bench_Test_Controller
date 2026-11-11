@@ -13,9 +13,9 @@ from PyQt6.QtWidgets import (
     QDoubleSpinBox, QTextEdit, QGroupBox, QFileDialog,
     QMessageBox, QProgressBar, QTableWidget, QTableWidgetItem,
     QHeaderView, QAbstractItemView, QDialog, QDialogButtonBox,
-    QCheckBox, QFrame, QSizePolicy
+    QFrame, QSizePolicy
 )
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QSignalBlocker, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QFont
 
 from bench_test.valve.multiport import ValveController
@@ -158,6 +158,7 @@ class RecipeTab(QWidget):
         self._runtime_logging_active = False
 
         self._build()
+        self._saved_recipe_data = self._recipe_data()
         self._restore_last_recipe()
 
         self._poll_timer = QTimer(self)
@@ -704,6 +705,14 @@ class RecipeTab(QWidget):
             f"Total Time: {total:.1f} min ({self._format_elapsed_text(total)}) | Elapsed: {self._elapsed_time_text}"
         )
 
+    def _recipe_data(self) -> dict:
+        return {
+            "name": self.name_edit.text(),
+            "loop_count": self.loop_spin.value(),
+            "steps": [asdict(step) for step in self.recipe_steps],
+            "step_loops": [asdict(loop) for loop in self.step_loops],
+        }
+
     def _save_recipe(self):
         if not self.recipe_steps:
             QMessageBox.warning(self, "Warning", "No steps to save"); return
@@ -712,11 +721,10 @@ class RecipeTab(QWidget):
                           "JSON (*.json);;All files (*.*)", ".json",
                           self.name_edit.text().replace(" ", "_") + ".json")
         if path:
-            data = {"name": self.name_edit.text(), "loop_count": self.loop_spin.value(),
-                    "steps": [asdict(s) for s in self.recipe_steps],
-                    "step_loops": [asdict(l) for l in self.step_loops]}
+            data = self._recipe_data()
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
+            self._saved_recipe_data = data
             self._current_recipe_path = path                  # ← YENİ
             remember_value("last_recipe_file", path)
             if self.package_tab:
@@ -728,6 +736,30 @@ class RecipeTab(QWidget):
                          "JSON (*.json);;All files (*.*)")
         if path:
             self._load_recipe_from_path(path)
+
+    def is_busy(self) -> bool:
+        return (
+            (self.recipe_runner is not None and self.recipe_runner.is_alive())
+            or (self.watchdog is not None and self.watchdog.recovery_pending)
+            or (self.package_tab is not None and self.package_tab.sm.state in ("running", "aggregating"))
+        )
+
+    def load_package_recipe(self, session):
+        if self.is_busy():
+            return
+        path = session.get_recipe_path()
+        if not path:
+            return
+        if self._recipe_data() != self._saved_recipe_data:
+            reply = QMessageBox.question(
+                self, "Load Session",
+                "The current recipe has unsaved changes. Replace it with the package recipe?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes or self.is_busy():
+                return
+        self._load_recipe_from_path(path, persist=False)
 
     def _recipe_step_from_data(self, data: dict) -> RecipeStep:
         step_data = {k: v for k, v in data.items() if k != "dropview_scr"}
@@ -743,17 +775,22 @@ class RecipeTab(QWidget):
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            self.name_edit.setText(data.get("name", ""))
-            self.loop_spin.setValue(data.get("loop_count", 1))
-            self.recipe_steps = [
-                self._recipe_step_from_data(s)
-                for s in data.get("steps", [])]
-            self._normalize_recipe_steps()
-            self.step_loops = [StepLoop(**l) for l in data.get("step_loops", [])]
-            self._refresh_table();
-            self._update_loops_display();
-            self._update_total_time()
+            recipe = Recipe(
+                data.get("name", ""),
+                [self._recipe_step_from_data(step) for step in data.get("steps", [])],
+                data.get("loop_count", 1),
+                [StepLoop(**loop) for loop in data.get("step_loops", [])],
+            )
+            previous = Recipe(
+                self.name_edit.text(), self.recipe_steps, self.loop_spin.value(), self.step_loops,
+            )
+            try:
+                self._show_loaded_recipe(recipe)
+            except Exception:
+                self._show_loaded_recipe(previous)
+                raise
             self._current_recipe_path = path
+            self._saved_recipe_data = self._recipe_data()
             if persist:
                 remember_value("last_recipe_file", path)
             if self.package_tab:
@@ -761,6 +798,16 @@ class RecipeTab(QWidget):
             self.log_signal.emit(f"Recipe loaded: {path}")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load: {e}")
+
+    def _show_loaded_recipe(self, recipe: Recipe):
+        self.name_edit.setText(recipe.name)
+        with QSignalBlocker(self.loop_spin):
+            self.loop_spin.setValue(recipe.loop_count)
+        self.recipe_steps = recipe.steps
+        self.step_loops = recipe.step_loops
+        self._refresh_table()
+        self._update_loops_display()
+        self._update_total_time()
 
     def _restore_last_recipe(self):
         path = get_value("last_recipe_file", "")
@@ -788,13 +835,6 @@ class RecipeTab(QWidget):
         ):
             is_active = True
 
-        recipe_path = session.get_file_path("recipe")
-        if not recipe_path:
-            candidate = os.path.join(
-                session.session_dir, "measurement_parameters", "recipe.json"
-            )
-            recipe_path = candidate if os.path.isfile(candidate) else None
-
         runner_is_live = self.recipe_runner is not None and self.recipe_runner.is_alive()
         if is_active and runner_is_live:
             self.recipe_steps = self.recipe_runner.recipe.steps
@@ -804,8 +844,10 @@ class RecipeTab(QWidget):
             self._refresh_table()
             self._update_loops_display()
             self._update_total_time()
-        elif recipe_path and os.path.isfile(recipe_path):
-            self._load_recipe_from_path(recipe_path, persist=False)
+        else:
+            recipe_path = session.get_recipe_path()
+            if recipe_path:
+                self._load_recipe_from_path(recipe_path, persist=False)
         self.start_btn.setEnabled(True)
         self.pause_btn.setEnabled(is_active)
         self.stop_btn.setEnabled(is_active)
@@ -826,66 +868,50 @@ class RecipeTab(QWidget):
             pass
 
     def _start_recipe(self):
-        if self.recipe_runner and self.recipe_runner.is_alive():
+        if ((self.recipe_runner and self.recipe_runner.is_alive())
+                or (self.watchdog and self.watchdog.recovery_pending is True)):
             QMessageBox.warning(self, "Recipe Busy", "A recipe or recovery is still running.")
             return
         if not self.recipe_steps:
             QMessageBox.warning(self, "Warning", "No recipe steps")
             return
 
-        valve_a_ok = self.ctrl_a.is_connected()
-        valve_b_ok = self.ctrl_b.is_connected()
-        pump_required = any(
-            step.pump_rpm is not None and step.pump_rpm > 0
-            for step in self.recipe_steps
-        )
-        if pump_required and not (self.pump_ctrl and self.pump_ctrl.is_connected()):
-            QMessageBox.warning(
+        recipe = Recipe(self.name_edit.text(), self.recipe_steps.copy(),
+                        self.loop_spin.value(), self.step_loops.copy())
+        self._simulation_mode = False
+        devices = (("Pump", self.pump_ctrl), ("Valve A", self.ctrl_a), ("Valve B", self.ctrl_b))
+        missing = [name for name, controller in devices if controller is None or not controller.is_connected()]
+        if missing:
+            reply = QMessageBox.warning(
                 self,
-                "Pump Not Connected",
-                "This recipe contains Pump RPM values above 0, but the pump is not connected."
+                "Hardware Not Connected",
+                "The following devices are not connected:\n" + "\n".join(missing)
+                + "\n\nContinue in simulation mode?\n"
+                "All pump and valve commands will be skipped. DropView and DropSens will run normally.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
             )
-            return
-        if not valve_a_ok or not valve_b_ok:
-            missing = []
-            if not valve_a_ok: missing.append("Valve A")
-            if not valve_b_ok: missing.append("Valve B")
-            missing_str = " and ".join(missing)
-            if not valve_a_ok and not valve_b_ok:
-                reply = QMessageBox.warning(
-                    self, "Valve Not Connected",
-                    f"{missing_str} is not connected.\n\n"
-                    f"Continue in simulation mode?\n"
-                    f"(Valve steps will be skipped, other steps will run)",
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                    QMessageBox.StandardButton.No
-                )
-                if reply != QMessageBox.StandardButton.Yes:
-                    return
-                self._simulation_mode = True
-                if self._main_window:
-                    self._main_window.set_simulation_mode(True, missing_str)
-                self.log_signal.emit("⚠️ SIMULATION MODE ACTIVE — valve steps will be skipped")
-            else:
-                # Sadece biri eksik — uyar ama devam et
-                QMessageBox.warning(
-                    self, "Partial Connection",
-                    f"{missing_str} is not connected.\n"
-                    f"Steps for that valve will be skipped."
-                )
-                self._simulation_mode = False
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+        simulation_mode = bool(missing)
         # ── Paketi oluştur ────────────────────────────────────
         if self.package_tab and not self.package_tab.build_package(
                 recipe_path=self._current_recipe_path or "",
-                recipe_steps=self.recipe_steps):
+                recipe_steps=self.recipe_steps, simulation_mode=simulation_mode):
             return
         # Session .scr yolu artık hazır — COL_SCR sütununu güncelle
         if self.package_tab and self.package_tab.get_session():
             self._refresh_table()
 
+        self._simulation_mode = simulation_mode
+        if self._main_window:
+            self._main_window.set_simulation_mode(simulation_mode)
+        if self._simulation_mode:
+            self.log_signal.emit(
+                f"SIMULATION MODE ACTIVE - Missing: {', '.join(missing)}. All pump and valve commands will be skipped."
+            )
+
         self.stop_event.clear()
-        recipe = Recipe(self.name_edit.text(), self.recipe_steps.copy(),
-                        self.loop_spin.value(), self.step_loops.copy())
         # Packager'ın ürettiği patch'li .scr yolunu al
         session_scr = ""
         session_tp = ""
@@ -916,25 +942,28 @@ class RecipeTab(QWidget):
         try:
             self._recovery_run = False
             recovery_journal = None
-            if (session and measurement_mode == MEASUREMENT_MODE_SCRIPT_PAD
-                    and not self._simulation_mode
-                    and is_discrete_pad_recipe(recipe)):
-                connections = {}
-                for name, controller in (("valve_a", self.ctrl_a), ("valve_b", self.ctrl_b)):
-                    serial_port = controller.serial_port
-                    connections[name] = {
-                        "port": serial_port.port if serial_port else None,
-                        "baudrate": serial_port.baudrate if serial_port else None,
-                        "address": controller.address,
+            recovery_eligible = (session is not None and measurement_mode == MEASUREMENT_MODE_SCRIPT_PAD
+                                 and is_discrete_pad_recipe(recipe))
+            simulation_recovery = simulation_mode and recovery_eligible
+            if recovery_eligible:
+                connections = {"dropsens_com": get_value("dropsens_com", "")}
+                if not simulation_mode:
+                    for name, controller in (("valve_a", self.ctrl_a), ("valve_b", self.ctrl_b)):
+                        serial_port = controller.serial_port
+                        connections[name] = {
+                            "port": serial_port.port if serial_port else None,
+                            "baudrate": serial_port.baudrate if serial_port else None,
+                            "address": controller.address,
+                        }
+                    connections["pump"] = {
+                        key: get_value(key) for key in (
+                            "pump_type", "pump_com", "flexicon_pump_id", "flexicon_baudrate",
+                            "pump_max_rpm", "pump_speed_rpm", "pump_speed_mv",
+                        )
                     }
-                connections["dropsens_com"] = get_value("dropsens_com", "")
-                connections["pump"] = {
-                    key: get_value(key) for key in (
-                        "pump_type", "pump_com", "flexicon_pump_id", "flexicon_baudrate",
-                        "pump_max_rpm", "pump_speed_rpm", "pump_speed_mv",
-                    )
-                }
-                recovery_journal = RecoveryJournal.create(session, recipe, connections)
+                recovery_journal = RecoveryJournal.create(
+                    session, recipe, connections, simulation_recovery=simulation_recovery,
+                )
                 session.register_file("recipe_recovery", recovery_journal.path)
                 session.save()
             self.recipe_runner = RecipeRunner(
@@ -946,7 +975,8 @@ class RecipeTab(QWidget):
                 session_measurements_dir=session_measurements_dir,
                 part_number=part_number,
                 measurement_mode=measurement_mode,
-                simulation_mode=self._simulation_mode,
+                simulation_mode=simulation_mode,
+                simulation_recovery=simulation_recovery,
                 recovery_journal=recovery_journal)
             self._reset_run_metrics()
             self._prepare_runtime_change_log(session)
@@ -1001,13 +1031,16 @@ class RecipeTab(QWidget):
             raise RuntimeError("Session finalization must complete before recovery.")
         with RecipeExecutionLock():
             record = RecoveryJournal.read(path)
+            simulation_recovery = record.get("simulation_recovery", False)
             session, recipe, journal, _plan = create_recovery_package(record, path)
-        self.package_tab.package_panel.adopt_recovery_session(session)
+        self.package_tab.package_panel.adopt_recovery_session(session, simulation_recovery=simulation_recovery)
         self.recipe_steps = recipe.steps
         self.step_loops = recipe.step_loops
         self.name_edit.setText(recipe.name)
         self.loop_spin.setValue(recipe.loop_count)
-        self._simulation_mode = False
+        self._simulation_mode = simulation_recovery
+        if self._main_window:
+            self._main_window.set_simulation_mode(simulation_recovery)
         self._recovery_run = True
         self._active_measurement_mode = MEASUREMENT_MODE_SCRIPT_PAD
         self.stop_event.clear()
@@ -1019,6 +1052,7 @@ class RecipeTab(QWidget):
             session_measurements_dir=session.measurements_dir,
             part_number=session.part_number, measurement_mode=MEASUREMENT_MODE_SCRIPT_PAD,
             recovery_journal=journal, recovery_record=record, recovery_source_path=path,
+            simulation_recovery=simulation_recovery,
         )
         self._reset_run_metrics()
         self._prepare_runtime_change_log(session)
@@ -1055,20 +1089,22 @@ class RecipeTab(QWidget):
     def _stop_recipe(self):
         if self.watchdog is not None:
             self.watchdog.disarm("user_stopped")
-        if self.recipe_runner:
-            self.recipe_runner.request_stop()
-        if not (self.recipe_runner and self.recipe_runner.is_alive()):
-            self._retry_stop_measurement()
+        runner = self.recipe_runner
+        if runner is None:
             return
-        if self.recipe_runner:
-            self.recipe_runner.resume()
+        already_stopping = runner.stop_event.is_set()
+        runner.request_stop()
+        if already_stopping or not runner.is_alive():
+            self._retry_stop_measurement(runner)
+            return
+        runner.resume()
         self.start_btn.setEnabled(False)
         self.pause_btn.setEnabled(False)
         self.pause_btn.setText("Pause")
         self.stop_btn.setEnabled(False)
         self.status_lbl.setText("Stopping recipe... waiting for DropSens measurement to stop")
 
-    def _retry_stop_measurement(self):
+    def _retry_stop_measurement(self, runner: RecipeRunner):
         self.start_btn.setEnabled(False)
         self.pause_btn.setEnabled(False)
         self.pause_btn.setText("Pause")
@@ -1076,28 +1112,10 @@ class RecipeTab(QWidget):
         self.status_lbl.setText("Retrying DropSens measurement stop...")
 
         def _run():
-            if not self.dv_ctrl:
+            if runner.is_alive():
+                runner.join()
+            if runner.stop_measurement_for_recipe_stop():
                 self.status_queue.put(("stopped", "Recipe stopped."))
-                return
-            mode = ""
-            if self.package_tab and self.package_tab.get_session():
-                mode = getattr(self.package_tab.get_session(), "measurement_mode", "")
-            if mode == MEASUREMENT_MODE_CONTINUOUS_PAD:
-                ok = self.dv_ctrl.do_stop_continuous_pad(
-                    log_fn=lambda msg: self.status_queue.put(("log", msg))
-                )
-            else:
-                ok = self.dv_ctrl.do_stop_measure(
-                    log_fn=lambda msg: self.status_queue.put(("log", msg))
-                )
-            if ok:
-                self.status_queue.put(("stopped", "Recipe stopped."))
-            else:
-                self.status_queue.put((
-                    "stop_failed",
-                    "DropSens measurement could not be stopped. "
-                    "Session was not finalized; stop the measurement manually or retry Stop Recipe."
-                ))
 
         threading.Thread(target=_run, daemon=True).start()
 
@@ -1166,13 +1184,15 @@ class RecipeTab(QWidget):
                         QMessageBox.information(self, "Recipe Complete", str(data))
                     self.log_signal.emit(str(data))
                 elif msg_type in ("stopped", "watchdog_interrupted"):
+                    recovery_pending = (msg_type == "watchdog_interrupted" and self.watchdog is not None
+                                        and self.watchdog.recovery_pending)
                     self._finish_runtime_change_log()
                     self._reset_run_metrics()
                     self.status_lbl.setText(f"Aborted: {data}"); self.log_signal.emit(str(data))
                     self.start_btn.setEnabled(True)
                     self.pause_btn.setEnabled(False)
                     self.pause_btn.setText("Pause")
-                    self.stop_btn.setEnabled(False)
+                    self.stop_btn.setEnabled(bool(recovery_pending))
                     self._set_structure_editing_enabled(True)
                     self.progress.setValue(0)
                     self.progress_lbl.setText("0%")
@@ -1215,8 +1235,8 @@ class RecipeTab(QWidget):
         if stop_runner and self.recipe_runner and self.recipe_runner.is_alive():
             self.recipe_runner.request_stop()
 
-        self.recipe_steps.clear()
-        self.step_loops.clear()
+        self.recipe_steps = []
+        self.step_loops = []
         self._current_recipe_path = ""
         self._ignoring_changes = False
         self._display_experiment_params = {}
@@ -1224,6 +1244,7 @@ class RecipeTab(QWidget):
 
         self.name_edit.setText("New Recipe")
         self.loop_spin.setValue(1)
+        self._saved_recipe_data = self._recipe_data()
         self._refresh_table()
         self._reset_run_metrics()
 

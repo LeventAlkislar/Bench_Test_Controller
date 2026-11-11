@@ -20,8 +20,8 @@ from bench_test.utils.debug_log import debug_log
 
 def _get_window_pid(hwnd) -> int | None:
     try:
-        _, pid = win32process.GetWindowThreadProcessId(hwnd)
-        return pid
+        thread_id, pid = win32process.GetWindowThreadProcessId(hwnd)
+        return pid if thread_id > 0 and pid > 0 else None
     except Exception:
         return None
 
@@ -81,45 +81,62 @@ def is_foreground(hwnd) -> bool:
         return False
 
 
-def bring_to_front(hwnd, retries=3, log_fn=None) -> bool:
+def _point_belongs_to(hwnd, x, y) -> bool:
+    hit = win32gui.WindowFromPoint((x, y))
+    return bool(hit and win32gui.GetAncestor(hit, win32con.GA_ROOT) == hwnd)
+
+
+def bring_to_front(hwnd, retries=3, log_fn=None, *, click_title=True, restore_if_iconic=True) -> bool:
     if not hwnd or not win32gui.IsWindow(hwnd):
         _log_action(log_fn, "bring_to_front", hwnd, "fail", detail="invalid hwnd")
         return False
 
     for attempt in range(1, retries + 1):
+        detail = ""
         try:
-            if win32gui.IsIconic(hwnd):
+            if restore_if_iconic and win32gui.IsIconic(hwnd):
                 win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
                 time.sleep(0.2)
-            win32gui.SetForegroundWindow(hwnd)
-            time.sleep(0.15)
-            rect = win32gui.GetWindowRect(hwnd)
-            pyautogui.click((rect[0] + rect[2]) // 2, rect[1] + 10)
-            time.sleep(0.15)
+            if not is_foreground(hwnd):
+                try:
+                    win32gui.SetForegroundWindow(hwnd)
+                except Exception as exc:
+                    detail = str(exc)
+                time.sleep(0.15)
+            if click_title and not is_foreground(hwnd):
+                left, top, right, _ = win32gui.GetWindowRect(hwnd)
+                x, y = (left + right) // 2, top + 10
+                _, client_top = win32gui.ClientToScreen(hwnd, (0, 0))
+                if y < client_top and win32gui.IsWindowEnabled(hwnd) and _point_belongs_to(hwnd, x, y):
+                    pyautogui.click(x, y)
+                    time.sleep(0.15)
             if is_foreground(hwnd):
-                _log_action(log_fn, "bring_to_front", hwnd, "ok", retry=attempt)
+                _log_action(log_fn, "bring_to_front", hwnd, "ok", retry=attempt, detail=detail)
                 return True
         except Exception as exc:
-            _log_action(log_fn, "bring_to_front", hwnd, "retry", retry=attempt, detail=str(exc))
-            time.sleep(0.15)
-            continue
-        _log_action(log_fn, "bring_to_front", hwnd, "retry", retry=attempt)
+            detail = str(exc)
+        _log_action(log_fn, "bring_to_front", hwnd, "retry", retry=attempt, detail=detail)
         time.sleep(0.15)
 
     _log_action(log_fn, "bring_to_front", hwnd, "fail", retry=retries)
     return False
 
 
-def safe_click(hwnd, x, y, log_fn=None, retries=3, pre_delay=0.0, post_delay=0.0):
+def safe_click(hwnd, x, y, log_fn=None, retries=3, pre_delay=0.0, post_delay=0.0, *, focus=True):
     for attempt in range(1, retries + 1):
-        if bring_to_front(hwnd, retries=1, log_fn=log_fn):
-            if pre_delay > 0:
-                time.sleep(pre_delay)
+        if focus and not bring_to_front(hwnd, retries=1, log_fn=log_fn):
+            continue
+        if pre_delay > 0:
+            time.sleep(pre_delay)
+        if win32gui.IsWindowEnabled(hwnd) and _point_belongs_to(hwnd, x, y):
             pyautogui.click(x, y)
             if post_delay > 0:
                 time.sleep(post_delay)
             _log_action(log_fn, "click", hwnd, "ok", retry=attempt, detail=f"x={x}, y={y}")
             return
+        _log_action(log_fn, "click", hwnd, "retry", retry=attempt, detail=f"x={x}, y={y} unavailable in target")
+        if attempt < retries:
+            time.sleep(0.15)
     raise RuntimeError(f"Click failed after {retries} retries: {_window_context(hwnd)}")
 
 
@@ -160,6 +177,8 @@ def safe_sequence(hwnd, steps, log_fn=None, retries=3):
             if not bring_to_front(hwnd, retries=1, log_fn=log_fn):
                 raise RuntimeError("bring_to_front failed")
             for step in steps:
+                if not is_foreground(hwnd):
+                    raise RuntimeError("Target lost keyboard focus during the sequence.")
                 step_type = step["type"]
                 post_delay = float(step.get("post_delay", 0.0))
                 if step_type == "hotkey":
@@ -213,15 +232,17 @@ def _find_on_screen_in_region(image_path, hwnd, region, threshold):
     return offset_x + rx + max_loc[0] + w // 2, offset_y + ry + max_loc[1] + h // 2
 
 
-def safe_find_on_screen(hwnd, image_path, threshold=0.7, log_fn=None, retries=3, region=None):
+def safe_find_on_screen(hwnd, image_path, threshold=0.7, log_fn=None, retries=3, region=None, *, focus=True):
     last_error = None
     for attempt in range(1, retries + 1):
-        bring_to_front(hwnd, retries=1, log_fn=log_fn)
+        if focus:
+            bring_to_front(hwnd, retries=1, log_fn=log_fn)
         try:
             if region is not None:
                 result = _find_on_screen_in_region(image_path, hwnd, region, threshold)
             else:
-                result = find_on_screen(image_path, threshold=threshold, hwnd=hwnd, use_foreground_fallback=False)
+                result = find_on_screen(image_path, threshold=threshold, hwnd=hwnd, use_foreground_fallback=False,
+                                        within_window=not focus)
             _log_action(log_fn, "find", hwnd, "ok", retry=attempt, detail=os.path.basename(image_path))
             return result
         except Exception as exc:
@@ -239,8 +260,11 @@ def safe_wait_for_image(
     threshold=0.7,
     log_fn=None,
     region=None,
+    *,
+    focus=True,
 ):
-    bring_to_front(hwnd, retries=2, log_fn=log_fn)
+    if focus:
+        bring_to_front(hwnd, retries=2, log_fn=log_fn)
     if region is None:
         wait_for_image(
             image_path,
@@ -263,6 +287,7 @@ def safe_wait_for_image(
                 log_fn=log_fn,
                 retries=1,
                 region=region,
+                focus=focus,
             )
             _log_action(log_fn, "wait_image", hwnd, "ok", detail=os.path.basename(image_path))
             return
@@ -278,8 +303,11 @@ def safe_wait_for_image_gone(
     poll_interval=1.0,
     threshold=0.7,
     log_fn=None,
+    *,
+    focus=True,
 ):
-    bring_to_front(hwnd, retries=2, log_fn=log_fn)
+    if focus:
+        bring_to_front(hwnd, retries=2, log_fn=log_fn)
     wait_for_image_gone(
         image_path,
         timeout=timeout,

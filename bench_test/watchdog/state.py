@@ -9,12 +9,18 @@ from pathlib import Path
 import psutil
 from PyQt6.QtCore import QLockFile
 
+SIMULATION_RECOVERY_ARG = "--simulation-recovery"
+WATCHDOG_EXECUTABLE = "BenchTestWatchdog.exe"
 
-def runtime_directory():
-    installation = sys.executable if getattr(sys, "frozen", False) else str(Path(__file__).resolve().parents[2])
+
+def runtime_directory(simulation_recovery=False, *, app_executable=None):
+    installation = app_executable
+    if installation is None:
+        installation = sys.executable if getattr(sys, "frozen", False) else str(Path(__file__).resolve().parents[2])
     key = hashlib.sha256(os.path.normcase(installation).encode("utf-8")).hexdigest()[:16]
     base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
-    return Path(base) / "BenchTestController" / "watchdog" / key
+    directory = Path(base) / "BenchTestController" / "watchdog" / key
+    return directory / "simulation" if simulation_recovery else directory
 
 
 def atomic_write(path, data):
@@ -53,7 +59,22 @@ def owner_alive(identity):
         process = psutil.Process(identity["pid"])
         return (process.is_running() and abs(process.create_time() - identity["created"]) < 0.01
                 and process.status() != psutil.STATUS_ZOMBIE)
+    except psutil.AccessDenied:
+        return True
     except (psutil.Error, KeyError, TypeError, ValueError):
+        return False
+
+
+def process_exited(identity):
+    """Confirm exit of the recorded process without treating access errors as exit."""
+    if not identity:
+        return False
+    try:
+        process = psutil.Process(identity["pid"])
+        return abs(process.create_time() - identity["created"]) >= 0.01 or not process.is_running()
+    except psutil.NoSuchProcess:
+        return True
+    except (psutil.AccessDenied, KeyError, TypeError, ValueError):
         return False
 
 
@@ -63,9 +84,21 @@ def app_command(*arguments):
     return [sys.executable, "-B", str(Path(__file__).resolve().parents[2] / "main.py"), *arguments]
 
 
-def launch(*arguments):
-    return subprocess.Popen(app_command(*arguments), close_fds=True,
-                            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+def launch(*arguments, executable=None):
+    options = {"close_fds": True, "creationflags": subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0}
+    if executable is not None:
+        # Each packaged program must own its extraction directory and process lifetime.
+        options["env"] = dict(os.environ, PYINSTALLER_RESET_ENVIRONMENT="1")
+        return subprocess.Popen([executable, *arguments], **options)
+    return subprocess.Popen(app_command(*arguments), **options)
+
+
+def launch_watchdog(*arguments):
+    if getattr(sys, "frozen", False):
+        watchdog = Path(sys.executable).with_name(WATCHDOG_EXECUTABLE)
+        if watchdog.is_file():
+            return launch("--app-executable", sys.executable, *arguments, executable=str(watchdog))
+    return launch("--watchdog", *arguments)
 
 
 class ProcessLock:
@@ -103,21 +136,35 @@ def recovery_source(state, reclaim=False, allow_in_flight=False):
     from bench_test.recipe.recovery import RecoveryJournal, plan_recovery
     path = state["record_path"]
     record = RecoveryJournal.read(path)
+    simulation_recovery = state.get("simulation_recovery", False)
+    if record.get("simulation_recovery", False) != simulation_recovery:
+        raise ValueError("Watchdog and recovery record modes differ.")
     if record.get("stop_requested") or record.get("closed_by_user") or record.get("paused"):
         raise ValueError("User stop/close/pause forbids automatic recovery.")
     if record.get("status") in ("recovering", "recovery_blocked", "prepared") and state.get("recovery_source"):
         parent_path = state["recovery_source"]
         parent = RecoveryJournal.read(parent_path)
+        if parent.get("simulation_recovery", False) != simulation_recovery:
+            raise ValueError("Parent and child recovery record modes differ.")
+        child_dir = os.path.normcase(os.path.realpath(record["session_dir"]))
+        linked_child = parent.get("recovery_session")
+        same_child = bool(linked_child and os.path.normcase(os.path.realpath(linked_child)) == child_dir)
+        saved_parent = record.get("source_record")
+        if saved_parent:
+            if os.path.normcase(os.path.realpath(saved_parent)) != os.path.normcase(os.path.realpath(parent_path)):
+                raise ValueError("Recovery attempt does not belong to this parent record.")
+        elif not same_child:
+            raise ValueError("Recovery attempt does not belong to this child session.")
         if parent.get("status") == "recovering" and (reclaim or allow_in_flight):
-            expected = os.path.normcase(os.path.realpath(record["session_dir"]))
-            actual = os.path.normcase(os.path.realpath(parent.get("recovery_session", "")))
-            if expected != actual:
+            if not same_child:
                 raise ValueError("Recovery attempt does not belong to this child session.")
+            candidate = {**parent, "status": "interrupted"}
             if reclaim:
+                plan_recovery(candidate)
                 RecoveryJournal(parent_path, parent).update(status="interrupted", recovery_error="Worker process exited during recovery.")
                 parent = RecoveryJournal.read(parent_path)
             else:
-                parent = {**parent, "status": "interrupted"}
+                parent = candidate
         path, record = parent_path, parent
     plan_recovery(record)
     return str(path), record
