@@ -31,22 +31,24 @@ def sample_record():
 
 
 class RecoveryPlanTests(unittest.TestCase):
-    def test_measurement_wait_advances_without_repeating_completed_loop(self):
+    def test_measurement_wait_preserves_interrupted_step_and_remaining_duration(self):
         record = sample_record()
         plan = plan_recovery(record)
-        self.assertEqual((plan.recipe_loop, plan.sequence_index, plan.step_index), (2, 6, 6))
-        self.assertTrue(plan.skipped_measurement_wait)
+        self.assertEqual((plan.recipe_loop, plan.sequence_index, plan.step_index), (2, 5, 5))
+        self.assertFalse(plan.skipped_measurement_wait)
         self.assertEqual(record["remaining_seconds"], 2220)
 
-    def test_measurement_at_end_of_loop_advances_to_next_loop(self):
+    def test_measurement_at_end_of_loop_resumes_same_loop(self):
         record = sample_record()
         record.update(sequence_index=10, step_index=10)
         plan = plan_recovery(record)
-        self.assertEqual((plan.recipe_loop, plan.step_index), (3, 1))
+        self.assertEqual((plan.recipe_loop, plan.step_index), (2, 10))
 
-    def test_last_measurement_finishes_without_restarting_recipe(self):
+    def test_last_measurement_resumes_before_finishing_recipe(self):
         record = sample_record()
         record.update(recipe_loop=5, sequence_index=10, step_index=10)
+        self.assertFalse(plan_recovery(record).finished)
+        record["phase"] = "step_completed"
         self.assertTrue(plan_recovery(record).finished)
 
     def test_control_actions_are_not_skipped_even_during_wait(self):
@@ -71,17 +73,28 @@ class RecoveryPlanTests(unittest.TestCase):
         record["measurement_running"] = False
         self.assertEqual(plan_recovery(record).sequence_index, 5)
 
-    def test_start_measurement_can_only_be_skipped_after_successful_start(self):
+    def test_measurement_wait_requires_valid_saved_remaining_duration(self):
+        for remaining in (None, True, -1, 5401, float("nan"), float("inf")):
+            record = sample_record()
+            record["remaining_seconds"] = remaining
+            with self.subTest(remaining=remaining), self.assertRaises(ValueError):
+                plan_recovery(record)
+        record = sample_record()
+        record["remaining_seconds"] = 0
+        self.assertEqual(plan_recovery(record).sequence_index, 5)
+
+    def test_start_measurement_step_keeps_cursor_during_start_and_wait(self):
         record = sample_record()
         record["active_step"]["dropview_action"] = "start_discrete_pad"
-        self.assertEqual(plan_recovery(record).sequence_index, 6)
+        self.assertEqual(plan_recovery(record).sequence_index, 5)
         record["phase"] = "measurement_start"
         self.assertEqual(plan_recovery(record).sequence_index, 5)
 
     def test_live_edit_does_not_redefine_the_already_running_step(self):
         record = sample_record()
         record["recipe"]["steps"][4]["dropview_action"] = "stop_discrete_pad"
-        self.assertEqual(plan_recovery(record).sequence_index, 6)
+        record["recipe"]["steps"][4]["duration_minutes"] = 1
+        self.assertEqual(plan_recovery(record).sequence_index, 5)
         record["active_step"]["dropview_action"] = "stop_discrete_pad"
         record["recipe"]["steps"][4]["dropview_action"] = "none"
         self.assertEqual(plan_recovery(record).sequence_index, 5)
@@ -92,7 +105,7 @@ class RecoveryPlanTests(unittest.TestCase):
         record = sample_record()
         record.update(recipe=asdict(recipe), recipe_loop=1, sequence_index=4, step_index=2)
         plan = plan_recovery(record)
-        self.assertEqual((plan.recipe_loop, plan.sequence_index, plan.step_index), (1, 5, 3))
+        self.assertEqual((plan.recipe_loop, plan.sequence_index, plan.step_index), (1, 4, 2))
 
     def test_completed_and_disabled_steps_advance_exactly_once(self):
         for phase in ("step_completed", "step_skipped"):
@@ -249,6 +262,7 @@ class RunnerRecordingTests(unittest.TestCase):
         def step(*args):
             count[0] += 1
             if count[0] == 5:
+                self.runner._active_step.duration_minutes = 2
                 self.runner.measurement_running = True
                 self.runner.active_measurement_kind = "discrete_pad"
                 self.runner.checkpoint("waiting", remaining_seconds=99)
@@ -258,7 +272,7 @@ class RunnerRecordingTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             self.runner.run()
         plan = plan_recovery(self.read())
-        self.assertEqual((plan.recipe_loop, plan.sequence_index), (2, 3))
+        self.assertEqual((plan.recipe_loop, plan.sequence_index), (2, 2))
 
     def test_unexpected_failure_reports_error_and_preserves_operation_phase(self):
         def step(*args):
@@ -281,6 +295,7 @@ class RunnerRecordingTests(unittest.TestCase):
 
     def test_watchdog_interrupt_preserves_pump_and_measurement_cursor(self):
         def step(*args):
+            self.runner._active_step.duration_minutes = 2
             self.runner.measurement_running = True
             self.runner.active_measurement_kind = "discrete_pad"
             self.runner.checkpoint("waiting", remaining_seconds=99)
@@ -293,13 +308,100 @@ class RunnerRecordingTests(unittest.TestCase):
         saved = self.read()
         self.assertEqual(saved["status"], "interrupted")
         self.assertFalse(saved["stop_requested"])
-        self.assertEqual(plan_recovery(saved).sequence_index, 2)
+        self.assertEqual(plan_recovery(saved).sequence_index, 1)
         self.assertIn(("watchdog_interrupted", "connection lost"), list(self.runner.status_queue.queue))
 
     def test_gui_checkpoint_does_not_make_a_hung_worker_look_alive(self):
         original = self.runner.worker_heartbeat
         self.runner.checkpoint()
         self.assertEqual(self.runner.worker_heartbeat, original)
+
+    def test_recovery_freezes_wait_before_pump_io_and_repeated_requests(self):
+        self.runner.checkpoint("waiting", status="running", remaining_seconds=99)
+        self.runner._wait_deadline = 180
+        with patch("bench_test.recipe.runner.time.monotonic", return_value=100):
+            self.runner.request_recovery("connection lost")
+        saved = self.read()
+        self.assertEqual(saved["remaining_seconds"], 80)
+        self.assertTrue(saved["recovery_hold"])
+        self.assertFalse(saved["paused"])
+        self.assertFalse(saved["stop_requested"])
+        with patch("bench_test.recipe.runner.time.monotonic", return_value=150):
+            self.runner.request_recovery("second observation")
+            self.runner.checkpoint("step_completed", remaining_seconds=0)
+            self.runner._finish_watchdog_interrupt()
+        saved = self.read()
+        self.assertEqual(saved["phase"], "waiting")
+        self.assertEqual(saved["remaining_seconds"], 80)
+        self.assertEqual(saved["error"], "connection lost")
+
+    def test_unverified_pump_stop_blocks_automatic_recovery(self):
+        pump = Mock()
+        pump.is_connected.return_value = True
+        pump.stop_and_confirm.return_value = False
+        self.runner.pump_ctrl = pump
+        self.runner._requested_settings["pump_rpm"] = 12
+        self.runner.request_recovery("connection lost")
+        self.runner._finish_watchdog_interrupt()
+        saved = self.read()
+        self.assertEqual(saved["status"], "operator_required")
+        self.assertEqual(saved["pump_recovery_stop"], "unverified")
+        self.assertEqual(saved["requested_settings"]["pump_rpm"], 12)
+        with self.assertRaises(ValueError):
+            plan_recovery(saved)
+
+    def test_wait_loop_records_fault_time_before_holding_pump(self):
+        now = [100.0]
+        self.recipe.steps = [RecipeStep(0, 2)]
+        self.recipe.loop_count = 1
+        pump = Mock()
+        pump.is_connected.return_value = True
+        self.runner.pump_ctrl = pump
+        self.runner._requested_settings["pump_rpm"] = 12
+        self.runner._safe_stop_pump = Mock()
+
+        def fault():
+            now[0] = 130.0
+            self.runner.request_recovery("connection lost")
+            return False
+
+        def stop_pump():
+            self.assertEqual(self.read()["remaining_seconds"], 90)
+            self.assertEqual(self.read()["phase"], "waiting")
+            now[0] = 170.0
+            return True
+
+        pump.stop_and_confirm.side_effect = stop_pump
+        self.runner._check_discrete_measurement_progress = fault
+        with patch("bench_test.recipe.runner.time.monotonic", side_effect=lambda: now[0]):
+            self.runner.run()
+        pump.stop_and_confirm.assert_called_once()
+        saved = self.read()
+        self.assertEqual(saved["remaining_seconds"], 90)
+        self.assertEqual(saved["requested_settings"]["pump_rpm"], 12)
+        self.assertEqual(saved["status"], "interrupted")
+
+    def test_fault_during_last_operation_does_not_finish_recipe(self):
+        self.recipe.steps = [RecipeStep(0, 0)]
+        self.recipe.loop_count = 1
+
+        def step(*args):
+            self.runner.checkpoint("measurement_stop")
+            self.runner.request_recovery("connection lost")
+            return True
+
+        self.runner._execute_step = step
+        self.runner.run()
+        self.assertEqual(self.read()["status"], "interrupted")
+        self.assertEqual(self.read()["phase"], "measurement_stop")
+        self.assertFalse(any(kind == "finished" for kind, _ in self.runner.status_queue.queue))
+
+    def test_user_stop_takes_priority_over_recovery_hold(self):
+        self.runner.request_recovery("connection lost")
+        self.runner.request_stop()
+        self.runner._finish_watchdog_interrupt()
+        self.assertEqual(self.read()["status"], "user_stopped")
+        self.assertTrue(self.read()["stop_requested"])
 
     def test_pause_and_resume_are_recorded(self):
         self.runner.pause()
@@ -422,7 +524,7 @@ class RunnerRecordingTests(unittest.TestCase):
         self.runner.active_measurement_kind = "discrete_pad"
         self.runner.current_loop_index = self.runner.current_sequence_index = self.runner.current_step_index = 1
         self.runner._active_step = self.recipe.steps[0]
-        self.runner.checkpoint("waiting", status="running")
+        self.runner.checkpoint("waiting", status="running", remaining_seconds=0)
         with patch("bench_test.recipe.runner.time.monotonic", side_effect=[1000, 1060, 1063, 1066, 1066]), \
                 patch("bench_test.dropview.automator.get_discrete_measurement_state", return_value={"state": "stopped"}):
             self.assertTrue(self.runner._check_discrete_measurement_progress())
@@ -430,7 +532,7 @@ class RunnerRecordingTests(unittest.TestCase):
             self.assertTrue(self.runner._check_discrete_measurement_progress())
             self.assertFalse(self.runner._check_discrete_measurement_progress())
         self.assertTrue(self.runner._watchdog_interrupt.is_set())
-        self.assertEqual(plan_recovery(self.read()).sequence_index, 2)
+        self.assertEqual(plan_recovery(self.read()).sequence_index, 1)
         self.assertFalse(any(kind == "error" for kind, _ in list(self.runner.status_queue.queue)))
 
     def test_continuous_pad_is_not_checked_as_discrete(self):

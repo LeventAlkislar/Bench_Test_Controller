@@ -117,7 +117,7 @@ class ExecutorTests(unittest.TestCase):
 
         self.assertTrue(runner.simulation_mode)
         self.assertTrue(RecoveryJournal.read(journal.path)["simulation_recovery"])
-        self.assertEqual((runner.current_loop_index, runner.current_step_index), (1, 3))
+        self.assertEqual((runner.current_loop_index, runner.current_step_index), (1, 2))
         self.assertTrue(runner._resume_measurement)
         self.assertTrue(runner._restore_pump_at_step)
         self.dv.do_reconcile_discrete_recovery.assert_called_once()
@@ -158,7 +158,7 @@ class ExecutorTests(unittest.TestCase):
         self.assertEqual(Path(self.original.path).read_bytes(), source_record)
         self.assertEqual(session.experiment_params, {"temperature": 25})
         self.assertEqual(recipe.loop_count, 2)
-        self.assertEqual(plan.step_index, 3)
+        self.assertEqual(plan.step_index, 2)
         self.assertTrue(session.get_file_path("recovery_origin"))
         self.assertTrue(Path(journal.path).is_file())
 
@@ -234,21 +234,21 @@ class ExecutorTests(unittest.TestCase):
             return True
         runner._execute_step = execute
         runner.run()
-        self.assertEqual(visited, [(1, 3), (1, 4), (1, 5)] + [(2, n) for n in range(1, 6)])
+        self.assertEqual(visited, [(1, 2), (1, 3), (1, 4), (1, 5)] + [(2, n) for n in range(1, 6)])
         self.assertEqual(self.record()["status"], "superseded")
         self.assertEqual(RecoveryJournal.read(journal.path)["status"], "completed")
         self.dv.do_start_measure.assert_not_called()  # Step execution was replaced above.
         self.a.switch_port.assert_not_called()
         self.b.switch_state.assert_not_called()
 
-    def test_verified_external_stop_does_not_restart_when_the_next_step_is_stop(self):
+    def test_verified_external_stop_resumes_current_wait_before_next_stop_step(self):
         self.recipe.steps[2] = RecipeStep(0, 0, dropview_action="stop_discrete_pad")
         self.original.update(recipe=asdict(self.recipe), status="interrupted", observed_measurement_state="stopped")
         runner, _, _ = self.make_runner()
         runner._prepare_recovery()
 
-        self.assertEqual(runner.current_step_index, 3)
-        self.assertFalse(runner._resume_measurement)
+        self.assertEqual(runner.current_step_index, 2)
+        self.assertTrue(runner._resume_measurement)
         self.dv.do_start_measure.assert_not_called()
 
     def test_stale_source_record_blocks_before_any_device_command(self):
@@ -291,7 +291,7 @@ class ExecutorTests(unittest.TestCase):
         self.dv.do_reconcile_discrete_recovery.assert_not_called()
         self.assertEqual(self.record()["recovery_resume_basis"], "process_exited")
         self.assertTrue(self.record()["recovery_connection_restored"])
-        self.assertEqual(runner.current_step_index, 3)
+        self.assertEqual(runner.current_step_index, 2)
         self.assertTrue(runner._resume_measurement)
         self.dv.do_start_measure.assert_not_called()
 
@@ -322,7 +322,7 @@ class ExecutorTests(unittest.TestCase):
             log_fn=runner._log, allow_cleanup=False, cancelled=runner._interrupted)
         self.assertEqual(self.record()["recovery_resume_basis"], "process_exited")
         self.assertTrue(self.record()["recovery_connection_restored"])
-        self.assertEqual(runner.current_step_index, 3)
+        self.assertEqual(runner.current_step_index, 2)
         self.assertTrue(runner._resume_measurement)
 
     def test_verified_process_exit_is_saved_even_if_relaunch_fails(self):
@@ -369,7 +369,7 @@ class ExecutorTests(unittest.TestCase):
         self.assertEqual(self.record()["status"], "interrupted")
         self.assertEqual(self.record()["recovery_resume_basis"], "editor_idle")
         self.assertFalse(self.record()["recovery_connection_restored"])
-        self.assertEqual(plan_recovery(self.record()).sequence_index, 3)
+        self.assertEqual(plan_recovery(self.record()).sequence_index, 2)
         self.dv.do_start_dropview.return_value = True
         retry, _, _ = self.make_runner()
         retry._execute_step = Mock(return_value=True)
@@ -398,7 +398,7 @@ class ExecutorTests(unittest.TestCase):
                                         "recovery_source": self.original.path}, reclaim=True)
         self.assertEqual(path, self.original.path)
         self.assertEqual(record["status"], "interrupted")
-        self.assertEqual(plan_recovery(record).sequence_index, 3)
+        self.assertEqual(plan_recovery(record).sequence_index, 2)
         self.dv.do_start_measure.assert_not_called()
 
     def test_process_exit_during_new_start_does_not_replay_it_without_stop_evidence(self):
@@ -415,7 +415,7 @@ class ExecutorTests(unittest.TestCase):
         self.assertEqual(self.record()["status"], "superseded")
         self.assertTrue(record["measurement_restart_pending"])
         self.assertFalse(record["measurement_running"])
-        self.assertEqual(plan_recovery(record).sequence_index, 3)
+        self.assertEqual(plan_recovery(record).sequence_index, 2)
         retry, destination, _ = self.make_runner(path)
         self.dv.reset_mock(side_effect=True)
         self.dv.do_reconcile_discrete_recovery.return_value = False
@@ -501,6 +501,79 @@ class ExecutorTests(unittest.TestCase):
         self.dv.do_reconcile_discrete_recovery.assert_not_called()
         self.assertEqual(RecoveryJournal.read(journal.path)["pump_recovery_stop"], "unverified")
 
+    def test_interrupted_wait_restarts_once_and_uses_saved_step_after_live_edit(self):
+        for action in ("none", "start_discrete_pad", "start_measure"):
+            with self.subTest(action=action):
+                active = RecipeStep(3, 20, valve_b_state=2, pump_rpm=12, dropview_action=action)
+                self.recipe.steps[1] = RecipeStep(4, 1, pump_rpm=8, dropview_action=action)
+                self.original.update(status="interrupted", recipe=asdict(self.recipe),
+                                     active_step=asdict(active), remaining_seconds=480,
+                                     requested_settings={"valve_a": 3, "valve_b": 2, "pump_rpm": 12})
+                self.dv.reset_mock()
+                self.pump.reset_mock()
+                self.pump.running_state.return_value = True
+                self.pump.run.return_value = []
+                runner, journal, session = self.make_runner()
+                now = [100.0]
+
+                def verify_csv():
+                    now[0] += 300
+                    return True
+
+                def advance(seconds):
+                    now[0] += 60
+
+                with patch("bench_test.recipe.runner.time.monotonic", side_effect=lambda: now[0]), \
+                        patch("bench_test.recipe.runner.time.time", side_effect=lambda: now[0]), \
+                        patch("bench_test.recipe.runner.time.sleep", side_effect=advance), \
+                        patch.object(runner, "_wait_for_recovery_csv", side_effect=verify_csv), \
+                        patch.object(runner, "_check_discrete_measurement_progress", return_value=True):
+                    runner._prepare_recovery()
+                    saved = RecoveryJournal.read(journal.path)
+                    self.assertEqual(saved["active_step"], asdict(active))
+                    self.assertEqual(saved["remaining_seconds"], 480)
+                    self.assertTrue(runner._execute_step(runner._active_step, 2, 5,
+                                                        recovery_options=runner._recovery_options(runner._active_step)))
+                self.assertEqual(now[0], 100 + 300 + 480)
+                self.dv.do_start_measure.assert_called_once_with(session.get_file_path("script"), log_fn=runner._log)
+                self.pump.set_speed_rpm.assert_called_once_with(12)
+                self.pump.run.assert_called_once_with("FWD")
+                self.a.switch_port.assert_not_called()
+                self.b.switch_state.assert_not_called()
+                progress = [data for kind, data in runner.status_queue.queue if kind == "progress"]
+                self.assertEqual(progress[0]["remaining_min"], 8)
+                self.assertEqual(progress[0]["elapsed_min"], 12)
+                self.assertEqual(progress[0]["duration_min"], 20)
+                self.assertTrue(all(data["step"] == 2 for data in progress))
+
+    def test_second_interruption_carries_reduced_remaining_time_to_next_package(self):
+        runner, journal, _ = self.make_runner()
+        now = [100.0]
+
+        def advance(seconds):
+            now[0] += 30
+
+        def observe():
+            if now[0] >= 130:
+                runner.request_recovery("second fault")
+                return False
+            return True
+
+        with patch("bench_test.recipe.runner.time.monotonic", side_effect=lambda: now[0]), \
+                patch("bench_test.recipe.runner.time.time", side_effect=lambda: now[0]), \
+                patch("bench_test.recipe.runner.time.sleep", side_effect=advance), \
+                patch.object(runner, "_check_discrete_measurement_progress", side_effect=observe):
+            runner.run()
+        saved = RecoveryJournal.read(journal.path)
+        self.assertEqual(saved["status"], "interrupted")
+        self.assertEqual(saved["remaining_seconds"], 90)
+        self.assertEqual((saved["recipe_loop"], saved["sequence_index"]), (1, 2))
+        retry, child, _ = self.make_runner(journal.path)
+        retry._prepare_recovery()
+        self.assertEqual(retry.current_step_index, 2)
+        self.assertEqual(retry._recovery_options(retry._active_step)["remaining_seconds"], 90)
+        self.assertEqual(RecoveryJournal.read(child.path)["remaining_seconds"], 90)
+
     def test_disconnection_recovers_through_supervisor_client_and_new_package(self):
         from PyQt6.QtWidgets import QApplication
         from bench_test.watchdog.client import WatchdogClient
@@ -575,7 +648,9 @@ class ExecutorTests(unittest.TestCase):
                 state_machine.state = "idle"
                 client._tick()
                 runner, journal, session = recovered[0]
-                runner.run()
+                with patch("bench_test.recipe.runner.time.time", side_effect=lambda: now[0]), \
+                        patch("bench_test.recipe.runner.time.sleep", side_effect=lambda seconds: now.__setitem__(0, now[0] + seconds)):
+                    runner.run()
                 result = RecoveryJournal.read(journal.path)
                 self.assertEqual(result["status"], "completed", result.get("error"))
                 self.assertTrue(runner.recovery_continued)
@@ -610,12 +685,14 @@ class ExecutorTests(unittest.TestCase):
         self.original.update(recipe=asdict(self.recipe), recipe_loop=2, sequence_index=3,
                              step_index=3, active_step=asdict(self.recipe.steps[2]))
         runner, journal, _ = self.make_runner()
-        runner._execute_step = Mock()
+        runner._execute_step = Mock(return_value=True)
         runner.run()
-        runner._execute_step.assert_not_called()
+        runner._execute_step.assert_called_once()
+        self.assertEqual(runner._execute_step.call_args.args[1], 3)
+        self.assertEqual(runner._execute_step.call_args.args[4]["remaining_seconds"], 120)
         self.dv.do_start_measure.assert_not_called()
-        self.pump.stop.assert_not_called()
-        self.assertEqual(RecoveryJournal.read(journal.path)["status"], "completed_after_interruption")
+        self.pump.stop.assert_called_once()  # Normal completion after the final wait.
+        self.assertEqual(RecoveryJournal.read(journal.path)["status"], "completed")
 
     def test_stop_phase_does_not_repeat_valves_pump_or_wait(self):
         step = RecipeStep(3, 90, valve_b_state=2, pump_rpm=10, dropview_action="stop_discrete_pad")

@@ -136,6 +136,8 @@ class RecipeRunner(threading.Thread):
         self._last_measurement_running = False
         self._watchdog_interrupt = threading.Event()
         self._watchdog_reason = ""
+        self._wait_deadline = None
+        self._recovery_hold = None
         self._watchdog_measurement_state = None
         self._measurement_probe_at = -float("inf")
         self._pad_activity_since = 0.0
@@ -174,6 +176,10 @@ class RecipeRunner(threading.Thread):
             self._write_checkpoint(phase, **changes)
 
     def _write_checkpoint(self, phase=None, **changes):
+        if self._recovery_hold is not None:
+            phase = self._recovery_hold["phase"]
+            changes.update(self._recovery_hold)
+            changes.pop("phase")
         if self.measurement_running and not self._last_measurement_running:
             self.measurement_epoch = time.monotonic()
         self._last_measurement_running = self.measurement_running
@@ -217,8 +223,15 @@ class RecipeRunner(threading.Thread):
 
     def request_recovery(self, reason):
         """Cooperative interrupt, deliberately distinct from the user's Stop."""
-        self._watchdog_reason = str(reason)
-        self._watchdog_interrupt.set()
+        with self._checkpoint_lock:
+            if self._watchdog_interrupt.is_set() or self.stop_event.is_set():
+                return
+            self._watchdog_reason = str(reason)
+            self._watchdog_interrupt.set()
+            self._recovery_hold = {"phase": self._recovery_phase, "recovery_hold": True}
+            if self._recovery_phase == "waiting" and self._wait_deadline is not None:
+                self._recovery_hold["remaining_seconds"] = max(0.0, self._wait_deadline - time.monotonic())
+            self.checkpoint(status="interrupted", error=self._watchdog_reason)
 
     def _interrupted(self):
         return self.stop_event.is_set() or self._watchdog_interrupt.is_set()
@@ -259,9 +272,12 @@ class RecipeRunner(threading.Thread):
         return stopped
 
     def _finish_watchdog_interrupt(self):
-        self._hold_pump_for_recovery()
-        status = ("operator_required" if self._watchdog_measurement_state == EDITOR_CONTROL_UNVERIFIED
-                  and (not self.simulation_mode or self.simulation_recovery) else "interrupted")
+        pump_stopped = self._hold_pump_for_recovery()
+        blocked = (not pump_stopped or (self._watchdog_measurement_state == EDITOR_CONTROL_UNVERIFIED
+                   and (not self.simulation_mode or self.simulation_recovery)))
+        status = "operator_required" if blocked else "interrupted"
+        if self.stop_event.is_set():
+            status = "user_stopped"
         self.checkpoint(status=status, error=self._watchdog_reason,
                         observed_measurement_state=self._watchdog_measurement_state)
         self.status_queue.put(("watchdog_interrupted", self._watchdog_reason))
@@ -777,6 +793,8 @@ class RecipeRunner(threading.Thread):
             self._log(f"SIMULATED: Valve A -> Port {step.port} (hardware command skipped)")
 
         # ── Valf B ────────────────────────────────────────────
+        if self._interrupted():
+            return False
         if (step.valve_b_state > 0 and not options.get("skip_valve_b")
                 and self.controller_b and self.controller_b.is_connected()):
             self._requested_settings["valve_b"] = step.valve_b_state
@@ -806,6 +824,8 @@ class RecipeRunner(threading.Thread):
             self._log(f"SIMULATED: Valve B -> {state_name} (hardware command skipped)")
 
         # ── Pompa ─────────────────────────────────────────────
+        if self._interrupted():
+            return False
         pump_step = step
         restore_pump = self._restore_pump_at_step
         if restore_pump and step.pump_rpm is None:
@@ -935,7 +955,11 @@ class RecipeRunner(threading.Thread):
             self.status_queue.put(("running", running_msg))
     
             duration_sec = options.get("remaining_seconds", step.duration_minutes * 60)
-            self.checkpoint("waiting", remaining_seconds=duration_sec)
+            with self._checkpoint_lock:
+                if self._interrupted():
+                    return False
+                self._wait_deadline = time.monotonic() + duration_sec
+                self.checkpoint("waiting", remaining_seconds=duration_sec)
             if self._recovery_prepared and not self._journal_failed:
                 self.recovery_continued = True
             start_t = time.time()
@@ -953,6 +977,8 @@ class RecipeRunner(threading.Thread):
                         return False
                     paused_sec = time.time() - pause_t
                     start_t += paused_sec
+                    with self._checkpoint_lock:
+                        self._wait_deadline += paused_sec
                     if self.recipe_start_t:
                         self.recipe_start_t += paused_sec
                 elapsed   = time.time() - start_t
@@ -964,7 +990,7 @@ class RecipeRunner(threading.Thread):
                 self.status_queue.put(("progress", {
                     "step": step_num,
                     "total_steps": total_steps,
-                    "elapsed_min": elapsed / 60,
+                    "elapsed_min": (step.duration_minutes * 60 - duration_sec + elapsed) / 60,
                     "overall_elapsed_min": (time.time() - self.recipe_start_t) / 60 if self.recipe_start_t else elapsed / 60,
                     "remaining_min": remaining,
                     "remaining_minutes": remaining,
@@ -1092,7 +1118,8 @@ class RecipeRunner(threading.Thread):
                                  or current.get("measurement_resume_required") is True) and (
                 target.dropview_action in ("none", "start_dropview")
                 or (same_step and current["phase"] == "waiting"
-                    and target.dropview_action in ("stop_measure", "stop_discrete_pad", "exit_dropview")))
+                    and target.dropview_action in ("start_measure", "start_discrete_pad",
+                                                   "stop_measure", "stop_discrete_pad", "exit_dropview")))
             if not dropview_reconnected and (needs_measurement
                     or target.dropview_action in ("none", "start_measure", "start_discrete_pad")
                     or (same_step and current["phase"] == "waiting" and target.dropview_action == "start_dropview")):
@@ -1247,6 +1274,9 @@ class RecipeRunner(threading.Thread):
                         self.status_queue.put(("stopped", "Recipe stopped."))
                     return
                 with self._checkpoint_lock:
+                    if self._watchdog_interrupt.is_set() and not self.stop_event.is_set():
+                        self._finish_watchdog_interrupt()
+                        return
                     self.current_loop_index = loop_i + 1
                     self.current_step_index = idx + 1
                     self.current_sequence_index = step_num
@@ -1277,6 +1307,8 @@ class RecipeRunner(threading.Thread):
                     ok = self._execute_step(step, step_num, total, loop_info, self._recovery_options(step))
                 else:
                     ok = self._execute_step(step, step_num, total, loop_info)
+                if self._interrupted():
+                    ok = False
                 if not ok:
                     if self._watchdog_interrupt.is_set() and not self.stop_event.is_set():
                         self._finish_watchdog_interrupt()
@@ -1304,6 +1336,9 @@ class RecipeRunner(threading.Thread):
                     self.status_queue.put(("stopped", "Recipe stopped."))
             elif self._watchdog_interrupt.is_set():
                 self._finish_watchdog_interrupt()
+            return
+        if self._watchdog_interrupt.is_set() and not self.stop_event.is_set():
+            self._finish_watchdog_interrupt()
             return
         self._safe_stop_pump("RECIPE FINISH")
         self.checkpoint(status="completed")

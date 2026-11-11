@@ -195,22 +195,16 @@ def plan_recovery(record: dict) -> RecoveryPlan:
     validate_recovery_step(active_step)
     if not is_discrete_pad_recipe(Recipe("active", [active_step])):
         raise ValueError("The interrupted step is not a Discrete PAD step.")
-    skip_wait = (
-        phase == "waiting"
-        and record.get("measurement_running") is True
-        and record.get("active_measurement_kind") == "discrete_pad"
-        and active_step.dropview_action in ("none", "start_measure", "start_discrete_pad")
-    )
-    if phase == "waiting" and not skip_wait:
+    if phase == "waiting":
         remaining = record.get("remaining_seconds")
         if (type(remaining) not in (int, float) or not math.isfinite(remaining)
                 or not 0 <= remaining <= active_step.duration_minutes * 60):
-            raise ValueError("Invalid remaining duration for the interrupted control/wait step.")
-    if phase in ("step_completed", "step_skipped") or skip_wait:
+            raise ValueError("Invalid remaining duration for the interrupted wait step.")
+    if phase in ("step_completed", "step_skipped"):
         sequence += 1
         if sequence > len(expanded):
             loop += 1
             sequence = 1
     if loop > recipe.loop_count:
-        return RecoveryPlan(loop, 0, 0, skip_wait, finished=True)
-    return RecoveryPlan(loop, sequence, expanded[sequence - 1] + 1, skip_wait)
+        return RecoveryPlan(loop, 0, 0, finished=True)
+    return RecoveryPlan(loop, sequence, expanded[sequence - 1] + 1)

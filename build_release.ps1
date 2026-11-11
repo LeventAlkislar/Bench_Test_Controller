@@ -13,6 +13,7 @@ $Python = Join-Path $Root ".venv\Scripts\python.exe"
 $PyInstaller = Join-Path $Root ".venv\Scripts\pyinstaller.exe"
 $VersionFile = Join-Path $Root "bench_test\version.py"
 $ExeName = "BenchTestController_v$Version"
+$WatchdogName = "BenchTestWatchdog_v$Version"
 
 if (-not (Test-Path $Python)) {
     throw "Python not found: $Python"
@@ -67,11 +68,11 @@ Invoke-ReleaseBuild `
     --windowed `
     --clean `
     -y `
-    --name BenchTestWatchdog `
+    --name $WatchdogName `
     --exclude-module PIL._avif `
     watchdog_main.py
 
 $OutputExe = Join-Path $Root "dist\$ExeName.exe"
-$WatchdogExe = Join-Path $Root "dist\BenchTestWatchdog.exe"
+$WatchdogExe = Join-Path $Root "dist\$WatchdogName.exe"
 Write-Host "Build completed: $OutputExe"
 Write-Host "Watchdog executable: $WatchdogExe"

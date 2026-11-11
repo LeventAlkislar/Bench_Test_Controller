@@ -23,15 +23,16 @@ and reconciliation belong to the recovery executor in phase 2.
 
 `plan_recovery()` only computes a cursor and has no device/UI effects:
 
-- A running Discrete PAD measurement in the wait phase advances to the next
-  sequence item, ignoring its remaining time.
+- An interrupted Discrete PAD wait resumes the same sequence item with its
+  saved remaining duration, including the final step of the final loop.
+  Missing or invalid remaining durations block recovery.
 - Start DropView, Exit DropView and measurement stop actions are never skipped
   merely because their step contains a wait.
 - Unfinished device operations remain at the same step. Replaying their device
   commands is **not** authorized by a cursor alone; phase 2 must reconcile them.
 - A completed or disabled step advances exactly once.
 - Outer-loop boundaries and expanded inner loops retain their position.
-- The last step of the final loop produces `finished`, not a fresh recipe run.
+- A completed last step of the final loop produces `finished`.
 - A user stop, normal finish, pause, unsupported mode or invalid record is
   rejected as an automatic recovery candidate.
 
@@ -79,8 +80,11 @@ Valve reconnection uses saved serial settings and position queries, never reset
 or home. A different position blocks recovery unless that exact movement was
 interrupted and still needs its target applied. A target already reached is not
 commanded again. Settings applied before an interrupted operation are not
-replayed. A control step's wait retains its recorded remaining duration; a
-running measurement wait advances according to the phase 1 rule.
+replayed. Both control and measurement waits retain their recorded remaining
+duration. Recovery restarts an interrupted measurement in the new package,
+including a waiting Start Discrete PAD step. The remaining-duration countdown
+starts after the first new CSV is verified. Recovery and verification time do
+not consume the saved wait. Live edits apply on the next visit to the step.
 
 An inherited measurement is stopped and verified before a fresh measurement is
 started in the new package, including when the next step has action `none`.
@@ -112,6 +116,19 @@ failure paths, lock exclusion, and an offscreen Qt recovery-entry integration.
 No test opens a serial port or operates DropView. Real-device validation is still
 required before unattended use.
 
+## Release pairing
+
+`build_release.ps1 VERSION` produces `BenchTestController_vVERSION.exe` and
+`BenchTestWatchdog_vVERSION.exe`. Keep both files from the same build in the
+same directory. Use a new version number for each distributed release.
+Packaged BTC requires the matching versioned watchdog; it does not use an old
+unversioned watchdog or fall back to its embedded supervisor when WD is missing.
+Before supervision starts, BTC probes WD's embedded `APP_VERSION` with a
+15-second timeout in a background thread. A missing, incompatible or unresponsive
+WD is reported through the watchdog status and log. Renaming a different version
+does not satisfy the probe. WD also checks `--app-version` at normal startup.
+Source runs retain the `main.py --watchdog` path.
+
 ## Phase 3 — independent supervision (implemented; hardware validation pending)
 
 Journal-backed Discrete PAD recipes automatically arm `WatchdogClient` in both
@@ -123,7 +140,8 @@ Test sessions are saved under `_watchdog_simulation` in the selected package
 root. Watchdog state uses a separate `simulation` subdirectory. Simulation
 leaves Windows Update policy alone. Continuous PAD and CV are
 outside this watchdog scope. The client
-starts the same interpreter/executable with `--watchdog`; this separate process
+starts the matching standalone WD for packaged releases, or the same interpreter
+with `--watchdog` for source runs; this separate process
 observes JSON state and requests cooperative interruption. It never sends device
 commands. If the owner remains hung, it checks the latest recoverable record and
 PID creation time before terminating that application, then starts

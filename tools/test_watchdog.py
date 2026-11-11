@@ -27,19 +27,23 @@ from bench_test.watchdog.windows_update import WindowsUpdateGuard, POLICY, EFFEC
 class PackagedWatchdogTests(unittest.TestCase):
     def test_packaged_watchdog_receives_exact_versioned_application_path(self):
         btc = str(Path.cwd() / "release files" / "BenchTestController_v18.0.2.exe")
-        watchdog = str(Path(btc).with_name("BenchTestWatchdog.exe"))
+        watchdog = str(Path(btc).with_name(watchdog_state.WATCHDOG_EXECUTABLE))
         with patch.object(sys, "frozen", True, create=True), patch.object(sys, "executable", btc), \
                 patch.object(Path, "is_file", return_value=True), \
+                patch.object(watchdog_state.subprocess, "run", return_value=SimpleNamespace(returncode=0)) as probe, \
                 patch.object(watchdog_state.subprocess, "Popen") as popen:
             watchdog_state.launch_watchdog(watchdog_state.SIMULATION_RECOVERY_ARG)
         self.assertEqual(popen.call_args.args[0], [
-            watchdog, "--app-executable", btc, watchdog_state.SIMULATION_RECOVERY_ARG,
+            watchdog, "--app-executable", btc, "--app-version", watchdog_state.APP_VERSION,
+            watchdog_state.SIMULATION_RECOVERY_ARG,
         ])
+        self.assertEqual(probe.call_args.args[0], [watchdog, "--check-version", watchdog_state.APP_VERSION])
+        self.assertEqual(probe.call_args.kwargs["env"]["PYINSTALLER_RESET_ENVIRONMENT"], "1")
         self.assertEqual(popen.call_args.kwargs["env"]["PYINSTALLER_RESET_ENVIRONMENT"], "1")
 
     def test_standalone_watchdog_uses_btc_state_and_relaunches_that_btc(self):
         btc = str(Path.cwd() / "BenchTestController_v18.0.2.exe")
-        watchdog = str(Path(btc).with_name("BenchTestWatchdog.exe"))
+        watchdog = str(Path(btc).with_name(watchdog_state.WATCHDOG_EXECUTABLE))
         with patch.object(sys, "frozen", True, create=True), patch.object(sys, "executable", btc):
             btc_directory = watchdog_state.runtime_directory()
         with patch.object(sys, "frozen", True, create=True), patch.object(sys, "executable", watchdog), \
@@ -48,6 +52,59 @@ class PackagedWatchdogTests(unittest.TestCase):
             watchdog_state.launch("--watchdog-recover", "token", executable=btc)
         self.assertEqual(popen.call_args.args[0], [btc, "--watchdog-recover", "token"])
         self.assertEqual(popen.call_args.kwargs["env"]["PYINSTALLER_RESET_ENVIRONMENT"], "1")
+
+    def test_missing_matching_watchdog_does_not_fall_back_to_btc(self):
+        with patch.object(sys, "frozen", True, create=True), \
+                patch.object(Path, "is_file", return_value=False), \
+                patch.object(watchdog_state.subprocess, "Popen") as popen:
+            with self.assertRaisesRegex(RuntimeError, "Matching watchdog not found"):
+                watchdog_state.launch_watchdog()
+        popen.assert_not_called()
+
+    def test_renamed_incompatible_watchdog_is_not_started(self):
+        with patch.object(sys, "frozen", True, create=True), \
+                patch.object(Path, "is_file", return_value=True), \
+                patch.object(watchdog_state.subprocess, "run", return_value=SimpleNamespace(returncode=2)), \
+                patch.object(watchdog_state.subprocess, "Popen") as popen:
+            with self.assertRaisesRegex(RuntimeError, "version check failed"):
+                watchdog_state.launch_watchdog()
+        popen.assert_not_called()
+
+    def test_version_probe_timeout_does_not_start_supervision(self):
+        with patch.object(sys, "frozen", True, create=True), \
+                patch.object(Path, "is_file", return_value=True), \
+                patch.object(watchdog_state.subprocess, "run", side_effect=watchdog_state.subprocess.TimeoutExpired("WD", 15)), \
+                patch.object(watchdog_state.subprocess, "Popen") as popen:
+            with self.assertRaisesRegex(RuntimeError, "Could not verify watchdog"):
+                watchdog_state.launch_watchdog()
+        popen.assert_not_called()
+
+    def test_source_launch_keeps_embedded_watchdog(self):
+        with patch.object(sys, "frozen", False, create=True), \
+                patch.object(watchdog_state, "launch") as launch:
+            watchdog_state.launch_watchdog(watchdog_state.SIMULATION_RECOVERY_ARG)
+        launch.assert_called_once_with("--watchdog", watchdog_state.SIMULATION_RECOVERY_ARG)
+
+    def test_watchdog_entry_checks_embedded_version_before_supervision(self):
+        import watchdog_main
+
+        for arguments, accepted, starts in (
+                (["--check-version", watchdog_state.APP_VERSION], True, False),
+                (["--check-version", "0.0.0"], False, False),
+                (["--app-executable", str(Path.cwd() / "BTC.exe"), "--app-version", "0.0.0"], False, False),
+                (["--app-executable", str(Path.cwd() / "BTC.exe"), "--app-version", watchdog_state.APP_VERSION,
+                  watchdog_state.SIMULATION_RECOVERY_ARG], True, True)):
+            with self.subTest(arguments=arguments), patch.object(sys, "argv", ["WD", *arguments]), \
+                    patch.object(watchdog_main, "run_supervisor") as run, patch("sys.stderr"):
+                if accepted:
+                    watchdog_main.main()
+                else:
+                    with self.assertRaises(SystemExit) as error:
+                        watchdog_main.main()
+                    self.assertEqual(error.exception.code, 2)
+                self.assertEqual(run.called, starts)
+                if starts:
+                    run.assert_called_once_with(True, app_executable=str(Path.cwd() / "BTC.exe"))
 
 
 class ImmediateThread:
@@ -896,7 +953,7 @@ class ClientTests(TemporaryTest):
         messages = []
         self.client.log_message.connect(messages.append)
         self.client.arm(self.runner)
-        self.assertTrue(any("arming failed" in message for message in messages))
+        self.assertTrue(any("startup failed" in message for message in messages))
 
 
 class FakeRegistry:

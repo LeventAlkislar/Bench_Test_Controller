@@ -9,8 +9,10 @@ from pathlib import Path
 import psutil
 from PyQt6.QtCore import QLockFile
 
+from bench_test.version import APP_VERSION
+
 SIMULATION_RECOVERY_ARG = "--simulation-recovery"
-WATCHDOG_EXECUTABLE = "BenchTestWatchdog.exe"
+WATCHDOG_EXECUTABLE = f"BenchTestWatchdog_v{APP_VERSION}.exe"
 
 
 def runtime_directory(simulation_recovery=False, *, app_executable=None):
@@ -96,8 +98,22 @@ def launch(*arguments, executable=None):
 def launch_watchdog(*arguments):
     if getattr(sys, "frozen", False):
         watchdog = Path(sys.executable).with_name(WATCHDOG_EXECUTABLE)
-        if watchdog.is_file():
-            return launch("--app-executable", sys.executable, *arguments, executable=str(watchdog))
+        if not watchdog.is_file():
+            raise RuntimeError(f"Matching watchdog not found: {watchdog}. Copy both EXEs from the same release.")
+        # Check the embedded version too: a renamed EXE must not bypass matching.
+        try:
+            result = subprocess.run(
+                [str(watchdog), "--check-version", APP_VERSION],
+                env=dict(os.environ, PYINSTALLER_RESET_ENVIRONMENT="1"),
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+                timeout=15, check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise RuntimeError(f"Could not verify watchdog v{APP_VERSION}: {exc}") from exc
+        if result.returncode != 0:
+            raise RuntimeError(f"Watchdog version check failed for BTC v{APP_VERSION}. Copy both EXEs from the same release.")
+        return launch("--app-executable", sys.executable, "--app-version", APP_VERSION,
+                      *arguments, executable=str(watchdog))
     return launch("--watchdog", *arguments)
 
 

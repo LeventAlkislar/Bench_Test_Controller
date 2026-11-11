@@ -36,6 +36,7 @@ class WatchdogClient(QObject):
         self._command_state = ""
         self._finalizing = False
         self._last_spawn = -1000
+        self._supervisor_starting = False
         self._last_status = ""
         self._last_warning = None
         self._reported_recovery_runner = None
@@ -168,14 +169,24 @@ class WatchdogClient(QObject):
 
     def _ensure_supervisor(self):
         now = time.monotonic()
-        if now - self._last_spawn < 15:
+        if self._supervisor_starting or now - self._last_spawn < 15:
             return
         state = read_json(self.directory / "supervisor_status.json")
         if state and owner_alive(state.get("owner", {})):
             return
         self._last_spawn = now
         flags = (SIMULATION_RECOVERY_ARG,) if self._simulation_recovery else ()
-        launch_watchdog(*flags)
+        self._supervisor_starting = True
+        def start():
+            try:
+                launch_watchdog(*flags)
+            except Exception as exc:
+                self.status_changed.emit(f"Watchdog unavailable: {exc}")
+                self.log_message.emit(f"Watchdog startup failed: {exc}")
+            finally:
+                self._supervisor_starting = False
+        # A packaged watchdog's version probe may include onefile extraction.
+        threading.Thread(target=start, daemon=True).start()
 
     def disarm(self, reason="user_stopped"):
         if self._stop_signal:
