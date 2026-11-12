@@ -129,6 +129,13 @@ WD is reported through the watchdog status and log. Renaming a different version
 does not satisfy the probe. WD also checks `--app-version` at normal startup.
 Source runs retain the `main.py --watchdog` path.
 
+CSV content checks are shared through `bench_test.csv_progress`, which uses only
+the Python standard library. The watchdog imports this module directly, avoiding
+the measurement package's Excel and GUI dependencies. The former
+`bench_test.measurement.data_io` import remains available for BTC callers and
+refers to the same checker. QtCore remains required for the existing QLockFile
+process locks; their behavior is unchanged.
+
 ## Phase 3 — independent supervision (implemented; hardware validation pending)
 
 Journal-backed Discrete PAD recipes automatically arm `WatchdogClient` in both

@@ -4,7 +4,7 @@ import os
 import threading
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from bench_test.measurement.data_io import inspect_csv_progress
+from bench_test.csv_progress import inspect_csv_progress
 
 
 CSV_SCAN_INTERVAL = 60
