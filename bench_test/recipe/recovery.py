@@ -13,6 +13,8 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 
 from bench_test.recipe.models import Recipe, RecipeStep, StepLoop
+from bench_test.utils.debug_log import debug_log
+from bench_test.utils.file_io import replace_with_retry
 
 
 class RecoveryVerificationBlocked(RuntimeError):
@@ -126,7 +128,7 @@ class RecoveryJournal:
             raise ValueError("Invalid recovery resume basis.")
         return data
 
-    def update(self, **changes):
+    def update(self, *, verify=False, **changes):
         with self._lock:
             candidate = copy.deepcopy(self._data)
             candidate.update(copy.deepcopy(changes))
@@ -140,7 +142,14 @@ class RecoveryJournal:
                     json.dump(candidate, stream, ensure_ascii=False, indent=2, allow_nan=False)
                     stream.flush()
                     os.fsync(stream.fileno())
-                os.replace(temporary, self.path)
+                retried = replace_with_retry(temporary, self.path)
+                if retried or verify:
+                    # Do not let a transient conflict disable recovery unless the
+                    # newly written checkpoint cannot be verified on disk.
+                    with open(self.path, "r", encoding="utf-8") as stream:
+                        if stream.read() != json.dumps(candidate, ensure_ascii=False, indent=2, allow_nan=False):
+                            raise ValueError("Recovery record verification failed after file replacement.")
+                    debug_log(f"Recovery recording restored and verified: {self.path}", level="info")
             finally:
                 if os.path.exists(temporary):
                     os.unlink(temporary)

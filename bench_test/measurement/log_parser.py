@@ -69,11 +69,21 @@ class ManualNote:
 
 
 @dataclass
+class ValveEvent:
+    """Actual valve acknowledgement; recipe step announcements are not inputs."""
+    timestamp: datetime
+    port_a: Optional[int] = None
+    valve_b: Optional[str] = None
+    source: str = ""
+
+
+@dataclass
 class ParseResult:
     """LogParser.parse() dönüş değeri."""
     step_events  : List[StepEvent]   = field(default_factory=list)
     system_events: List[SystemEvent] = field(default_factory=list)
     manual_notes : List[ManualNote]  = field(default_factory=list)
+    valve_events : List[ValveEvent] = field(default_factory=list)
 
     @property
     def all_events_sorted(self):
@@ -204,6 +214,16 @@ class LogParser:
 
             if not content:
                 continue
+
+            actual_a = re.match(r"^Valve A:\s*At port\s+(\d+)\b", content, re.IGNORECASE)
+            actual_b = re.match(r"^Valve B:\s*(Load|Inject)\b", content, re.IGNORECASE)
+            if actual_a or actual_b:
+                result.valve_events.append(ValveEvent(
+                    timestamp=ts,
+                    port_a=int(actual_a.group(1)) if actual_a else None,
+                    valve_b=actual_b.group(1).capitalize() if actual_b else None,
+                    source=str(log_path),
+                ))
 
             # Yoksay
             if _RE_IGNORE.match(content):

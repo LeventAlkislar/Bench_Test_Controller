@@ -10,6 +10,7 @@ import psutil
 from PyQt6.QtCore import QLockFile
 
 from bench_test.version import APP_VERSION
+from bench_test.utils.file_io import replace_with_retry
 
 SIMULATION_RECOVERY_ARG = "--simulation-recovery"
 WATCHDOG_EXECUTABLE = f"BenchTestWatchdog_v{APP_VERSION}.exe"
@@ -34,7 +35,7 @@ def atomic_write(path, data):
             json.dump(data, stream, ensure_ascii=False, allow_nan=False)
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temporary, path)
+        replace_with_retry(temporary, path)
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
@@ -149,6 +150,8 @@ class RunStopSignal:
 
 def recovery_source(state, reclaim=False, allow_in_flight=False):
     """Prefer the child cursor; reclaim a parent only after its worker is gone."""
+    if state.get("recovery_available") is False:
+        raise ValueError("Execution recording is not current; automatic recovery is blocked.")
     from bench_test.recipe.recovery import RecoveryJournal, plan_recovery
     path = state["record_path"]
     record = RecoveryJournal.read(path)

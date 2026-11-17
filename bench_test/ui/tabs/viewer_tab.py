@@ -231,8 +231,12 @@ class ViewerTab(QWidget):
         self.plot_widget_bottom = None
         self.top_curve = None
         self.bottom_curve = None
+        self._weibull = None
 
         self._build_ui()
+        if self.plot_widget_top and self.plot_widget_bottom:
+            from bench_test.ui.weibull_overlay import WeibullOverlayController
+            self._weibull = WeibullOverlayController(self)
         self._setup_poll_timer()
 
     # ── UI inşası ─────────────────────────────────────────────────
@@ -994,10 +998,12 @@ class ViewerTab(QWidget):
             merged.step_events.extend(result.step_events)
             merged.system_events.extend(result.system_events)
             merged.manual_notes.extend(result.manual_notes)
+            merged.valve_events.extend(result.valve_events)
 
         merged.step_events.sort(key=lambda item: item.timestamp)
         merged.system_events.sort(key=lambda item: item.timestamp)
         merged.manual_notes.sort(key=lambda item: item.timestamp)
+        merged.valve_events.sort(key=lambda item: item.timestamp)
         return merged
 
     # ── Grafik çizimi ─────────────────────────────────────────────
@@ -1055,6 +1061,8 @@ class ViewerTab(QWidget):
     def _plot_data(self, reset_view: bool = False):
         if not self.plot_widget_top:
             return
+        if self._weibull:
+            self._weibull.begin_rebuild()
 
         self.top_curve = None
         self.bottom_curve = None
@@ -1064,6 +1072,8 @@ class ViewerTab(QWidget):
             self._saved_top_view_range = None
 
         if self._viewer_mode == "cv" and self._has_cv_measurements():
+            if self._weibull:
+                self._weibull.reset()
             self._plot_cv_data(reset_view=reset_view)
             return
 
@@ -1080,6 +1090,8 @@ class ViewerTab(QWidget):
 
         series_data = self._read_measurement_series()
         if not series_data:
+            if self._weibull:
+                self._weibull.reset()
             self._show_no_data_msg()
             self._rebuilding_top_view = False
             return
@@ -1210,6 +1222,15 @@ class ViewerTab(QWidget):
             self.plot_widget_bottom.getViewBox().disableAutoRange(axis="y")
             self._update_measure_dots_for_plot(self.plot_widget_bottom)
         self._rebuilding_top_view = False
+
+        if self._weibull:
+            sessions = self._history_sessions or ([self._session] if self._session else [])
+            context = tuple(s.session_dir for s in sessions)
+            supported = bool(context) and all(
+                self._normalize_pad_series_item(item)[3] == "discrete" for item in series_data
+            )
+            events = self._parse_result.valve_events if self._parse_result else []
+            self._weibull.set_data(supported, context, events)
 
     def _plot_cv_data(self, reset_view: bool = False):
         """Draw CV .mtc curves as a single potential-current view."""
@@ -1624,9 +1645,23 @@ class ViewerTab(QWidget):
         method = ""
         if hasattr(ctrl, "smoothingMethodCombo"):
             method = ctrl.smoothingMethodCombo.currentData()
+        model_version = ""
+        if method == "weibull_robust":
+            from bench_test.measurement.weibull_fit import MODEL_VERSION
+            model_version = MODEL_VERSION
         return [
             ("average_enabled", ctrl.averageGroup.isChecked()),
             ("average_method", method or "moving_average"),
+            ("weibull_min_points", ctrl.weibullMinPointsSpin.value()),
+            ("weibull_tolerance_nA", ctrl.weibullToleranceSpin.value()),
+            ("weibull_loss", "cauchy" if method == "weibull_robust" else ""),
+            ("weibull_drift", "linear_per_A_phase" if method == "weibull_robust" else ""),
+            ("weibull_drift_units", "nA/hour" if method == "weibull_robust" else ""),
+            ("weibull_drift_constraint", "slope<=0" if method == "weibull_robust" else ""),
+            ("weibull_model", model_version),
+            ("weibull_input", "bottom_series_fixed_downsampling" if method == "weibull_robust" else ""),
+            ("weibull_profile", "rise=1.3524384688; fall=1.0291958303" if method == "weibull_robust" else ""),
+            ("response_delay_seconds", self._get_offset_sec()),
             (
                 "average_radius",
                 ctrl.movingAverageRadiusSpin.value()
@@ -2380,6 +2415,8 @@ class ViewerTab(QWidget):
 
     def clear(self):
         """ViewerTab'ı açılış haline getirir."""
+        if self._weibull:
+            self._weibull.reset()
         self._session = None
         self._history_sessions = []
         self._dropsens_pad = None

@@ -19,6 +19,26 @@ class ConnectionTests(unittest.TestCase):
         self.logging.start()
         self.addCleanup(self.logging.stop)
 
+    def test_connection_logging_summarizes_unchanged_health_but_logs_changes_immediately(self):
+        clock = [1000.0]
+        with patch.object(automator, "_connection_log_state", None), \
+                patch.object(automator, "_connection_log_at", -float("inf")), \
+                patch.object(automator.time, "monotonic", side_effect=lambda: clock[0]), \
+                patch.object(automator, "window_exists", return_value=True) as exists, \
+                patch.object(automator, "find_window", return_value=42), \
+                patch.object(automator, "connection_scores_on_window", return_value={
+                    "connected_score": 1.0, "disconnected_score": 0.4, "error": ""}) as capture, \
+                patch.object(automator, "debug_log") as log:
+            for now in (1000, 1003, 1030, 1059, 1060):
+                clock[0] = now
+                self.assertEqual(automator._connection_snapshot()["state"], "connected")
+            self.assertEqual(capture.call_count, 5)
+            self.assertEqual(log.call_count, 2)
+            clock[0] = 1061
+            exists.return_value = False
+            self.assertEqual(automator._connection_snapshot()["state"], "disconnected")
+            self.assertEqual(log.call_count, 3)
+
     def test_connection_error_poll_retries_exact_dropview_dialog_and_preserves_attempt_result(self):
         owner = {"pid": 42, "created": 100}
         other_owner = {"pid": 43, "created": 200}
@@ -211,6 +231,45 @@ class ConnectionTests(unittest.TestCase):
                     patch.object(automator, "connection_scores_on_window", return_value={
                         "running_score": running, "stopped_score": stopped, "error": error}):
                 self.assertEqual(automator.get_discrete_measurement_state()["state"], expected)
+
+    def test_capture_constructor_failure_keeps_original_traceback_in_unknown_state(self):
+        error = TypeError("__init__() should return None, not 'NoneType'")
+        with patch.object(vision.mss, "mss", side_effect=error), \
+                patch.object(vision, "win32gui") as gui, \
+                patch.object(automator, "window_exists", return_value=True), \
+                patch.object(automator, "find_window", return_value=42):
+            gui.IsWindowVisible.return_value = True
+            gui.IsIconic.return_value = False
+            gui.GetClientRect.return_value = (0, 0, 1000, 800)
+            gui.ClientToScreen.side_effect = lambda hwnd, point: point
+            result = automator.get_discrete_measurement_state()
+        self.assertEqual(result["state"], "unknown")
+        self.assertIn("NoneType", result["error"])
+        self.assertIn("Traceback (most recent call last)", result["traceback"])
+        self.assertIn("connection_scores_on_window", result["traceback"])
+        self.assertIn("TypeError", result["traceback"])
+
+    def test_editor_lookup_failure_retains_traceback(self):
+        with patch.object(automator, "window_exists", side_effect=TypeError("lookup failed")):
+            result = automator.get_discrete_measurement_state()
+        self.assertEqual(result["state"], "unknown")
+        self.assertIn("TypeError: lookup failed", result["traceback"])
+
+    def test_health_traceback_is_logged_once_until_observation_recovers(self):
+        diagnostic = "Traceback (most recent call last):\nTypeError: capture failed"
+        health = {"dv_open": True, "process_identity": None, "traceback": diagnostic}
+        controller = DropViewController()
+        with patch.object(automator, "observe_dropview", return_value=health) as observe, \
+                patch("bench_test.dropview.controller.debug_log") as log:
+            controller._read_health()
+            controller._read_health()
+            log.assert_called_once()
+            self.assertIn(diagnostic, log.call_args.args[0])
+            observe.return_value = {"dv_open": True, "process_identity": None}
+            controller._read_health()
+            observe.return_value = health
+            controller._read_health()
+            self.assertEqual(log.call_count, 2)
 
     def test_measurement_visibility_failure_focuses_once_then_reads_fresh_capture(self):
         for error in ("Measurement indicator is covered by another window.", "DropView is hidden or minimized."):

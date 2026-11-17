@@ -1,6 +1,7 @@
 # bench_test/dropview/controller.py
 import threading
 import time
+import traceback
 
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 
@@ -25,6 +26,7 @@ class DropViewController(QObject):
         self._poll_timer.timeout.connect(self._poll_connection)
         self._last_connected = None
         self.last_health = {}
+        self._last_health_traceback = ""
         self.last_process_identity = None
         self.discrete_measurement_owner = None
         self.health_focus_requested = None
@@ -44,6 +46,10 @@ class DropViewController(QObject):
         elif health["dv_open"] is False and identity is None:
             health["process_identity"] = self.last_process_identity
         self.last_health = health
+        diagnostic = health.get("traceback") or health.get("optional_traceback", "")
+        if diagnostic and diagnostic != self._last_health_traceback:
+            debug_log("DropView health observation failed:\n" + diagnostic, level="warning")
+        self._last_health_traceback = diagnostic
         return health
 
     def observe_discrete_pad_activity(self, expected_owner, *, since, max_age):
@@ -58,7 +64,7 @@ class DropViewController(QObject):
                 return health["pad_activity"]
             return self._read_health(expected_owner=expected_owner)["pad_activity"]
         except Exception as exc:
-            debug_log(f"Discrete PAD observation failed: {exc}", level="warning")
+            debug_log(f"Discrete PAD observation failed: {exc}\n" + traceback.format_exc(), level="warning")
             return "unknown"
         finally:
             self._poll_lock.release()
@@ -83,7 +89,7 @@ class DropViewController(QObject):
                     self._last_connected = connected
                     self.status_changed.emit(connected)
             except Exception as exc:
-                debug_log(f"DropView connection polling failed: {exc}", level="warning")
+                debug_log(f"DropView connection polling failed: {exc}\n" + traceback.format_exc(), level="warning")
             finally:
                 self._poll_lock.release()
         threading.Thread(target=_check, daemon=True).start()

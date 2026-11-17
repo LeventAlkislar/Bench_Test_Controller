@@ -53,6 +53,12 @@ def install_offset_downsample() -> None:
         ctrl.smoothingMethodCombo.setObjectName("smoothingMethodCombo")
         ctrl.smoothingMethodCombo.addItem("Moving Average", "moving_average")
         ctrl.smoothingMethodCombo.addItem("Savitzky-Golay", "savitzky_golay")
+        ctrl.smoothingMethodCombo.addItem("Weibull - Robust", "weibull_robust")
+        ctrl.smoothingMethodCombo.setItemData(2,
+            "Weibull with Cauchy weighting and a zero or downward linear drift per A-port phase. "
+            "Drift continues across Load/Inject and is always included.",
+            QtCore.Qt.ItemDataRole.ToolTipRole)
+        ctrl.smoothingMethodCombo.model().item(2).setEnabled(False)
         ctrl.gridLayout_5.addWidget(ctrl.smoothingMethodCombo, 1, 1, 1, 1)
 
         ctrl.movingAverageRadiusLabel = QtWidgets.QLabel(ctrl.averageGroup)
@@ -101,6 +107,34 @@ def install_offset_downsample() -> None:
         ctrl.savgolDerivCombo.addItem("2", 2)
         ctrl.gridLayout_5.addWidget(ctrl.savgolDerivCombo, 4, 1, 1, 1)
 
+        ctrl.weibullMinPointsLabel = QtWidgets.QLabel("Min points:", ctrl.averageGroup)
+        ctrl.weibullMinPointsSpin = QtWidgets.QSpinBox(ctrl.averageGroup)
+        ctrl.weibullMinPointsSpin.setRange(3, 100000)
+        ctrl.weibullMinPointsSpin.setValue(10)
+        ctrl.weibullMinPointsSpin.setToolTip(
+            "Distinct lower-graph times required after a delayed A-port change. "
+            "Short completed phases can appear once later data is available. "
+            "This controls drawing, not a guarantee of settling."
+        )
+        ctrl.weibullToleranceLabel = QtWidgets.QLabel("Outlier tolerance:", ctrl.averageGroup)
+        ctrl.weibullToleranceSpin = QtWidgets.QDoubleSpinBox(ctrl.averageGroup)
+        ctrl.weibullToleranceSpin.setRange(0.01, 1000000.)
+        ctrl.weibullToleranceSpin.setDecimals(2)
+        ctrl.weibullToleranceSpin.setValue(4.)
+        ctrl.weibullToleranceSpin.setSuffix(" nA")
+        ctrl.weibullToleranceSpin.setToolTip(
+            "Cauchy residual scale: deviation from the fitted curve, NOT an "
+            "absolute current cutoff. No measured points are removed."
+        )
+        ctrl.weibullStatusLabel = QtWidgets.QLabel(ctrl.averageGroup)
+        ctrl.weibullStatusLabel.setWordWrap(True)
+        ctrl.weibullStatusLabel.setMaximumWidth(280)
+        ctrl.gridLayout_5.addWidget(ctrl.weibullMinPointsLabel, 5, 0)
+        ctrl.gridLayout_5.addWidget(ctrl.weibullMinPointsSpin, 5, 1)
+        ctrl.gridLayout_5.addWidget(ctrl.weibullToleranceLabel, 6, 0)
+        ctrl.gridLayout_5.addWidget(ctrl.weibullToleranceSpin, 6, 1)
+        ctrl.gridLayout_5.addWidget(ctrl.weibullStatusLabel, 7, 0, 1, 2)
+
         ctrl.downsampleOffsetLabel = QtWidgets.QLabel(ctrl.decimateGroup)
         ctrl.downsampleOffsetLabel.setObjectName("downsampleOffsetLabel")
         ctrl.downsampleOffsetLabel.setText("Start:")
@@ -129,6 +163,8 @@ def install_offset_downsample() -> None:
             plot_item.updateMovingAverage
         )
         ctrl.downsampleOffsetSpin.valueChanged.connect(plot_item.updateDownsampling)
+        ctrl.weibullMinPointsSpin.valueChanged.connect(plot_item.updateMovingAverage)
+        ctrl.weibullToleranceSpin.valueChanged.connect(plot_item.updateMovingAverage)
 
     def is_average_overlay(curve) -> bool:
         return bool(getattr(curve, "opts", {}).get("movingAverageOverlay", False))
@@ -187,6 +223,9 @@ def install_offset_downsample() -> None:
             plot_item.ctrl.savgolDerivCombo.currentData()
         )
 
+        if source_curve.opts["smoothingMethod"] == "weibull_robust":
+            return  # Shared DPAD fit is calculated outside the display pipeline.
+
         dataset = source_curve._getDisplayDataset()
         if dataset is None or len(dataset.x) == 0:
             return
@@ -243,6 +282,9 @@ def install_offset_downsample() -> None:
 
     def patched_avg_toggled(self, enabled: bool):
         if hasattr(self.ctrl, "movingAverageRadiusSpin"):
+            if self.ctrl.smoothingMethodCombo.currentData() == "weibull_robust":
+                self.updateMovingAverage()
+                return
             if enabled:
                 self.updateMovingAverage()
             else:
@@ -274,6 +316,24 @@ def install_offset_downsample() -> None:
     @QtCore.Slot()
     def patched_update_moving_average(self):
         enabled = self.ctrl.averageGroup.isChecked()
+        weibull = self.ctrl.smoothingMethodCombo.currentData() == "weibull_robust"
+        self.ctrl.avgParamList.setVisible(not weibull)
+        for widget in (self.ctrl.weibullMinPointsLabel, self.ctrl.weibullMinPointsSpin,
+                       self.ctrl.weibullToleranceLabel, self.ctrl.weibullToleranceSpin,
+                       self.ctrl.weibullStatusLabel):
+            widget.setVisible(weibull)
+        for widget in (self.ctrl.movingAverageRadiusLabel, self.ctrl.movingAverageRadiusSpin,
+                       self.ctrl.savgolPolyLabel, self.ctrl.savgolPolySpin,
+                       self.ctrl.savgolDerivLabel, self.ctrl.savgolDerivCombo):
+            widget.setVisible(not weibull)
+        callback = getattr(self, "_weibull_options_changed", None)
+        if callback is not None:
+            callback(self)
+        if weibull:
+            for curve in self.curves:
+                curve.opts["movingAverageEnabled"] = False
+                curve.opts.pop("movingAveragePlotItem", None)
+            return
         radius = 5
         if hasattr(self.ctrl, "movingAverageRadiusSpin"):
             radius = self.ctrl.movingAverageRadiusSpin.value()

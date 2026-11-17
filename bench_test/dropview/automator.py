@@ -3,6 +3,7 @@ import os
 import sys
 import time
 import threading
+import traceback
 import subprocess
 import ctypes
 import xml.etree.ElementTree as ET
@@ -1610,9 +1611,14 @@ def _select_manual_port_image(manual_hwnd, target_com, _log):
 _CONNECTION_MIN_DELTA = 0.08
 _indicator_capture_lock = threading.Lock()
 _CONNECTION_VERIFY_TIMEOUT = 5.0
+_CONNECTION_LOG_INTERVAL = 60.0
+_connection_log_lock = threading.Lock()
+_connection_log_state = None
+_connection_log_at = -float("inf")
 
 
 def _connection_snapshot(should_focus=None, *, hwnd=None, measurement_status=False) -> dict:
+    global _connection_log_state, _connection_log_at
     started = time.monotonic()
     result = {"dv_open": False, "connected_score": 0.0,
               "disconnected_score": 0.0, "state": "unknown",
@@ -1647,14 +1653,20 @@ def _connection_snapshot(should_focus=None, *, hwnd=None, measurement_status=Fal
                     result["state"] = "disconnected"
     except Exception as exc:
         result["error"] = str(exc)
+        result["traceback"] = traceback.format_exc()
     result["elapsed_s"] = time.monotonic() - started
-    debug_log(
-        "DropView connection: "
-        f"state={result['state']}, connected={result['connected_score']:.3f}, "
-        f"disconnected={result['disconnected_score']:.3f}, "
-        f"elapsed={result['elapsed_s']:.3f}s, region={result['region']}, "
-        f"error={result['error'] or 'none'}"
-    )
+    now = time.monotonic()
+    log_state = (hwnd, result["state"], result["error"])
+    with _connection_log_lock:
+        if log_state != _connection_log_state or now - _connection_log_at >= _CONNECTION_LOG_INTERVAL:
+            debug_log(
+                "DropView connection: "
+                f"state={result['state']}, connected={result['connected_score']:.3f}, "
+                f"disconnected={result['disconnected_score']:.3f}, "
+                f"elapsed={result['elapsed_s']:.3f}s, region={result['region']}, "
+                f"error={result['error'] or 'none'}"
+            )
+            _connection_log_state, _connection_log_at = log_state, now
     return result
 
 
@@ -2169,6 +2181,7 @@ def get_discrete_measurement_state(*, expected_owner=None, refocus_if_covered=Tr
                 result["state"] = "stopped"
     except Exception as exc:
         result["error"] = "; ".join(part for part in (result["error"], str(exc)) if part)
+        result["traceback"] = traceback.format_exc()
     return result
 
 

@@ -1,0 +1,2 @@
+# Optional viewer step fitting; the acquisition/watchdog paths do not import SciPy.
+scipy>=1.13,<2

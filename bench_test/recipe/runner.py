@@ -34,6 +34,7 @@ EDITOR_PROBE_INTERVAL = 3.0
 PAD_ACTIVITY_CHECK_SECONDS = 60.0
 EDITOR_RESTORE_TIMEOUT = 30.0
 EDITOR_RESTORE_ATTEMPTS = 3
+WAIT_CHECKPOINT_INTERVAL = 15.0
 
 # DropView aksiyon sabitleri
 DROPVIEW_ACTIONS = [
@@ -127,6 +128,8 @@ class RecipeRunner(threading.Thread):
         self._active_step = None
         self._requested_settings = {"valve_a": None, "valve_b": None, "pump_rpm": None}
         self._journal_failed = False
+        self._checkpoint_changes = {}
+        self._journal_retry_at = 0.0
         self._last_checkpoint_t = 0.0
         self.worker_heartbeat = time.monotonic()
         self.outcome = "prepared"
@@ -190,14 +193,21 @@ class RecipeRunner(threading.Thread):
         if phase is not None:
             self._recovery_phase = phase
         self._last_checkpoint_t = time.monotonic()
-        if self.recovery_journal is None or self._journal_failed:
+        self._checkpoint_changes.update(copy.deepcopy(changes))
+        if self.recovery_journal is None:
             return
+        if self._journal_failed and time.monotonic() < self._journal_retry_at:
+            return
+        changes = copy.deepcopy(self._checkpoint_changes)
+        changes["status"] = self.outcome
         owner = self._measurement_owner if self.active_measurement_kind == "discrete_pad" else None
         owner = owner or getattr(self.dropview_ctrl, "last_process_identity", None)
         if isinstance(owner, dict):
             changes.setdefault("dropview_owner", owner)
         try:
+            was_failed = self._journal_failed
             self.recovery_journal.update(
+                verify=was_failed,
                 phase=self._recovery_phase,
                 recipe=asdict(self.recipe),
                 recipe_loop=self.current_loop_index,
@@ -212,10 +222,24 @@ class RecipeRunner(threading.Thread):
                 stop_requested=self.stop_event.is_set(),
                 **changes,
             )
+            if was_failed:
+                self.status_queue.put(("warning", "Recovery recording restored and verified; automatic recovery eligibility will be checked."))
+                debug_log("Recovery recording restored and verified.", level="info")
+            self._journal_failed = False
         except (OSError, ValueError, TypeError) as exc:
+            first_failure = not self._journal_failed
             self._journal_failed = True
-            self.status_queue.put(("warning", f"Recovery recording failed; automatic recovery is unavailable: {exc}"))
-            debug_log(f"Recovery recording failed: {exc}", level="error")
+            self._journal_retry_at = time.monotonic() + WAIT_CHECKPOINT_INTERVAL
+            if first_failure:
+                self.status_queue.put(("warning", f"Recovery recording failed; monitoring continues, automatic recovery is unavailable: {exc}"))
+                debug_log(f"Recovery recording failed: {exc}", level="error")
+
+    def retry_failed_checkpoint(self):
+        # A live worker owns its execution boundaries. Never refresh a hung
+        # worker's old cursor from the UI and make it eligible for recovery.
+        with self._checkpoint_lock:
+            if self._journal_failed and (not self.is_alive() or not self.pause_event.is_set()):
+                self._write_checkpoint()
 
     def request_stop(self):
         self.stop_event.set()
@@ -590,6 +614,10 @@ class RecipeRunner(threading.Thread):
         if state != self._measurement_probe_state:
             self._measurement_probe_state = state
             self._log(f"Discrete PAD observed state: {state}. {observation.get('error', '')}")
+        diagnostic = observation.get("traceback", "")
+        if diagnostic and diagnostic != getattr(self, "_measurement_probe_traceback", ""):
+            debug_log("Discrete PAD state observation failed:\n" + diagnostic, level="warning")
+        self._measurement_probe_traceback = diagnostic
         # A reopened editor needs corroboration from the original DropView status row.
         if self._measurement_stopped_count >= 3 and self._editor_loss_at is None:
             return self._interrupt_discrete_measurement(
@@ -964,6 +992,7 @@ class RecipeRunner(threading.Thread):
                 self.recovery_continued = True
             start_t = time.time()
             while time.time() - start_t < duration_sec:
+                self.worker_heartbeat = time.monotonic()
                 if self._interrupted():
                     return False
                 pause_t = time.time()
@@ -985,7 +1014,7 @@ class RecipeRunner(threading.Thread):
                 if not self._check_discrete_measurement_progress():
                     return False
                 remaining = (duration_sec - elapsed) / 60
-                if time.monotonic() - self._last_checkpoint_t >= 5.0:
+                if time.monotonic() - self._last_checkpoint_t >= WAIT_CHECKPOINT_INTERVAL:
                     self.checkpoint(remaining_seconds=max(0.0, remaining * 60))
                 self.status_queue.put(("progress", {
                     "step": step_num,

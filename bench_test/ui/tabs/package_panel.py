@@ -619,9 +619,9 @@ class PackagePanel(QWidget):
         if not self._session:
             QMessageBox.warning(self, "Aggregator", "No active session.")
             return
-        if self.sm.state == "running":
+        if self.sm.state in ("running", "aggregating") or self.sm.aggregation_running:
             QMessageBox.warning(self, "Aggregator",
-                                "Recipe is running. Wait for it to finish.")
+                                "Recipe or aggregation is running. Wait for it to finish.")
             return
         aggregator = Aggregator(self._session)
         xlsx_path = aggregator.run(parent=self)

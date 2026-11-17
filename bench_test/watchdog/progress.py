@@ -96,7 +96,7 @@ class CsvProgressProbe:
                         self.content_cache = (cache_key, content)
             self.sample = {"key": key, "at": sampled_at, "signature": (latest, count) if count else None,
                            "content": content}
-        except OSError as exc:
+        except Exception as exc:
             self.sample = {"key": key, "at": sampled_at, "error": str(exc)}
         finally:
             self.lock.release()
@@ -112,7 +112,11 @@ class CsvProgressProbe:
             return None, None
         if now - self.last_request >= scan_interval and self.lock.acquire(blocking=False):
             self.last_request = now
-            threading.Thread(target=self.scan, args=(directory, key, now, started_ns, csv_stem), daemon=True).start()
+            try:
+                threading.Thread(target=self.scan, args=(directory, key, now, started_ns, csv_stem), daemon=True).start()
+            except Exception:
+                self.lock.release()
+                raise
         sample = self.sample
         if sample and sample.get("key") == key:
             if sample.get("error"):

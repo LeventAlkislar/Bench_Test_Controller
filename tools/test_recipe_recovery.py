@@ -1,6 +1,7 @@
 """Recovery records and cursor rules; never opens a serial port or operates UI."""
 import copy
 import json
+import os
 import queue
 import sys
 import tempfile
@@ -185,9 +186,12 @@ class JournalTests(unittest.TestCase):
 
     def test_failed_replace_preserves_previous_record_and_revision(self):
         before = self.path.read_bytes()
-        with patch("bench_test.recipe.recovery.os.replace", side_effect=OSError("disk unavailable")):
+        with patch("bench_test.recipe.recovery.os.replace", side_effect=OSError("disk unavailable")) as attempt, \
+                patch("bench_test.utils.file_io.time.sleep") as sleep:
             with self.assertRaises(OSError):
                 self.journal.update(phase="measurement_stop")
+        attempt.assert_called_once()
+        sleep.assert_not_called()
         self.assertEqual(self.path.read_bytes(), before)
         self.assertEqual(list(self.path.parent.glob("*.tmp")), [])
         self.journal.update(phase="measurement_start")
@@ -198,6 +202,67 @@ class JournalTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.journal.update(remaining_seconds=float("nan"))
         self.assertEqual(self.path.read_bytes(), before)
+
+    def test_transient_access_denied_recovers_and_verifies_new_checkpoint(self):
+        replace = os.replace
+        with patch("bench_test.utils.file_io.os.replace") as attempt, \
+                patch("bench_test.utils.file_io.time.sleep") as sleep, \
+                patch("bench_test.utils.file_io.debug_log"), \
+                patch("bench_test.recipe.recovery.debug_log") as log:
+            def blocked_once(source, destination):
+                if attempt.call_count == 1:
+                    raise PermissionError("locked")
+                return replace(source, destination)
+            attempt.side_effect = blocked_once
+            self.journal.update(phase="measurement_stop", port_glucose={1: 0.0}, region=(0, 10))
+        self.assertEqual(attempt.call_count, 2)
+        sleep.assert_called_once_with(0.1)
+        self.assertEqual(RecoveryJournal.read(str(self.path))["phase"], "measurement_stop")
+        self.assertEqual(RecoveryJournal.read(str(self.path))["revision"], 2)
+        self.assertEqual(RecoveryJournal.read(str(self.path))["port_glucose"], {"1": 0.0})
+        self.assertEqual(RecoveryJournal.read(str(self.path))["region"], [0, 10])
+        self.assertIn("restored and verified", log.call_args.args[0])
+
+    def test_permanent_access_denied_is_bounded_and_keeps_last_complete_record(self):
+        before = self.path.read_bytes()
+        with patch("bench_test.utils.file_io.os.replace", side_effect=PermissionError("locked")) as attempt, \
+                patch("bench_test.utils.file_io.time.sleep") as sleep, \
+                patch("bench_test.utils.file_io.debug_log"):
+            with self.assertRaises(PermissionError):
+                self.journal.update(phase="measurement_stop")
+        self.assertEqual(attempt.call_count, 6)
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [0.1, 0.2, 0.4, 0.8, 1.6])
+        self.assertEqual(self.path.read_bytes(), before)
+        self.assertEqual(list(self.path.parent.glob("*.tmp")), [])
+        self.journal.update(phase="measurement_start")
+        self.assertEqual(RecoveryJournal.read(str(self.path))["revision"], 2)
+
+    def test_windows_access_sharing_and_lock_errors_are_retried(self):
+        replace = os.replace
+        for code in (5, 32, 33):
+            error = OSError("Windows file conflict")
+            error.winerror = code
+            with self.subTest(winerror=code), \
+                    patch("bench_test.utils.file_io.os.replace") as attempt, \
+                    patch("bench_test.utils.file_io.time.sleep") as sleep, \
+                    patch("bench_test.utils.file_io.debug_log"), \
+                    patch("bench_test.recipe.recovery.debug_log"):
+                def blocked_once(source, destination):
+                    if attempt.call_count == 1:
+                        raise error
+                    return replace(source, destination)
+                attempt.side_effect = blocked_once
+                self.journal.update(note=f"Recovered from {code}")
+                self.assertEqual(attempt.call_count, 2)
+                sleep.assert_called_once_with(0.1)
+                self.assertEqual(RecoveryJournal.read(str(self.path))["note"], f"Recovered from {code}")
+
+    def test_retry_success_with_unexpected_disk_content_is_rejected(self):
+        with patch("bench_test.recipe.recovery.replace_with_retry", return_value=True):
+            with self.assertRaisesRegex(ValueError, "verification failed"):
+                self.journal.update(phase="measurement_stop")
+        self.journal.update(phase="measurement_start")
+        self.assertEqual(RecoveryJournal.read(str(self.path))["revision"], 2)
 
     def test_concurrent_updates_remain_complete_and_serialized(self):
         errors = []
@@ -244,6 +309,24 @@ class RunnerRecordingTests(unittest.TestCase):
 
     def read(self):
         return RecoveryJournal.read(str(self.path))
+
+    def test_transient_replace_failure_does_not_latch_recording_failure(self):
+        replace = os.replace
+        with patch("bench_test.utils.file_io.os.replace") as attempt, \
+                patch("bench_test.utils.file_io.time.sleep"), \
+                patch("bench_test.utils.file_io.debug_log"), \
+                patch("bench_test.recipe.recovery.debug_log"):
+            def blocked_once(source, destination):
+                if attempt.call_count == 1:
+                    raise PermissionError("locked")
+                return replace(source, destination)
+            attempt.side_effect = blocked_once
+            self.runner.checkpoint("waiting", status="running", remaining_seconds=99)
+        self.assertFalse(self.runner._journal_failed)
+        self.assertEqual(self.read()["remaining_seconds"], 99)
+        self.assertEqual(list(self.runner.status_queue.queue), [])
+        self.runner.checkpoint("step_completed")
+        self.assertEqual(self.read()["phase"], "step_completed")
 
     def test_normal_finish_records_completion_and_all_loop_positions(self):
         visited = []
@@ -315,6 +398,39 @@ class RunnerRecordingTests(unittest.TestCase):
         original = self.runner.worker_heartbeat
         self.runner.checkpoint()
         self.assertEqual(self.runner.worker_heartbeat, original)
+
+    def test_wait_checkpoints_are_fifteen_seconds_apart_but_worker_heartbeat_stays_live(self):
+        clock = [1000.0]
+        writes, heartbeats = [], []
+        update = self.journal.update
+        def record(**changes):
+            writes.append(clock[0])
+            update(**changes)
+        def sleep(seconds):
+            heartbeats.append((clock[0], self.runner.worker_heartbeat))
+            clock[0] += seconds
+        self.runner.recipe_start_t = clock[0]
+        with patch("bench_test.recipe.runner.time.monotonic", side_effect=lambda: clock[0]), \
+                patch("bench_test.recipe.runner.time.time", side_effect=lambda: clock[0]), \
+                patch("bench_test.recipe.runner.time.sleep", side_effect=sleep), \
+                patch.object(self.journal, "update", side_effect=record):
+            self.assertTrue(self.runner._execute_step(RecipeStep(0, 35 / 60), 1, 1))
+        self.assertEqual(writes, [1000, 1015, 1030])
+        self.assertTrue(all(now == heartbeat for now, heartbeat in heartbeats))
+        self.assertEqual(self.read()["remaining_seconds"], 5)
+
+    def test_stop_during_wait_is_recorded_before_next_periodic_checkpoint(self):
+        clock = [1000.0]
+        def sleep(seconds):
+            clock[0] += seconds
+            self.runner.request_stop()
+        self.runner.recipe_start_t = clock[0]
+        with patch("bench_test.recipe.runner.time.monotonic", side_effect=lambda: clock[0]), \
+                patch("bench_test.recipe.runner.time.time", side_effect=lambda: clock[0]), \
+                patch("bench_test.recipe.runner.time.sleep", side_effect=sleep):
+            self.assertFalse(self.runner._execute_step(RecipeStep(0, 1), 1, 1))
+        self.assertEqual(clock[0], 1001)
+        self.assertEqual(self.read()["status"], "user_stopped")
 
     def test_recovery_freezes_wait_before_pump_io_and_repeated_requests(self):
         self.runner.checkpoint("waiting", status="running", remaining_seconds=99)
@@ -428,6 +544,51 @@ class RunnerRecordingTests(unittest.TestCase):
         messages = list(self.runner.status_queue.queue)
         self.assertEqual(sum(kind == "warning" for kind, _ in messages), 1)
         self.assertEqual(pump.mock_calls, [])
+
+    def test_failed_recording_retries_latest_cursor_and_verifies_before_enabling_recovery(self):
+        with patch("bench_test.recipe.runner.time.monotonic", return_value=1000), \
+                patch.object(self.journal, "update", side_effect=OSError("disk full")):
+            self.runner.checkpoint("waiting", status="running", remaining_seconds=99)
+        self.assertTrue(self.runner._journal_failed)
+        self.runner.current_sequence_index = 2
+        with patch("bench_test.recipe.runner.time.monotonic", return_value=1010):
+            self.runner.checkpoint("step_pending", remaining_seconds=60)
+        self.assertNotEqual(self.read().get("remaining_seconds"), 60)
+        with patch("bench_test.recipe.runner.time.monotonic", return_value=1015), \
+                patch.object(self.journal, "update", wraps=self.journal.update) as update:
+            self.runner.checkpoint("waiting", remaining_seconds=55)
+        self.assertTrue(update.call_args.kwargs["verify"])
+        self.assertFalse(self.runner._journal_failed)
+        saved = self.read()
+        self.assertEqual((saved["sequence_index"], saved["remaining_seconds"], saved["status"]),
+                         (2, 55, "running"))
+
+    def test_background_retry_never_refreshes_a_live_workers_old_cursor(self):
+        self.runner._journal_failed = True
+        with patch.object(self.runner, "is_alive", return_value=True), \
+                patch.object(self.journal, "update") as update:
+            self.runner.retry_failed_checkpoint()
+        update.assert_not_called()
+
+    def test_retry_verification_failure_keeps_recovery_blocked(self):
+        self.runner._journal_failed = True
+        with patch.object(self.journal, "update", side_effect=ValueError("verification failed")) as update:
+            self.runner.checkpoint("waiting", remaining_seconds=50)
+        self.assertTrue(update.call_args.kwargs["verify"])
+        self.assertTrue(self.runner._journal_failed)
+
+    def test_stopped_worker_retry_preserves_stop_and_failed_checkpoint_details(self):
+        with patch("bench_test.recipe.runner.time.monotonic", return_value=1000), \
+                patch.object(self.journal, "update", side_effect=OSError("disk full")):
+            self.runner.checkpoint("waiting", remaining_seconds=77)
+            self.runner.request_stop()
+        with patch("bench_test.recipe.runner.time.monotonic", return_value=1015):
+            self.runner.retry_failed_checkpoint()
+        self.assertFalse(self.runner._journal_failed)
+        saved = self.read()
+        self.assertEqual(saved["status"], "user_stopped")
+        self.assertTrue(saved["stop_requested"])
+        self.assertEqual(saved["remaining_seconds"], 77)
 
     def test_pending_control_phase_is_written_before_dropview_call(self):
         controller = Mock()

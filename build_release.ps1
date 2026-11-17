@@ -60,6 +60,8 @@ Invoke-ReleaseBuild `
     --icon "bench_test\ui\assets\app_icon.ico" `
     --add-data "bench_test\dropview\img;bench_test\dropview\img" `
     --add-data "bench_test\ui\assets;bench_test\ui\assets" `
+    --hidden-import scipy._external.array_api_compat.numpy.fft `
+    --hidden-import scipy._external.array_api_compat.common._fft `
     --exclude-module PIL._avif `
     main.py
 

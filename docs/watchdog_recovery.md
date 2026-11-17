@@ -10,7 +10,7 @@ Continuous PAD and CV skip the record.
 The record stores the recipe, live edits, the copy of the step currently being
 executed, the outer loop and expanded inner-loop position, operation phase,
 measurement state, remaining wait time and connection settings. Wait updates
-are written approximately every five seconds; operation boundaries, live edits,
+are written approximately every fifteen seconds; operation boundaries, live edits,
 pause/resume and user stop requests are recorded immediately. A blocking device
 operation has its last boundary recorded, not an independent heartbeat.
 
@@ -20,6 +20,39 @@ recovery recording is unavailable. No hardware command is added to recording.
 The saved `requested_settings` are command intentions, **not measured physical
 valve or pump positions**. Unknown initial values remain null. Device readback
 and reconciliation belong to the recovery executor in phase 2.
+
+Recording failures leave watchdog monitoring armed, but publish
+`recovery_available: false`. The supervisor continues health/CSV observations
+and reports faults without requesting recovery, terminating BTC, or launching
+a replacement. Pending recovery is cancelled. Startup recovery also rejects
+this state; the user Stop signal is reserved for actual cancellation.
+
+After a failure, the runner retains checkpoint changes in memory and retries
+at execution boundaries, no more often than every fifteen seconds. A successful
+retry writes the current cursor/settings and verifies the complete file before
+reenabling recovery eligibility. While the worker is paused or has exited,
+the client schedules background retries; it never refreshes a live, stalled
+worker's old cursor. These retries do not send hardware commands or reverse
+user Stop/Pause. There is no local backup journal in this phase, so a crash
+while recording is unavailable still requires operator intervention.
+
+Watchdog checks have independent error boundaries for active-state reading,
+process/health observation, CSV observation, recovery control, status publication
+and logging. `supervisor_status.json` exposes `check_errors`, `active_read_ok`
+and `last_active_read`; the existing status label displays incomplete monitoring
+and the failed checks. A failed status write retains the current result in memory
+and is retried; a log failure cannot abort the control loop.
+
+When active-state reading fails, the last successful snapshot supplies context
+for passive observations only. It is never treated as a current heartbeat or
+authority to terminate/restart BTC, including an already pending recovery.
+Without a previous snapshot, the state is unavailable rather than healthy.
+CSV access/parser failures indicate unavailable storage/observation, not proof
+of missing exports. A CSV-check failure does not suppress an independently
+confirmed process/worker fault. Recovery ledger failures block command dispatch
+and process restart until durable intent can be saved. Client heartbeat,
+command and supervisor-status I/O failures are also isolated; unreadable status
+does not by itself spawn another watchdog.
 
 `plan_recovery()` only computes a cursor and has no device/UI effects:
 
@@ -167,13 +200,29 @@ retry counts survive supervisor restarts. Preserve these files for diagnosis.
 
 Detection defaults:
 
+Periodic and final CSV-to-Excel aggregation run in a background thread. Session
+metadata updates and completion signals are handled on the Qt thread. Only one
+aggregation runs at a time; Stop/Finish during a periodic job queues a final pass
+before the state becomes idle. Results from a reset/replaced session are ignored.
+Errors, including worker startup and metadata save failures, clear aggregate
+activity. The manual aggregate action cannot overlap this background work.
+
+`finalizing` is informational: it never suppresses the normal UI, recipe worker,
+DropView or CSV checks, connection refocusing, or extends recovery grace. The
+client publishes `finalizing_started`; the supervisor exposes aggregation elapsed
+time and a separate `aggregation_taking_long` warning after fifteen minutes.
+This duration is a warning threshold, not proof that Excel has stalled and not
+an automatic restart trigger. The normal 60-second UI heartbeat limit remains
+in force while aggregation is active.
+
 | Observation | Limit / response |
 | --- | --- |
 | UI heartbeat | 60 seconds |
 | Worker in measurement wait | 45 seconds |
 | Valve / pump operation | 90 seconds |
 | DropView start / measurement start-stop / exit | 600 seconds |
-| Recovery reconciliation / blocked final aggregation | 900 seconds |
+| Recovery reconciliation | 900 seconds |
+| Aggregation duration | Warning after 900 seconds; does not itself trigger recovery |
 | Fresh missing, unresponsive or disconnected DropView | 15 seconds with a fresh confirming observation |
 | Tracked DropView process confirmed exited | No additional confirmation delay |
 | Multiscript missing while a measurement is expected | 3 consecutive probes; hidden windows do not count |

@@ -32,8 +32,10 @@ Kullanım (PackagePanel içinde):
 """
 
 import traceback
+import threading
+from types import SimpleNamespace
 
-from PyQt6.QtCore import QObject, QTimer, pyqtSignal
+from PyQt6.QtCore import QObject, QTimer, pyqtSignal, pyqtSlot
 
 from bench_test.config import AGGREGATE_INTERVAL_MS
 from bench_test.measurement.aggregator import Aggregator, AggregatorError
@@ -64,12 +66,15 @@ class SessionStateMachine(QObject):
     aggregate_done = pyqtSignal(str)   # xlsx tam yolu
     log_signal     = pyqtSignal(str)   # log mesajı
     aggregate_activity = pyqtSignal(bool)
+    _aggregate_result = pyqtSignal(object, str, object, bool)
 
     def __init__(self, parent: QObject = None):
         super().__init__(parent)
         self._state  : str                          = IDLE
         self._session: MeasurementSession | None    = None
         self._aggregate_running = False
+        self._aggregate_final_pending = False
+        self._aggregate_result.connect(self._finish_aggregate)
 
         # Periyodik aggregate timer — sadece RUNNING'de aktif
         self._timer = QTimer(self)
@@ -85,6 +90,10 @@ class SessionStateMachine(QObject):
     @property
     def session(self) -> MeasurementSession | None:
         return self._session
+
+    @property
+    def aggregation_running(self) -> bool:
+        return self._aggregate_running
 
     # ── Geçiş metotları ───────────────────────────────────────────
 
@@ -147,6 +156,7 @@ class SessionStateMachine(QObject):
         self._timer.stop()
         self._session = None
         self._state = IDLE  # _transition() yerine direkt set — sinyal yok
+        self._aggregate_final_pending = False
         self._log("Session state: IDLE (reset)")
 
     # ── Aggregate ─────────────────────────────────────────────────
@@ -162,7 +172,7 @@ class SessionStateMachine(QObject):
 
     def _run_aggregate(self, periodic: bool = False):
         """
-        run_silent() çalıştırır.
+        run_silent() arka planda çalışır; sonuç ana Qt iş parçacığında işlenir.
         - Periyodik: CSV yoksa sessizce atlar.
         - Son aggregate (finish/stop): hata varsa loglar.
         Aggregate tamamlanınca aggregate_done emit eder.
@@ -173,35 +183,64 @@ class SessionStateMachine(QObject):
 
         if self._aggregate_running:
             if not periodic:
-                self._log("⚠ Aggregate already running; skipped duplicate request.")
+                self._aggregate_final_pending = True
+                self._log("⚠ Aggregate already running; final pass queued.")
             return
 
-        self._aggregate_running = True
-        self.aggregate_activity.emit(True)
-        try:
-            if getattr(self._session, "measurement_mode", "") == MEASUREMENT_MODE_CONTINUOUS_PAD:
+        if getattr(self._session, "measurement_mode", "") == MEASUREMENT_MODE_CONTINUOUS_PAD:
+            try:
                 if not periodic:
                     debug_log("Continuous PAD: xlsx aggregate skipped; .mtp segments remain available in Viewer.")
-                return
+            finally:
+                if self._state == AGGREGATING:
+                    self._on_agg_done()
+            return
 
-            try:
-                agg = Aggregator(self._session)
-                xlsx_path = agg.run_silent(offset_hours=0.0)
-                self._session.register_file("xlsx", xlsx_path)
-                self._session.save()
+        session = self._session
+        # The worker reads immutable paths only; session metadata and Qt
+        # notifications remain owned by the UI thread.
+        source = SimpleNamespace(measurements_dir=session.measurements_dir, part_number=session.part_number)
+        self._aggregate_running = True
+        try:
+            self.aggregate_activity.emit(True)
+            threading.Thread(target=self._aggregate_worker, args=(session, source, periodic), daemon=True).start()
+        except Exception as exc:
+            self._finish_aggregate(session, "", (exc, traceback.format_exc()), periodic)
+
+    def _aggregate_worker(self, session, source, periodic):
+        path, error = "", None
+        try:
+            path = Aggregator(source).run_silent(offset_hours=0.0)
+        except Exception as exc:
+            error = (exc, traceback.format_exc())
+        finally:
+            self._aggregate_result.emit(session, path, error, periodic)
+
+    @pyqtSlot(object, str, object, bool)
+    def _finish_aggregate(self, session, xlsx_path, error, periodic):
+        try:
+            if session is not self._session:
+                return
+            if error:
+                exc, diagnostic = error
+                debug_log("Aggregate exception:\n" + diagnostic)
+                if not periodic:
+                    self._log("⚠ Aggregate: CSV not found or could not be read." if isinstance(exc, AggregatorError)
+                              else f"✗ Aggregate error: {exc}")
+            else:
+                session.register_file("xlsx", xlsx_path)
+                session.save()
                 self.aggregate_done.emit(xlsx_path)
-            except AggregatorError:
-                debug_log("AggregateError:\n" + traceback.format_exc())
-                if not periodic:
-                    self._log("⚠ Aggregate: CSV not found or could not be read.")
-            except Exception as e:
-                debug_log("Aggregate exception:\n" + traceback.format_exc())
-                if not periodic:
-                    self._log(f"✗ Aggregate error: {e}")
+        except Exception as exc:
+            debug_log("Aggregate completion exception:\n" + traceback.format_exc(), level="error")
+            self._log(f"✗ Aggregate completion error: {exc}")
         finally:
             self._aggregate_running = False
             self.aggregate_activity.emit(False)
-            if self._state == AGGREGATING:
+            if self._aggregate_final_pending and self._session is not None:
+                self._aggregate_final_pending = False
+                self._run_aggregate()
+            elif self._state == AGGREGATING and session is self._session:
                 self._on_agg_done()
 
     def _on_agg_done(self):

@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import time
+import traceback
 
 import cv2
 import mss
@@ -244,8 +245,10 @@ def connection_scores_on_window(hwnd, templates: dict, full_client=False, *, opt
                 if name not in optional_templates:
                     raise
                 result["optional_error"] = str(exc)
+                result["optional_traceback"] = traceback.format_exc()
     except Exception as exc:
         result["error"] = str(exc)
+        result["traceback"] = traceback.format_exc()
     return result
 
 

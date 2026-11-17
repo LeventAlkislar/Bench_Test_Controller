@@ -178,6 +178,170 @@ class SupervisorTests(TemporaryTest):
         self.assertFalse(self.terminate.called)
         self.assertEqual(self.message(), "connection_not_verified")
 
+    def test_recording_failure_keeps_csv_observation_but_blocks_restart_until_restored(self):
+        with patch.object(self.monitor.progress, "observe", return_value=(None, None)) as observe:
+            self.assertTrue(self.tick(recovery_available=False))
+            self.assertTrue(self.tick(worker_alive=False))
+        self.assertEqual(observe.call_count, 2)
+        status = read_json(self.directory / "supervisor_status.json")
+        self.assertEqual(status["confirmed_fault"], "worker_exited")
+        self.assertIn("recovery_blocked", status["message"])
+        self.assertFalse((self.directory / "command.json").exists())
+        self.launch.assert_not_called()
+        self.terminate.assert_not_called()
+        with self.assertRaisesRegex(ValueError, "recording is not current"):
+            recovery_source(self.state)
+        self.tick(recovery_available=True)
+        self.assertTrue((self.directory / "command.json").exists())
+
+    def test_recording_failure_cancels_pending_termination_even_after_grace(self):
+        self.tick(worker_alive=False)
+        self.assertIn("pending", self.monitor.ledger)
+        self.now += 100
+        self.tick(recovery_available=False)
+        self.assertNotIn("pending", self.monitor.ledger)
+        self.terminate.assert_not_called()
+        self.launch.assert_not_called()
+
+    def test_status_heartbeat_is_written_every_ten_seconds_but_faults_publish_immediately(self):
+        with patch("bench_test.watchdog.supervisor.atomic_write", wraps=atomic_write) as write:
+            for now in (1000, 1005, 1010, 1015):
+                self.now = now
+                self.tick(ui_heartbeat=now, worker_heartbeat=now)
+            status_writes = [item for item in write.call_args_list
+                             if item.args[0].name == "supervisor_status.json"]
+            self.assertEqual([item.args[1]["heartbeat"] for item in status_writes], [1000, 1010])
+            self.now = 1016
+            self.monitor.confirmed_fault = "worker_exited"
+            self.monitor.publish("blocked:worker_exited")
+        self.assertEqual(self.message(), "blocked:worker_exited")
+        self.assertEqual(read_json(self.directory / "supervisor_status.json")["heartbeat"], 1016)
+
+    def test_supervisor_loop_reuses_tick_snapshots_without_reading_files_again(self):
+        from bench_test.watchdog import supervisor as module
+        monitor = Mock(last_status={"message": "healthy"}, last_state={})
+        monitor.tick.return_value = False
+        with patch.object(module, "runtime_directory", return_value=self.directory), \
+                patch.object(module, "Supervisor", return_value=monitor), \
+                patch.object(module, "read_json") as read:
+            module.run_supervisor(simulation_recovery=True)
+        monitor.tick.assert_called_once()
+        read.assert_not_called()
+
+    def test_five_second_heartbeat_cadence_does_not_trigger_false_timeouts(self):
+        for now in range(1000, 1121, 5):
+            state = {**self.state, "ui_heartbeat": now, "worker_heartbeat": now}
+            for offset in (0, 4.9):
+                self.assertIsNone(fault_reason(state, now + offset, True))
+        self.assertEqual(fault_reason(state, now + 46, True), "worker_timeout:waiting")
+        self.assertEqual(fault_reason(state, now + 61, True), "ui_not_responding")
+
+    def test_unreadable_active_state_keeps_observing_without_acting_on_cached_heartbeat(self):
+        from bench_test.watchdog import supervisor as module
+        self.tick()
+        self.now += 120
+        real_read = module.read_json
+        for error in (PermissionError("locked"), ValueError("bad JSON")):
+            with self.subTest(error=error), \
+                    patch.object(module, "read_json", side_effect=lambda path: (_ for _ in ()).throw(error)
+                                 if path.name == "active.json" else real_read(path)), \
+                    patch.object(self.monitor.progress, "observe", return_value=("discrete_data_stalled", None)) as observe:
+                self.assertTrue(self.monitor.tick())
+                observe.assert_called_once()
+                self.assertFalse(self.monitor.active_read_ok)
+                self.assertIn("active_read", self.monitor.last_status["check_errors"])
+                self.assertEqual(self.monitor.last_active_read, 1000)
+                self.assertEqual(self.message(), "observation_incomplete")
+                self.terminate.assert_not_called()
+                self.launch.assert_not_called()
+                self.assertNotIn("pending", self.monitor.ledger)
+        self.tick(ui_heartbeat=self.now, worker_heartbeat=self.now)
+        self.assertNotIn("active_read", self.monitor.check_errors)
+
+    def test_csv_exception_does_not_hide_independent_worker_fault(self):
+        with patch.object(self.monitor.progress, "observe", side_effect=RuntimeError("CSV parser failed")):
+            self.tick(worker_alive=False)
+        self.assertEqual(self.monitor.last_status["confirmed_fault"], "worker_exited")
+        self.assertIn("csv_check", self.monitor.last_status["check_errors"])
+        self.assertTrue((self.directory / "command.json").exists())
+
+    def test_unreadable_active_state_never_executes_pending_termination(self):
+        self.tick(worker_alive=False)
+        self.now += 100
+        (self.directory / "active.json").write_text("{invalid JSON", encoding="utf-8")
+        self.monitor.tick()
+        self.assertFalse(self.monitor.active_read_ok)
+        self.terminate.assert_not_called()
+        self.launch.assert_not_called()
+
+    def test_corrupt_ledger_does_not_prevent_observation_or_reset_retry_limit(self):
+        (self.directory / "supervisor_ledger.json").write_text("{invalid JSON", encoding="utf-8")
+        self.monitor = Supervisor(self.directory, lambda: self.now, lambda _: self.alive,
+                                  self.launch, self.terminate)
+        with patch.object(self.monitor.progress, "observe", return_value=(None, None)) as observe:
+            self.tick(worker_alive=False)
+        observe.assert_called_once()
+        self.assertIn("ledger_read", self.monitor.check_errors)
+        self.assertFalse((self.directory / "command.json").exists())
+        atomic_write(self.directory / "supervisor_ledger.json",
+                     {"run_id": self.state["run_id"], "attempts": 3, "boot": self.monitor.boot})
+        self.tick()
+        self.assertEqual(self.message(), "blocked: recovery retry limit reached")
+
+    def test_process_check_exception_does_not_skip_csv_or_restart(self):
+        self.monitor.is_alive = Mock(side_effect=OSError("process inaccessible"))
+        with patch.object(self.monitor.progress, "observe", return_value=(None, None)) as observe:
+            self.tick()
+        observe.assert_called_once()
+        self.assertIn("process_check", self.monitor.last_status["check_errors"])
+        self.launch.assert_not_called()
+        self.terminate.assert_not_called()
+
+    def test_status_write_failure_does_not_skip_fault_handling_and_recovers(self):
+        from bench_test.watchdog import supervisor as module
+        write = module.atomic_write
+        with patch.object(module, "atomic_write", side_effect=lambda path, value:
+                          (_ for _ in ()).throw(PermissionError("status locked"))
+                          if path.name == "supervisor_status.json" else write(path, value)):
+            self.tick(worker_alive=False)
+        self.assertIn("status_write", self.monitor.last_status["check_errors"])
+        self.assertEqual(self.monitor.last_status["confirmed_fault"], "worker_exited")
+        self.assertTrue((self.directory / "command.json").exists())
+        self.tick()
+        self.assertNotIn("status_write", self.monitor.check_errors)
+        self.assertNotIn("status_write", read_json(self.directory / "supervisor_status.json")["check_errors"])
+
+    def test_ledger_write_failure_keeps_observing_but_never_dispatches_unrecorded_recovery(self):
+        from bench_test.watchdog import supervisor as module
+        write = module.atomic_write
+        with patch.object(module, "atomic_write", side_effect=lambda path, value:
+                          (_ for _ in ()).throw(OSError("disk full"))
+                          if path.name == "supervisor_ledger.json" else write(path, value)), \
+                patch.object(self.monitor.progress, "observe", return_value=(None, None)) as observe:
+            for now in (1000, 1100, 1200):
+                self.now = now
+                self.tick(worker_alive=False, ui_heartbeat=now)
+            self.assertEqual(observe.call_count, 3)
+        self.assertIn("recovery_control", self.monitor.last_status["check_errors"])
+        self.assertFalse((self.directory / "command.json").exists())
+        self.terminate.assert_not_called()
+        self.launch.assert_not_called()
+        self.tick()
+        self.assertTrue((self.directory / "command.json").exists())
+
+    def test_log_failure_does_not_skip_supervisor_loop_completion(self):
+        from bench_test.watchdog import supervisor as module
+        monitor = Mock(last_status={"message": "healthy"}, last_state={}, check_errors={}, active_read_ok=True)
+        monitor.tick.return_value = False
+        logger = Mock()
+        logger.info.side_effect = OSError("log disk full")
+        with patch.object(module, "runtime_directory", return_value=self.directory), \
+                patch.object(module, "Supervisor", return_value=monitor), \
+                patch.object(module.logging, "getLogger", return_value=logger):
+            module.run_supervisor(simulation_recovery=True)
+        monitor.tick.assert_called_once()
+        self.assertIn("logging", monitor.check_errors)
+
     def test_dead_owner_launches_once_with_saved_token(self):
         self.alive = False
         self.tick()
@@ -434,10 +598,45 @@ class SupervisorTests(TemporaryTest):
         self.assertEqual(restarted.ledger["attempts"], 2)
         self.assertNotIn("last_attempt", restarted.ledger)
 
-    def test_pause_and_long_finalization_are_not_faults(self):
+    def test_finalization_does_not_mask_normal_faults(self):
         self.assertIsNone(fault_reason({**self.state, "status": "paused"}, 9999, True))
-        self.assertIsNone(fault_reason({**self.state, "finalizing": True}, 1800, True))
-        self.assertEqual(fault_reason({**self.state, "finalizing": True}, 2000, True), "finalization_timeout")
+        for changes, now, alive, expected in (
+            ({}, 1061, True, "ui_not_responding"),
+            ({"ui_heartbeat": 1061}, 1061, True, "worker_timeout:waiting"),
+            ({"worker_alive": False}, 1000, True, "worker_exited"),
+            ({"dropview_health": {"state": "disconnected", "sampled_at": 1000}}, 1000, True, "dropsens_disconnected"),
+            ({}, 1000, False, "application_exited"),
+        ):
+            with self.subTest(expected=expected):
+                self.assertEqual(fault_reason({**self.state, "finalizing": True, **changes}, now, alive), expected)
+
+    def test_long_aggregation_warns_without_restarting_a_healthy_measurement(self):
+        self.now = 2000
+        self.tick(finalizing=True, finalizing_started=1000, ui_heartbeat=2000, worker_heartbeat=2000,
+                  dropview_health={"state": "connected", "responding": True, "sampled_at": 2000})
+        status = self.monitor.last_status
+        self.assertEqual(status["aggregation_elapsed"], 1000)
+        self.assertEqual(status["aggregation_warning"], "aggregation_taking_long")
+        self.assertIsNone(status["confirmed_fault"])
+        self.assertNotIn("pending", self.monitor.ledger)
+        self.launch.assert_not_called()
+        self.tick(finalizing=False)
+        self.assertIsNone(self.monitor.last_status["aggregation_elapsed"])
+        self.assertIsNone(self.monitor.last_status["aggregation_warning"])
+
+    def test_csv_stall_is_still_detected_during_aggregation(self):
+        with patch.object(self.monitor.progress, "observe", return_value=("discrete_data_stalled", None)) as observe:
+            self.tick(finalizing=True, finalizing_started=self.now)
+        observe.assert_called_once()
+        self.assertEqual(self.monitor.last_status["confirmed_fault"], "discrete_data_stalled")
+        self.assertIn("pending", self.monitor.ledger)
+
+    def test_aggregation_does_not_extend_pending_recovery_grace(self):
+        self.tick(worker_alive=False, finalizing=True, finalizing_started=self.now)
+        self.now += 61
+        self.tick(ui_heartbeat=self.now)
+        self.terminate.assert_called_once()
+        self.launch.assert_called_once()
 
     def test_parent_reclaim_requires_lineage_and_never_mutates_in_flight(self):
         parent = self.directory / "parent.json"
@@ -524,6 +723,21 @@ class ProgressTests(TemporaryTest):
             self.observe(2000)
             thread.assert_not_called()
         self.probe.lock.release()
+
+    def test_unexpected_csv_parser_failure_is_unverified_storage_not_missing_export(self):
+        self.write_export()
+        with patch("bench_test.watchdog.progress.inspect_csv_progress", side_effect=ValueError("invalid parser input")):
+            self.assertEqual(self.expected(1000), (None, "measurement_storage_unavailable"))
+        self.assertIsNone(self.probe.last_successful_scan)
+        self.assertFalse(self.probe.lock.locked())
+        self.assertEqual(self.expected(1060), (None, None))
+
+    def test_failed_scan_thread_start_releases_lock(self):
+        with patch("bench_test.watchdog.progress.threading.Thread") as thread:
+            thread.return_value.start.side_effect = RuntimeError("thread unavailable")
+            with self.assertRaises(RuntimeError):
+                self.expected(1000)
+        self.assertFalse(self.probe.lock.locked())
 
     def expected(self, now, exports=5, started_ns=None):
         return self.probe.observe(
@@ -771,7 +985,7 @@ class ClientTests(TemporaryTest):
                                       _journal_failed=False, recovery_record=None, recipe=recipe,
                                       pause_event=pause, stop_event=threading.Event(), is_alive=Mock(return_value=True),
                                       outcome="running", worker_heartbeat=1000, measurement_running=True,
-                                      _recovery_phase="waiting", request_recovery=Mock())
+                                      _recovery_phase="waiting", request_recovery=Mock(), retry_failed_checkpoint=Mock())
         self.client.arm(self.runner)
 
     def test_arm_publishes_owner_and_separate_worker(self):
@@ -780,6 +994,58 @@ class ClientTests(TemporaryTest):
         self.assertTrue(active["armed"])
         self.assertEqual(active["worker_heartbeat"], 1000)
         self.launch.assert_called_once_with()
+
+    def test_routine_io_is_limited_to_five_seconds_and_status_is_read_once(self):
+        from bench_test.watchdog import client as module
+        clock = [1000.0]
+        with patch.object(module.time, "monotonic", side_effect=lambda: clock[0]):
+            self.client._publish()
+            self.client._last_io_tick = -float("inf")
+            with patch.object(module, "atomic_write", wraps=atomic_write) as write, \
+                    patch.object(module, "read_json", wraps=read_json) as read:
+                for now in (1000, 1001, 1002, 1003, 1004, 1005):
+                    clock[0] = now
+                    self.client._tick()
+                self.assertEqual(write.call_count, 1)
+                self.assertEqual(write.call_args.args[1]["ui_heartbeat"], 1005)
+                self.assertEqual([item.args[0].name for item in read.call_args_list],
+                                 ["command.json", "supervisor_status.json"] * 2)
+
+    def test_pause_finalization_and_stop_publish_without_waiting_for_interval(self):
+        from bench_test.watchdog import client as module
+        clock = [1000.0]
+        with patch.object(module.time, "monotonic", side_effect=lambda: clock[0]):
+            self.client._publish()
+            self.client._tick()
+            clock[0] = 1001
+            self.runner.pause_event.clear()
+            self.client._tick()
+            self.assertEqual(read_json(self.directory / "active.json")["status"], "paused")
+            self.client.set_finalizing(True)
+            self.assertTrue(read_json(self.directory / "active.json")["finalizing"])
+            self.client.disarm()
+            active = read_json(self.directory / "active.json")
+            self.assertFalse(active["armed"])
+            self.assertEqual(active["status"], "user_stopped")
+
+    def test_aggregation_start_time_survives_duplicate_start_and_clears_on_finish(self):
+        with patch("bench_test.watchdog.client.time.monotonic", return_value=1000):
+            self.client.set_finalizing(True)
+        with patch("bench_test.watchdog.client.time.monotonic", return_value=1010):
+            self.client.set_finalizing(True)
+        self.assertEqual(read_json(self.directory / "active.json")["finalizing_started"], 1000)
+        self.client.set_finalizing(False)
+        self.assertIsNone(read_json(self.directory / "active.json")["finalizing_started"])
+
+    def test_health_state_change_is_published_before_next_periodic_heartbeat(self):
+        from bench_test.watchdog import client as module
+        with patch.object(module.time, "monotonic", return_value=1000):
+            self.client._publish()
+            self.client._last_io_tick = 1000
+            self.client.dv.last_health = {"state": "disconnected", "responding": True}
+            self.client._tick()
+        self.assertEqual(read_json(self.directory / "active.json")["dropview_health"]["state"],
+                         "disconnected")
 
     def test_publishes_only_observations_for_the_current_measurement_owner(self):
         owner = {"pid": 42, "created": 100}
@@ -888,6 +1154,8 @@ class ClientTests(TemporaryTest):
     def test_focus_policy_is_limited_to_active_unpaused_measurement_wait(self):
         self.runner._interrupted = Mock(return_value=False)
         self.assertTrue(self.client.should_focus_connection())
+        self.client.set_finalizing(True)
+        self.assertTrue(self.client.should_focus_connection())
         self.runner.pause_event.clear()
         self.assertFalse(self.client.should_focus_connection())
         self.runner.pause_event.set()
@@ -927,12 +1195,114 @@ class ClientTests(TemporaryTest):
         self.assertEqual(read_json(self.directory / "active.json")["status"], "user_stopped")
         self.guard.restore.assert_called_once()
 
-    def test_recording_failure_fences_recovery_without_unpausing_live_experiment(self):
+    def test_recording_failure_keeps_monitoring_and_blocks_commands_without_cancelling_run(self):
+        self.command()
         self.runner._journal_failed = True
+        self.client._tick()
+        self.assertTrue(self.client.is_armed)
+        self.assertFalse(self.client._stop_signal.is_set())
+        self.assertFalse(read_json(self.directory / "active.json")["recovery_available"])
+        self.runner.request_recovery.assert_not_called()
+        self.tab.recover_from_record.assert_not_called()
+        self.guard.restore.assert_not_called()
+
+    def test_recording_restoration_does_not_undo_user_stop(self):
+        self.runner._journal_failed = True
+        self.client._tick()
+        self.client.disarm()
+        self.runner._journal_failed = False
         self.client._tick()
         self.assertFalse(self.client.is_armed)
         self.assertTrue(self.client._stop_signal.is_set())
-        self.guard.restore.assert_not_called()
+        self.tab.recover_from_record.assert_not_called()
+
+    def test_recording_restoration_republishes_eligibility_and_block_reason_is_visible(self):
+        messages = []
+        self.client.status_changed.connect(messages.append)
+        self.runner._journal_failed = True
+        self.client._tick()
+        self.assertTrue(any("Monitoring active; recovery blocked" in message for message in messages))
+        self.runner._journal_failed = False
+        self.client._tick()
+        self.assertTrue(read_json(self.directory / "active.json")["recovery_available"])
+        self.assertFalse(self.client._stop_signal.is_set())
+
+    def test_initial_recording_failure_still_arms_monitoring(self):
+        with patch.object(self.runner.recovery_journal, "update", side_effect=OSError("disk full")):
+            self.client.arm(self.runner)
+        self.assertTrue(self.client.is_armed)
+        self.assertFalse(read_json(self.directory / "active.json")["recovery_available"])
+
+    def test_command_read_error_does_not_skip_status_read_or_update_verification(self):
+        from bench_test.watchdog import client as module
+        read = module.read_json
+        with patch.object(module, "read_json", side_effect=lambda path:
+                          (_ for _ in ()).throw(ValueError("invalid command JSON"))
+                          if path.name == "command.json" else read(path)) as attempt:
+            self.client._tick()
+        self.assertIn("supervisor_status.json", [call.args[0].name for call in attempt.call_args_list])
+        self.assertIn("command.json", self.client._io_errors)
+        self.guard.status.assert_called_once()
+        self.runner.request_recovery.assert_not_called()
+
+    def test_active_publish_error_does_not_skip_status_and_blocks_recovery_command(self):
+        from bench_test.watchdog import client as module
+        self.command()
+        messages = []
+        self.client.status_changed.connect(messages.append)
+        self.client._last_publish_at = -float("inf")
+        with patch.object(module, "atomic_write", side_effect=PermissionError("active locked")):
+            self.client._tick()
+        self.assertIn("active_write", self.client._io_errors)
+        self.runner.request_recovery.assert_not_called()
+        self.guard.status.assert_called_once()
+        self.assertTrue(any("Incomplete monitoring" in message for message in messages))
+
+    def test_supervisor_read_error_displays_cached_status_as_incomplete_without_respawning(self):
+        from bench_test.watchdog import client as module
+        self.client._last_supervisor = {"run_id": self.client._run_id, "message": "healthy"}
+        self.client._last_spawn = -1000
+        self.launch.reset_mock()
+        read = module.read_json
+        with patch.object(module, "read_json", side_effect=lambda path:
+                          (_ for _ in ()).throw(PermissionError("status locked"))
+                          if path.name == "supervisor_status.json" else read(path)):
+            self.client._tick()
+        self.assertIn("supervisor_status.json", self.client._last_status)
+        self.assertIn("Incomplete monitoring", self.client._last_status)
+        self.launch.assert_not_called()
+
+    def test_transient_checkpoint_conflict_keeps_watchdog_armed(self):
+        replace = os.replace
+        with patch("bench_test.utils.file_io.os.replace") as attempt, \
+                patch("bench_test.utils.file_io.time.sleep"), \
+                patch("bench_test.utils.file_io.debug_log"), \
+                patch("bench_test.recipe.recovery.debug_log"):
+            def blocked_once(source, destination):
+                if attempt.call_count == 1:
+                    raise PermissionError("locked")
+                return replace(source, destination)
+            attempt.side_effect = blocked_once
+            self.runner.recovery_journal.update(phase="waiting", remaining_seconds=99)
+            self.client._tick()
+        self.assertTrue(self.client.is_armed)
+        self.assertFalse(self.client._stop_signal.is_set())
+        self.assertEqual(read_json(self.runner.recovery_journal.path)["remaining_seconds"], 99)
+        self.assertTrue(read_json(self.directory / "active.json")["armed"])
+
+    def test_transient_watchdog_state_conflict_does_not_lose_heartbeat(self):
+        replace = os.replace
+        with patch("bench_test.utils.file_io.os.replace") as attempt, \
+                patch("bench_test.utils.file_io.time.sleep"), \
+                patch("bench_test.utils.file_io.debug_log"):
+            def blocked_once(source, destination):
+                if attempt.call_count == 1:
+                    raise PermissionError("locked")
+                return replace(source, destination)
+            attempt.side_effect = blocked_once
+            self.client._publish()
+        self.assertTrue(read_json(self.directory / "active.json")["armed"])
+        self.assertTrue(self.client.is_armed)
 
     def test_update_verification_can_revoke_old_positive_status(self):
         self.client._update_status = "paused_verified_until:old"

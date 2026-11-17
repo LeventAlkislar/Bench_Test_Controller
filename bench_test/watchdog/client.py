@@ -14,6 +14,8 @@ from bench_test.watchdog.state import (
 )
 from bench_test.watchdog.windows_update import WindowsUpdateGuard
 
+CLIENT_IO_INTERVAL = 5.0
+
 
 class WatchdogClient(QObject):
     status_changed = pyqtSignal(str)
@@ -35,6 +37,7 @@ class WatchdogClient(QObject):
         self._ack = None
         self._command_state = ""
         self._finalizing = False
+        self._finalizing_started = None
         self._last_spawn = -1000
         self._supervisor_starting = False
         self._last_status = ""
@@ -47,6 +50,13 @@ class WatchdogClient(QObject):
         self._stop_signal = None
         self._update_poll_at = 0
         self._update_check_running = False
+        self._last_io_tick = -float("inf")
+        self._last_publish_at = -float("inf")
+        self._last_publish_signature = None
+        self._journal_retry_running = False
+        self._journal_retry_at = 0.0
+        self._io_errors = {}
+        self._last_supervisor = {}
         self._timer = QTimer(self)
         self._timer.setInterval(1000)
         self._timer.timeout.connect(self._tick)
@@ -62,7 +72,7 @@ class WatchdogClient(QObject):
 
     def should_focus_connection(self):
         runner = self.runner
-        return bool(self._armed and runner and runner.is_alive() and not self._finalizing
+        return bool(self._armed and runner and runner.is_alive()
                     and runner.pause_event.is_set() and not runner._interrupted()
                     and runner._recovery_phase == "waiting" and runner.measurement_running)
 
@@ -80,7 +90,7 @@ class WatchdogClient(QObject):
         observe_only = (not simulation_recovery and getattr(runner, "simulation_mode", False) is True
                         and runner.measurement_mode == MEASUREMENT_MODE_SCRIPT_PAD
                         and is_discrete_pad_recipe(runner.recipe))
-        if not observe_only and (runner.recovery_journal is None or runner._journal_failed):
+        if not observe_only and runner.recovery_journal is None:
             return
         self._select_recovery_mode(simulation_recovery)
         self._observe_only = observe_only
@@ -102,7 +112,14 @@ class WatchdogClient(QObject):
         self._record_path = ""
         if not observe_only:
             self._record_path = runner.recovery_journal.path
-            runner.recovery_journal.update(watchdog_run_id=run_id)
+            if hasattr(runner, "_checkpoint_changes"):
+                with runner._checkpoint_lock:
+                    runner._checkpoint_changes["watchdog_run_id"] = run_id
+            try:
+                runner.recovery_journal.update(watchdog_run_id=run_id)
+            except (OSError, ValueError, TypeError) as exc:
+                runner._journal_failed = True
+                self.log_message.emit(f"Recovery recording failed; monitoring continues: {exc}")
         self._armed = True
         self._publish()
         if not observe_only and not simulation_recovery and (changed_run or self._update_guard is None):
@@ -128,7 +145,7 @@ class WatchdogClient(QObject):
             self.directory = self._default_directory / "simulation" if simulation_recovery else self._default_directory
             self._last_spawn = -1000
 
-    def _publish(self, status=None):
+    def _publish(self, status=None, *, force=True):
         if not self._run_id:
             return
         runner = self.runner
@@ -141,10 +158,12 @@ class WatchdogClient(QObject):
         if measurement_running and isinstance(measurement_owner, dict) and (
                 health.get("process_identity") != measurement_owner or health.get("sampled_at", 0) < measurement_epoch):
             health = {}
-        atomic_write(self.directory / "active.json", {
+        now = time.monotonic()
+        payload = {
             "version": 1, "owner": self.owner, "run_id": self._run_id,
-            "armed": self._armed, "status": mode, "ui_heartbeat": time.monotonic(),
+            "armed": self._armed, "status": mode, "ui_heartbeat": now,
             "observe_only": self._observe_only,
+            "recovery_available": not self._observe_only and not bool(runner and runner._journal_failed),
             "simulation_recovery": self._simulation_recovery,
             "worker_heartbeat": getattr(runner, "worker_heartbeat", time.monotonic()),
             "worker_alive": bool(runner and runner.is_alive()),
@@ -159,19 +178,53 @@ class WatchdogClient(QObject):
             "csv_expectation": getattr(runner, "csv_expectation", None),
             "dropview_health": health,
             "finalizing": self._finalizing, "ack_token": self._ack,
+            "finalizing_started": self._finalizing_started,
             "command_state": self._command_state,
-        })
+        }
+        # Health samples and heartbeat timestamps change continuously. Only
+        # meaningful state changes bypass the routine publication interval.
+        signature = {key: value for key, value in payload.items()
+                     if key not in ("ui_heartbeat", "worker_heartbeat", "dropview_health")}
+        signature["health"] = {key: health.get(key) for key in (
+            "dv_open", "state", "responding", "process_identity", "error")}
+        if (not force and signature == self._last_publish_signature
+                and now - self._last_publish_at < CLIENT_IO_INTERVAL):
+            return
+        try:
+            atomic_write(self.directory / "active.json", payload)
+        except (OSError, ValueError, TypeError) as exc:
+            self._io_errors["active_write"] = str(exc)
+            return False
+        self._io_errors.pop("active_write", None)
+        self._last_publish_at, self._last_publish_signature = now, signature
+        return True
+
+    def _read_channel(self, name):
+        try:
+            value = read_json(self.directory / name)
+            self._io_errors.pop(name, None)
+            return value
+        except (OSError, ValueError, TypeError) as exc:
+            self._io_errors[name] = str(exc)
+            return None
 
     def set_finalizing(self, active):
+        if active and not self._finalizing:
+            self._finalizing_started = time.monotonic()
+        elif not active:
+            self._finalizing_started = None
         self._finalizing = active
         if self._armed:
             self._publish()
 
-    def _ensure_supervisor(self):
+    def _ensure_supervisor(self, state=None):
         now = time.monotonic()
         if self._supervisor_starting or now - self._last_spawn < 15:
             return
-        state = read_json(self.directory / "supervisor_status.json")
+        if state is None:
+            state = self._read_channel("supervisor_status.json")
+            if "supervisor_status.json" in self._io_errors:
+                return
         if state and owner_alive(state.get("owner", {})):
             return
         self._last_spawn = now
@@ -251,13 +304,20 @@ class WatchdogClient(QObject):
     def _continue_recovery(self):
         if not self._pending:
             return
+        if "active_write" in self._io_errors:
+            return
+        if self.runner and self.runner._journal_failed:
+            self._pending = None
+            self._command_state = "cancelled"
+            return
         if self.runner and self.runner.is_alive():
             return
         if self.tab.package_tab.sm.state in ("running", "aggregating"):
             return
         command = self._pending
         self._command_state = "starting_recovery"
-        self._publish("starting")
+        if not self._publish("starting"):
+            return
         try:
             # Reload the record after the old runner has quiesced; never reuse a
             # snapshot captured before the cooperative interrupt took effect.
@@ -274,12 +334,16 @@ class WatchdogClient(QObject):
             return
         try:
             if self.runner and self.runner._journal_failed:
-                if self._stop_signal:
-                    self._stop_signal.set()
-                self._armed = False
-                self._publish("recording_failed")
-                self.status_changed.emit("Watchdog recovery disabled: execution recording failed")
-                return
+                if not self._journal_retry_running and time.monotonic() >= self._journal_retry_at:
+                    self._journal_retry_at = time.monotonic() + 15
+                    self._journal_retry_running = True
+                    runner = self.runner
+                    def retry_recording():
+                        try:
+                            runner.retry_failed_checkpoint()
+                        finally:
+                            self._journal_retry_running = False
+                    threading.Thread(target=retry_recording, daemon=True).start()
             outcome = getattr(self.runner, "outcome", "prepared")
             self._report_recovery_result(outcome)
             if outcome == "operator_required" and not self.runner.is_alive():
@@ -293,11 +357,20 @@ class WatchdogClient(QObject):
                     and self.runner and not self.runner.is_alive()):
                 self.disarm("simulation_interrupted")
                 return
-            command = read_json(self.directory / "command.json")
+            self._publish(force=False)
+            now = time.monotonic()
+            if now - self._last_io_tick < CLIENT_IO_INTERVAL:
+                if not self._observe_only:
+                    self._continue_recovery()
+                return
+            self._last_io_tick = now
+            command = self._read_channel("command.json")
             if (command and command.get("run_id") == self._run_id and command.get("token") != self._ack
-                    and command.get("target_owner") == self.owner):
+                    and command.get("target_owner") == self.owner and "active_write" not in self._io_errors):
                 self._ack = command["token"]
                 if self.runner and (self.runner.stop_event.is_set() or not self.runner.pause_event.is_set()):
+                    self._command_state = "cancelled"
+                elif not self._observe_only and self.runner and self.runner._journal_failed:
                     self._command_state = "cancelled"
                 elif self._observe_only:
                     message = f"Simulation watchdog: {command['reason']}; automatic recovery not executed."
@@ -310,10 +383,14 @@ class WatchdogClient(QObject):
                     self._command_state = "waiting_worker"
                     if self.runner:
                         self.runner.request_recovery(command["reason"])
-            self._publish()
+            self._publish(force=False)
             if not self._observe_only:
                 self._continue_recovery()
-            self._ensure_supervisor()
+            supervisor = self._read_channel("supervisor_status.json")
+            if "supervisor_status.json" not in self._io_errors:
+                self._last_supervisor = supervisor or {}
+                self._ensure_supervisor(self._last_supervisor)
+            supervisor = self._last_supervisor
             if self._update_guard and not self._update_check_running and time.monotonic() - self._update_poll_at > 60:
                 self._update_poll_at = time.monotonic()
                 self._update_check_running = True
@@ -329,7 +406,6 @@ class WatchdogClient(QObject):
                     finally:
                         self._update_check_running = False
                 threading.Thread(target=verify_updates, daemon=True).start()
-            supervisor = read_json(self.directory / "supervisor_status.json") or {}
             self._display_watchdog_status(supervisor)
         except Exception as exc:
             self.status_changed.emit(f"Watchdog unavailable: {exc}")
@@ -361,6 +437,15 @@ class WatchdogClient(QObject):
                     if isinstance(value, (int, float)) else "—")
 
         message = "Watchdog: " + supervisor.get("message", "starting")
+        if self._finalizing and self._finalizing_started is not None:
+            message += f" | Aggregate: {max(0, time.monotonic() - self._finalizing_started):.0f}s"
+            if supervisor.get("aggregation_warning"):
+                message += " (taking longer than expected)"
+        errors = {**supervisor.get("check_errors", {}), **self._io_errors}
+        if errors:
+            message += " | Incomplete monitoring: " + "; ".join(f"{key}: {value}" for key, value in errors.items())
+        if self.runner and self.runner._journal_failed:
+            message += " | Monitoring active; recovery blocked: execution record is not current"
         if supervisor.get("confirmed_fault"):
             message += " | Fault: " + supervisor["confirmed_fault"].replace("_", " ")
         if supervisor:
