@@ -268,7 +268,11 @@ class RecipeRunner(threading.Thread):
             self._log(f"Pump [{label}]: {line}")
 
     def _safe_stop_pump(self, label: str = "STOP"):
-        if self.pump_simulation_mode or not self._pump_connected():
+        if self.pump_simulation_mode:
+            self._requested_settings["pump_rpm"] = 0.0
+            self.checkpoint()
+            return
+        if not self._pump_connected():
             return
         try:
             self._log_pump_lines(label, self.pump_ctrl.stop())
@@ -297,8 +301,7 @@ class RecipeRunner(threading.Thread):
 
     def _finish_watchdog_interrupt(self):
         pump_stopped = self._hold_pump_for_recovery()
-        blocked = (not pump_stopped or (self._watchdog_measurement_state == EDITOR_CONTROL_UNVERIFIED
-                   and (not self.simulation_mode or self.simulation_recovery)))
+        blocked = not pump_stopped or self._watchdog_measurement_state == EDITOR_CONTROL_UNVERIFIED
         status = "operator_required" if blocked else "interrupted"
         if self.stop_event.is_set():
             status = "user_stopped"
@@ -719,7 +722,7 @@ class RecipeRunner(threading.Thread):
         return True
 
     def _interrupt_discrete_measurement(self, message, state):
-        can_recover = self.recovery_journal is not None and (not self.simulation_mode or self.simulation_recovery)
+        can_recover = self.recovery_journal is not None
         self.status_queue.put(("warning" if can_recover else "error", message))
         # Preserve the expected measurement state for the recovery cursor.
         self._watchdog_measurement_state = state

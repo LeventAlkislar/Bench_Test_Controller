@@ -9,6 +9,7 @@ import threading
 import unittest
 import xml.etree.ElementTree as ET
 from dataclasses import asdict
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -163,9 +164,26 @@ class ExecutorTests(unittest.TestCase):
         self.assertTrue(Path(journal.path).is_file())
 
     def test_new_packages_are_unique_even_when_created_in_same_second(self):
-        first = create_recovery_package(self.record(), self.original.path)[0]
-        second = create_recovery_package(self.record(), self.original.path)[0]
-        self.assertNotEqual(first.session_dir, second.session_dir)
+        for created, expected in (
+            (datetime(2026, 11, 19, 12, 34, 59), ["20261119_123459", "20261119_123500", "20261119_123501"]),
+            (datetime(2026, 12, 31, 23, 59, 59), ["20261231_235959", "20270101_000000", "20270101_000001"]),
+        ):
+            with self.subTest(created=created), \
+                    patch("bench_test.recipe.recovery_executor.datetime") as clock:
+                clock.now.return_value = created
+                sessions = [create_recovery_package(self.record(), self.original.path)[0] for _ in range(3)]
+                self.assertEqual([Path(session.session_dir).name for session in sessions], expected)
+                self.assertTrue(all(Path(session.get_file_path("script")).is_file() for session in sessions))
+
+    def test_existing_file_also_advances_recovery_directory_timestamp(self):
+        created = datetime(2026, 11, 19, 9, 0, 0)
+        existing = Path(self.source.session_dir).parent / "20261119_090000"
+        existing.write_text("existing data", encoding="utf-8")
+        with patch("bench_test.recipe.recovery_executor.datetime") as clock:
+            clock.now.return_value = created
+            session = create_recovery_package(self.record(), self.original.path)[0]
+        self.assertEqual(Path(session.session_dir).name, "20261119_090001")
+        self.assertEqual(existing.read_text(encoding="utf-8"), "existing data")
 
     def test_missing_input_or_unrelated_method_fails_before_new_package(self):
         before = set(Path(self.source.session_dir).parent.iterdir())
@@ -575,6 +593,12 @@ class ExecutorTests(unittest.TestCase):
         self.assertEqual(RecoveryJournal.read(child.path)["remaining_seconds"], 90)
 
     def test_disconnection_recovers_through_supervisor_client_and_new_package(self):
+        self._assert_disconnection_recovers(simulation=False)
+
+    def test_simulated_disconnection_recovers_through_supervisor_client_and_new_package(self):
+        self._assert_disconnection_recovers(simulation=True)
+
+    def _assert_disconnection_recovers(self, *, simulation):
         from PyQt6.QtWidgets import QApplication
         from bench_test.watchdog.client import WatchdogClient
         import time
@@ -583,10 +607,11 @@ class ExecutorTests(unittest.TestCase):
             app = QApplication.instance() or QApplication(["recovery-integration"])
         self.recipe.steps[2] = RecipeStep(0, 0)
         self.recipe.loop_count = 1
-        self.original.update(recipe=asdict(self.recipe),
+        self.original.update(recipe=asdict(self.recipe), simulation_recovery=simulation,
                              requested_settings={"valve_a": 3, "valve_b": 2, "pump_rpm": 12})
         old = RecipeRunner(self.a, self.b, self.recipe, queue.Queue(), threading.Event(), self.dv,
-                           pump_ctrl=self.pump, recovery_journal=self.original)
+                           pump_ctrl=self.pump, recovery_journal=self.original,
+                           simulation_mode=simulation, simulation_recovery=simulation)
         old.current_loop_index, old.current_sequence_index, old.current_step_index = 1, 2, 2
         old._active_step = self.recipe.steps[1]
         old._requested_settings.update(self.record()["requested_settings"])
@@ -599,8 +624,9 @@ class ExecutorTests(unittest.TestCase):
         state_machine = SimpleNamespace(state="running")
         tab = SimpleNamespace(package_tab=SimpleNamespace(sm=state_machine), recover_from_record=Mock())
         health = SimpleNamespace(last_health={})
-        runtime = Path(self.temp.name) / "watchdog-integration"
-        client = WatchdogClient(tab, health, directory=runtime)
+        runtime_base = Path(self.temp.name) / "watchdog-integration"
+        runtime = runtime_base
+        client = WatchdogClient(tab, health, directory=runtime_base)
         client._timer.stop()
         now = [time.monotonic()]
         launch, terminate = Mock(), Mock()
@@ -660,9 +686,12 @@ class ExecutorTests(unittest.TestCase):
                 self.dv.do_reconnect_dropsens.assert_called_once_with(old._measurement_owner, log_fn=runner._log)
                 self.dv.do_start_dropview.assert_not_called()
                 self.dv.do_reconcile_discrete_recovery.assert_not_called()
-                self.pump.set_speed_rpm.assert_any_call(12)
                 self.dv.do_start_measure.assert_called_once_with(session.get_file_path("script"), log_fn=runner._log)
-                self.assertEqual(self.pump.stop_and_confirm.call_count, 2)
+                if simulation:
+                    self.assertEqual(self.a.mock_calls + self.b.mock_calls + self.pump.mock_calls, [])
+                else:
+                    self.pump.set_speed_rpm.assert_any_call(12)
+                    self.assertEqual(self.pump.stop_and_confirm.call_count, 2)
                 launch.assert_not_called()
                 terminate.assert_not_called()
             finally:
@@ -719,6 +748,50 @@ class ExecutorTests(unittest.TestCase):
         with RecipeExecutionLock(path):
             pass
 
+    def test_package_build_uses_selected_root_and_reuses_ready_session(self):
+        from PyQt6.QtWidgets import QApplication
+        from bench_test.ui.tabs.package_panel import PackagePanel
+
+        with patch.dict(os.environ, {"QT_QPA_PLATFORM": "offscreen"}):
+            app = QApplication.instance() or QApplication(["package-tests"])
+        recipe_path = Path(self.temp.name) / "recipe.json"
+        recipe_path.write_text(json.dumps(asdict(self.recipe)), encoding="utf-8")
+        with patch.object(PackagePanel, "_restore_last_part_number"), \
+                patch("bench_test.ui.tabs.package_panel.remember_value"), \
+                patch("bench_test.ui.tabs.package_panel.remember"), \
+                patch("bench_test.measurement.packager.remember") as remember_root, \
+                patch("bench_test.ui.tabs.package_panel.QMessageBox.critical") as error:
+            panel = PackagePanel()
+            try:
+                panel.part_number_edit.setText("Package Sensor")
+                panel.package_root_edit.setText(self.temp.name)
+                arguments = dict(
+                    tp_path=self.source.get_file_path("tp"),
+                    scr_params={"output_csv": "placeholder.csv", "repeat_times": 2, "wait_ms": 1000},
+                    recipe_path=str(recipe_path), recipe_steps=self.recipe.steps)
+                self.assertTrue(panel.build_package(**arguments), error.call_args)
+                session = panel.get_session()
+                self.assertEqual(Path(session.session_dir).parent, Path(self.temp.name) / "Package Sensor")
+                self.assertFalse((Path(self.temp.name) / "_watchdog_simulation").exists())
+                remember_root.assert_called_once_with("package_root", self.temp.name)
+                for key in ("tp", "script", "recipe"):
+                    self.assertEqual(Path(session.get_file_path(key)).parent, Path(session.params_dir))
+                self.assertEqual(Path(session.get_file_path("tp")).read_bytes(),
+                                 Path(self.source.get_file_path("tp")).read_bytes())
+                tree = ET.parse(session.get_file_path("script"))
+                self.assertEqual(tree.find("actions/action[@type='LOADMETHOD']/file").text,
+                                 session.get_file_path("tp"))
+                exports = tree.findall("actions/action[@type='EXPORTCURVES']/file")
+                self.assertTrue(exports)
+                self.assertTrue(all(Path(item.text).parent == Path(session.measurements_dir) for item in exports))
+                self.assertTrue(panel.build_package(**arguments))
+                self.assertIs(panel.get_session(), session)
+                error.assert_not_called()
+            finally:
+                panel._close_log_writer()
+                panel.close()
+                app.processEvents()
+
     def test_recovery_entry_attaches_new_package_and_locks_ui_without_normal_start(self):
         from PyQt6.QtWidgets import QApplication
         from bench_test.ui.tabs.package_panel import PackagePanel
@@ -744,6 +817,8 @@ class ExecutorTests(unittest.TestCase):
                 start.assert_called_once()
                 normal_start.assert_not_called()
                 self.assertIs(panel.get_session(), session)
+                self.assertEqual(panel.package_root_edit.text(),
+                                 os.path.dirname(os.path.dirname(session.session_dir)))
                 self.assertIs(tab.recipe_steps, tab.recipe_runner.recipe.steps)
                 self.assertFalse(tab.start_btn.isEnabled())
                 self.assertFalse(tab.recover_btn.isEnabled())

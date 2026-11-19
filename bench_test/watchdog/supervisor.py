@@ -261,12 +261,11 @@ class Supervisor:
             return True
 
     def _advance(self, state, now, alive, reason, data_notice):
-        observe_only = state.get("observe_only", False)
         if state.get("status") in TERMINAL or not state.get("armed"):
             self.connection_unverified_since = None
             self.publish(state.get("status", "idle"))
             return alive and state.get("status") != "closed"
-        if not alive and not observe_only and state.get("recovery_available") is not False:
+        if not alive and state.get("recovery_available") is not False:
             # Completion may reach the journal before the UI publishes it.
             record = read_json(state.get("record_path", "")) or {}
             if record.get("status") in ("completed", "completed_after_interruption", "user_stopped"):
@@ -285,10 +284,10 @@ class Supervisor:
             self.suspect = None
             self.healthy_since = None
             self.save()
-        recovery_blocked = state.get("recovery_available") is False and not observe_only
+        recovery_blocked = state.get("recovery_available") is False
         if recovery_blocked and self.ledger.pop("pending", None):
             self.save()
-        pending = None if observe_only else self.ledger.get("pending")
+        pending = self.ledger.get("pending")
         if pending:
             acked = state.get("ack_token") == pending["token"]
             if not acked and state.get("owner") == pending["target_owner"] and pending.get("launched_at") is None:
@@ -392,19 +391,6 @@ class Supervisor:
         if recovery_blocked:
             self.publish("recovery_blocked: recording unavailable", warning=reason)
             return True
-        if observe_only:
-            previous = self.ledger.get("simulation_fault") or {}
-            cancelled = (state.get("ack_token") == previous.get("token")
-                         and state.get("command_state") == "cancelled")
-            if alive and (not previous or cancelled) and not self.stop_signal.is_set():
-                command = {"token": uuid.uuid4().hex, "run_id": root, "observe_only": True,
-                           "target_owner": state["owner"], "reason": reason}
-                atomic_write(self.directory / "command.json", command)
-                self.ledger["simulation_fault"] = command
-                self.save()
-            fault = self.ledger.get("simulation_fault") or {}
-            self.publish("simulation_fault:" + (fault.get("reason", reason) if alive else reason))
-            return alive
         if self.ledger.get("attempts", 0) >= 3:
             self.publish("blocked: recovery retry limit reached")
             return True
@@ -441,11 +427,8 @@ def log_safely(logger, method, *args):
         return str(exc)
 
 
-def run_supervisor(simulation_recovery=False, *, app_executable=None):
-    from bench_test.watchdog.state import SIMULATION_RECOVERY_ARG
-
-    directory = runtime_directory(simulation_recovery, app_executable=app_executable)
-    flags = (SIMULATION_RECOVERY_ARG,) if simulation_recovery else ()
+def run_supervisor(*, app_executable=None):
+    directory = runtime_directory(app_executable=app_executable)
     directory.mkdir(parents=True, exist_ok=True)
     logger = logging.getLogger("bench_test.watchdog")
     handler = WatchdogLogHandler(directory / "watchdog.log", maxBytes=2_000_000, backupCount=3, encoding="utf-8", delay=True)
@@ -454,7 +437,7 @@ def run_supervisor(simulation_recovery=False, *, app_executable=None):
     try:
         with ProcessLock(directory / "supervisor.lock"):
             supervisor = Supervisor(
-                directory, start_app=lambda *args: launch(*args, *flags, executable=app_executable))
+                directory, start_app=lambda *args: launch(*args, executable=app_executable))
             last_message = None
             last_warning = None
             while True:
@@ -479,7 +462,7 @@ def run_supervisor(simulation_recovery=False, *, app_executable=None):
                     else:
                         last_warning = warning
                     active = supervisor.last_state or {}
-                    if not simulation_recovery and supervisor.active_read_ok and not active.get("observe_only") and (
+                    if supervisor.active_read_ok and (
                             active.get("status") in ("closed", "user_stopped", "completed")
                             or status.get("message") in ("user_stopped", "completed")):
                         from bench_test.watchdog.windows_update import WindowsUpdateGuard

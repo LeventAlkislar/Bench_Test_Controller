@@ -176,9 +176,14 @@ modes. At recipe start BTC lists any disconnected pump or valve and asks once
 whether to continue in simulation. If accepted, BTC skips all pump and valve
 commands and checks. DropView and DropSens use the same controls and recovery
 rules as normal mode. The saved mode is inherited by the recovery package.
-Test sessions are saved under `_watchdog_simulation` in the selected package
-root. Watchdog state uses a separate `simulation` subdirectory. Simulation
-leaves Windows Update policy alone. Continuous PAD and CV are
+Both modes require a recovery journal and use the same supervisor requests,
+worker/finalization waits and automatic recovery entry. There is no observation-only
+simulation path. Unverified previous measurement control blocks both modes.
+Simulation and normal sessions use the same selected package root and
+`<part_number>/<timestamp>` directory structure. Both modes use the same watchdog
+state directory and Windows Update protection, verification and restoration.
+Normal application startup reads the saved simulation flag from the recovery
+record; no separate simulation launch argument is required. Continuous PAD and CV are
 outside this watchdog scope. The client
 starts the matching standalone WD for packaged releases, or the same interpreter
 with `--watchdog` for source runs; this separate process

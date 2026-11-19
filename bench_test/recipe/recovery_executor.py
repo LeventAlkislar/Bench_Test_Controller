@@ -3,10 +3,9 @@ import copy
 import json
 import os
 import shutil
-import uuid
 import xml.etree.ElementTree as ET
 from dataclasses import asdict
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from PyQt6.QtCore import QLockFile
 
@@ -63,9 +62,14 @@ def create_recovery_package(record: dict, source_path: str):
         raise ValueError("The script refers to a different method; recovery cannot infer its settings.")
 
     created = datetime.now()
-    directory = os.path.join(os.path.dirname(source_dir),
-                             created.strftime("%Y%m%d_%H%M%S") + "_recovery_" + uuid.uuid4().hex[:8])
-    os.makedirs(directory, exist_ok=False)
+    directory_time = created
+    while True:
+        directory = os.path.join(os.path.dirname(source_dir), directory_time.strftime("%Y%m%d_%H%M%S"))
+        try:
+            os.mkdir(directory)
+            break
+        except FileExistsError:
+            directory_time += timedelta(seconds=1)
     session = MeasurementSession(directory, source.part_number, created,
                                  experiment_params=copy.deepcopy(source.experiment_params),
                                  measurement_mode="script_pad")

@@ -165,7 +165,7 @@ class MeasurementSetupTab(QWidget):
 
     # ── RecipeTab arayüzü ─────────────────────────────────────────
 
-    def build_package(self, recipe_path: str = "", recipe_steps: list = None, *, simulation_mode=False) -> bool:
+    def build_package(self, recipe_path: str = "", recipe_steps: list = None) -> bool:
         """
         RecipeTab._start_recipe() tarafından çağrılır.
         Üç panelden veri toplayıp PackagePanel.build_package()'a iletir.
@@ -203,7 +203,6 @@ class MeasurementSetupTab(QWidget):
             method_paths=method_paths,
             method_values_by_mode=method_values_by_mode,
             recipe_steps=recipe_steps,
-            simulation_mode=simulation_mode,
         )
 
     @staticmethod

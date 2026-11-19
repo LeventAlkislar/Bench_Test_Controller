@@ -6,10 +6,9 @@ from datetime import datetime, timedelta, timezone
 
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 
-from bench_test.measurement.session import MEASUREMENT_MODE_SCRIPT_PAD
-from bench_test.recipe.recovery import expanded_step_indices, is_discrete_pad_recipe
+from bench_test.recipe.recovery import expanded_step_indices
 from bench_test.watchdog.state import (
-    SIMULATION_RECOVERY_ARG, RunStopSignal, atomic_write, launch_watchdog, owner_alive,
+    RunStopSignal, atomic_write, launch_watchdog, owner_alive,
     process_identity, read_json, recovery_source, runtime_directory,
 )
 from bench_test.watchdog.windows_update import WindowsUpdateGuard
@@ -24,12 +23,10 @@ class WatchdogClient(QObject):
     def __init__(self, recipe_tab, dv_controller, parent=None, directory=None):
         super().__init__(parent)
         self.tab, self.dv = recipe_tab, dv_controller
-        self._default_directory = directory or runtime_directory()
-        self.directory = self._default_directory
+        self.directory = directory or runtime_directory()
         self.owner = process_identity()
         self.runner = None
         self._armed = False
-        self._observe_only = False
         self._simulation_recovery = False
         self._run_id = ""
         self._record_path = ""
@@ -86,14 +83,9 @@ class WatchdogClient(QObject):
             self.log_message.emit(f"Watchdog arming failed: {exc}")
 
     def _arm(self, runner):
-        simulation_recovery = getattr(runner, "simulation_recovery", False) is True
-        observe_only = (not simulation_recovery and getattr(runner, "simulation_mode", False) is True
-                        and runner.measurement_mode == MEASUREMENT_MODE_SCRIPT_PAD
-                        and is_discrete_pad_recipe(runner.recipe))
-        if not observe_only and runner.recovery_journal is None:
+        if runner.recovery_journal is None:
             return
-        self._select_recovery_mode(simulation_recovery)
-        self._observe_only = observe_only
+        self._simulation_recovery = getattr(runner, "simulation_recovery", False) is True
         self.runner = runner
         if self._pending:
             run_id = self._pending["run_id"]
@@ -106,23 +98,18 @@ class WatchdogClient(QObject):
         self._stop_signal = RunStopSignal(run_id)
         if self._stop_signal.is_set():
             raise RuntimeError("This run was cancelled; automatic recovery is disabled.")
-        if observe_only or simulation_recovery:
-            self._update_guard = None
-            self._update_status = "not_applied_in_simulation"
-        self._record_path = ""
-        if not observe_only:
-            self._record_path = runner.recovery_journal.path
-            if hasattr(runner, "_checkpoint_changes"):
-                with runner._checkpoint_lock:
-                    runner._checkpoint_changes["watchdog_run_id"] = run_id
-            try:
-                runner.recovery_journal.update(watchdog_run_id=run_id)
-            except (OSError, ValueError, TypeError) as exc:
-                runner._journal_failed = True
-                self.log_message.emit(f"Recovery recording failed; monitoring continues: {exc}")
+        self._record_path = runner.recovery_journal.path
+        if hasattr(runner, "_checkpoint_changes"):
+            with runner._checkpoint_lock:
+                runner._checkpoint_changes["watchdog_run_id"] = run_id
+        try:
+            runner.recovery_journal.update(watchdog_run_id=run_id)
+        except (OSError, ValueError, TypeError) as exc:
+            runner._journal_failed = True
+            self.log_message.emit(f"Recovery recording failed; monitoring continues: {exc}")
         self._armed = True
         self._publish()
-        if not observe_only and not simulation_recovery and (changed_run or self._update_guard is None):
+        if changed_run or self._update_guard is None:
             self._update_guard = WindowsUpdateGuard(self.directory, run_id)
             guard = self._update_guard
             recipe = runner.recipe
@@ -136,14 +123,6 @@ class WatchdogClient(QObject):
                 self.log_message.emit("Windows Update: " + self._update_status)
             threading.Thread(target=protect, daemon=True).start()
         self._ensure_supervisor()
-
-    def _select_recovery_mode(self, simulation_recovery):
-        if simulation_recovery != self._simulation_recovery:
-            if self._armed:
-                raise RuntimeError("Cannot change watchdog mode during an armed run.")
-            self._simulation_recovery = simulation_recovery
-            self.directory = self._default_directory / "simulation" if simulation_recovery else self._default_directory
-            self._last_spawn = -1000
 
     def _publish(self, status=None, *, force=True):
         if not self._run_id:
@@ -162,8 +141,7 @@ class WatchdogClient(QObject):
         payload = {
             "version": 1, "owner": self.owner, "run_id": self._run_id,
             "armed": self._armed, "status": mode, "ui_heartbeat": now,
-            "observe_only": self._observe_only,
-            "recovery_available": not self._observe_only and not bool(runner and runner._journal_failed),
+            "recovery_available": not bool(runner and runner._journal_failed),
             "simulation_recovery": self._simulation_recovery,
             "worker_heartbeat": getattr(runner, "worker_heartbeat", time.monotonic()),
             "worker_alive": bool(runner and runner.is_alive()),
@@ -228,11 +206,10 @@ class WatchdogClient(QObject):
         if state and owner_alive(state.get("owner", {})):
             return
         self._last_spawn = now
-        flags = (SIMULATION_RECOVERY_ARG,) if self._simulation_recovery else ()
         self._supervisor_starting = True
         def start():
             try:
-                launch_watchdog(*flags)
+                launch_watchdog()
             except Exception as exc:
                 self.status_changed.emit(f"Watchdog unavailable: {exc}")
                 self.log_message.emit(f"Watchdog startup failed: {exc}")
@@ -263,16 +240,13 @@ class WatchdogClient(QObject):
         self.disarm("closed")
         self._timer.stop()
 
-    def accept_startup(self, token=None, *, simulation_recovery=False):
+    def accept_startup(self, token=None):
         """Called after login/UI creation. No auto-login or background desktop tricks."""
-        self._select_recovery_mode(simulation_recovery)
         previous = read_json(self.directory / "active.json")
-        if previous and previous.get("simulation_recovery", False) != simulation_recovery:
-            raise RuntimeError("Startup and interrupted watchdog modes differ.")
         if token:
             command = read_json(self.directory / "command.json")
-            if (not command or command.get("observe_only") or command.get("token") != token
-                    or not previous or previous.get("observe_only") or not previous.get("armed")
+            if (not command or command.get("token") != token
+                    or not previous or not previous.get("armed")
                     or previous.get("status") not in ("armed", "starting")
                     or not previous.get("run_id") or previous["run_id"] != command.get("run_id")
                     or not previous.get("owner") or previous["owner"] != command.get("target_owner")):
@@ -280,7 +254,7 @@ class WatchdogClient(QObject):
             if owner_alive(previous["owner"]):
                 raise RuntimeError("The previous application is still running.")
         else:
-            if (not previous or previous.get("observe_only") or not previous.get("armed")
+            if (not previous or not previous.get("armed")
                     or previous.get("status") in ("closed", "user_stopped", "completed", "paused")
                     or owner_alive(previous.get("owner", {}))):
                 return
@@ -289,7 +263,8 @@ class WatchdogClient(QObject):
         signal = RunStopSignal(command["run_id"])
         if signal.is_set():
             raise RuntimeError("The interrupted run was explicitly cancelled.")
-        path, _ = recovery_source(previous, reclaim=True)
+        path, record = recovery_source(previous, reclaim=True)
+        self._simulation_recovery = record.get("simulation_recovery", False)
         command = {**command, "record_path": path}
         self._run_id = command["run_id"]
         self._stop_signal = signal
@@ -353,15 +328,10 @@ class WatchdogClient(QObject):
             if outcome in ("completed", "completed_after_interruption", "user_stopped"):
                 self.disarm("user_stopped" if outcome == "user_stopped" else "completed")
                 return
-            if (self._observe_only and self._command_state == "observed"
-                    and self.runner and not self.runner.is_alive()):
-                self.disarm("simulation_interrupted")
-                return
             self._publish(force=False)
             now = time.monotonic()
             if now - self._last_io_tick < CLIENT_IO_INTERVAL:
-                if not self._observe_only:
-                    self._continue_recovery()
+                self._continue_recovery()
                 return
             self._last_io_tick = now
             command = self._read_channel("command.json")
@@ -370,22 +340,15 @@ class WatchdogClient(QObject):
                 self._ack = command["token"]
                 if self.runner and (self.runner.stop_event.is_set() or not self.runner.pause_event.is_set()):
                     self._command_state = "cancelled"
-                elif not self._observe_only and self.runner and self.runner._journal_failed:
+                elif self.runner and self.runner._journal_failed:
                     self._command_state = "cancelled"
-                elif self._observe_only:
-                    message = f"Simulation watchdog: {command['reason']}; automatic recovery not executed."
-                    self.log_message.emit(message)
-                    self._command_state = "observed"
-                    if self.runner and self.runner.is_alive():
-                        self.runner.request_recovery(message)
                 else:
                     self._pending = command
                     self._command_state = "waiting_worker"
                     if self.runner:
                         self.runner.request_recovery(command["reason"])
             self._publish(force=False)
-            if not self._observe_only:
-                self._continue_recovery()
+            self._continue_recovery()
             supervisor = self._read_channel("supervisor_status.json")
             if "supervisor_status.json" not in self._io_errors:
                 self._last_supervisor = supervisor or {}

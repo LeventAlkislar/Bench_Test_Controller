@@ -12,18 +12,17 @@ from PyQt6.QtCore import QLockFile
 from bench_test.version import APP_VERSION
 from bench_test.utils.file_io import replace_with_retry
 
-SIMULATION_RECOVERY_ARG = "--simulation-recovery"
 WATCHDOG_EXECUTABLE = f"BenchTestWatchdog_v{APP_VERSION}.exe"
 
 
-def runtime_directory(simulation_recovery=False, *, app_executable=None):
+def runtime_directory(*, app_executable=None):
     installation = app_executable
     if installation is None:
         installation = sys.executable if getattr(sys, "frozen", False) else str(Path(__file__).resolve().parents[2])
     key = hashlib.sha256(os.path.normcase(installation).encode("utf-8")).hexdigest()[:16]
     base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
     directory = Path(base) / "BenchTestController" / "watchdog" / key
-    return directory / "simulation" if simulation_recovery else directory
+    return directory
 
 
 def atomic_write(path, data):

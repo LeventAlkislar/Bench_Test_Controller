@@ -897,7 +897,7 @@ class RecipeTab(QWidget):
         # ── Paketi oluştur ────────────────────────────────────
         if self.package_tab and not self.package_tab.build_package(
                 recipe_path=self._current_recipe_path or "",
-                recipe_steps=self.recipe_steps, simulation_mode=simulation_mode):
+                recipe_steps=self.recipe_steps):
             return
         # Session .scr yolu artık hazır — COL_SCR sütununu güncelle
         if self.package_tab and self.package_tab.get_session():
@@ -1033,7 +1033,7 @@ class RecipeTab(QWidget):
             record = RecoveryJournal.read(path)
             simulation_recovery = record.get("simulation_recovery", False)
             session, recipe, journal, _plan = create_recovery_package(record, path)
-        self.package_tab.package_panel.adopt_recovery_session(session, simulation_recovery=simulation_recovery)
+        self.package_tab.package_panel.adopt_recovery_session(session)
         self.recipe_steps = recipe.steps
         self.step_loops = recipe.step_loops
         self.name_edit.setText(recipe.name)

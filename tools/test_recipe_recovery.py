@@ -648,7 +648,7 @@ class RunnerRecordingTests(unittest.TestCase):
             self.runner.run()
         self.assertEqual(visited, [1])
         self.assertEqual(self.runner.outcome, "interrupted")
-        self.assertTrue(any(kind == "error" and "stopped unexpectedly" in text
+        self.assertTrue(any(kind == "warning" and "stopped unexpectedly" in text
                             for kind, text in list(self.runner.status_queue.queue)))
         self.runner._safe_stop_pump.assert_called_once_with("RECIPE START")
 
@@ -678,6 +678,37 @@ class RunnerRecordingTests(unittest.TestCase):
         pump.set_speed_rpm.assert_not_called()
         self.assertEqual(self.read()["requested_settings"]["pump_rpm"], 12)
         self.assertEqual(self.read()["pump_recovery_stop"], "verified")
+
+    def test_simulation_records_zero_rpm_for_start_finish_and_stop_but_preserves_recovery_speed(self):
+        for ending, expected_rpm, expected_status in (
+                ("finish", 0.0, "completed"),
+                ("stop", 0.0, "user_stopped"),
+                ("recovery", 12, "interrupted")):
+            with self.subTest(ending=ending):
+                pump = Mock()
+                runner = RecipeRunner(None, None, Recipe("Simulation", [RecipeStep(0, 0)]),
+                                      queue.Queue(), threading.Event(), pump_ctrl=pump,
+                                      simulation_mode=True, recovery_journal=self.journal)
+                runner._requested_settings["pump_rpm"] = 7
+
+                def execute(*args):
+                    self.assertEqual(self.read()["requested_settings"]["pump_rpm"], 0.0)
+                    runner._requested_settings["pump_rpm"] = 12
+                    runner.checkpoint("pump")
+                    if ending == "stop":
+                        runner.request_stop()
+                        return False
+                    if ending == "recovery":
+                        runner.request_recovery("connection lost")
+                        return False
+                    return True
+
+                runner._execute_step = execute
+                runner.run()
+                saved = self.read()
+                self.assertEqual(saved["status"], expected_status)
+                self.assertEqual(saved["requested_settings"]["pump_rpm"], expected_rpm)
+                self.assertEqual(pump.mock_calls, [])
 
     def test_real_measurement_stop_preserves_recovery_plan_and_requests_recovery(self):
         self.runner.dropview_ctrl = Mock()
@@ -955,6 +986,8 @@ class StartupRecordingTests(unittest.TestCase):
                         patch("bench_test.ui.tabs.recipe_tab.get_value", return_value=None):
                     RecipeTab._start_recipe(tab)
                 runner_class.return_value.start.assert_called_once()
+                tab.package_tab.build_package.assert_called_once_with(
+                    recipe_path="", recipe_steps=tab.recipe_steps)
                 journal = runner_class.call_args.kwargs["recovery_journal"]
                 self.assertEqual(runner_class.call_args.kwargs["simulation_mode"], simulation)
                 self.assertEqual(runner_class.call_args.kwargs["simulation_recovery"], simulation and expected)
